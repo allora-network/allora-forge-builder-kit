@@ -32,12 +32,76 @@ Export your trained models seamlessly for live inference. Deploy your models in 
 
 ## Example Notebook Highlights  
 
+Explore the full pipeline in action in the included Jupyter notebook:
+
+[Allora Forge ML Workflow Example](https://github.com/jefferythewind/allora-forge-ml-workflow/blob/main/notebooks/Allora%20Forge%20ML%20Workflow.ipynb)
+
 The example notebook included in the repository demonstrates:  
 - **Dataset Creation**: Automatically split your data into train/validation/test sets.  
 - **Feature Engineering**: Generate dynamic features from historical bar data.  
 - **Model Training**: Train your ML models with ease.  
 - **Evaluation**: Use built-in metrics to assess model performance.  
 - **Export**: Save your model for live inference deployment.  
+
+### Quickstart Example Code
+
+```python
+from allora_ml_workflow import AlloraMLWorkflow #Allora Forge
+import lightgbm as lgb
+import pandas as pd
+
+tickers = ["btcusd", "ethusd", "solusd"]
+hours_needed = 1*24             # Number of historical hours for feature lookback window
+number_of_input_candles = 24    # Number of candles for input features
+target_length = 1*24            # Number of hours into the future for target
+
+# Instantiate the workflow
+workflow = AlloraMLWorkflow(
+    data_api_key=api_key,
+    tickers=tickers,
+    hours_needed=hours_needed,
+    number_of_input_candles=number_of_input_candles,
+    target_length=target_length
+)
+
+# Get training, validation, and test data
+X_train, y_train, X_val, y_val, X_test, y_test = workflow.get_train_validation_test_data(
+    from_month="2023-01",
+    validation_months=3,
+    test_months=3
+)
+
+# Define feature columns and ML model
+feature_cols = [f for f in list(X_train) if 'feature' in f]
+
+# Define hyperparameters for the LightGBM model
+learning_rate = 0.001
+max_depth = 5
+num_leaves = 8
+
+# Initialize LightGBM model with hyperparameters
+model = lgb.LGBMRegressor(
+    n_estimators=50,
+    learning_rate=learning_rate,
+    max_depth=max_depth,
+    num_leaves=num_leaves
+)
+
+model.fit(
+    pd.concat([X_train[feature_cols], X_val[feature_cols]]), 
+    pd.concat([y_train, y_val])
+)
+
+# Evaluate on the test data
+test_preds = model.predict(X_test[feature_cols])
+test_preds = pd.Series(test_preds, index=X_test.index)
+
+# Show test metrics
+metrics = workflow.evaluate_test_data(test_preds)
+print(metrics)
+```
+
+> {'correlation': 0.038930690096235177, 'directional_accuracy': 0.5414329504839673}
 
 ---
 
