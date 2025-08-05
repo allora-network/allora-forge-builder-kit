@@ -1,0 +1,47 @@
+# Byte-compiled / cache files
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+*.pyo
+
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+pip-wheel-metadata/
+
+# Jupyter notebook garbage
+.ipynb_checkpoints/
+*.nbconvert.ipynb
+*.out.ipynb
+
+# VS Code & PyCharm settings (optional)
+.vscode/
+.idea/
+
+# Mac and Unix system files
+.DS_Store
+*.swp
+*.swo
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+
+# Environments
+.env
+.venv/
+venv/
+ENV/
+env/
+
+# Pytest cache
+.pytest_cache/
+
+# Pickled model artifacts
+*.pkl
+*.joblib

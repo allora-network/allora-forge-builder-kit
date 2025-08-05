@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "allora-ml-workflow"
+version = "0.1.0"
+description = "Allora ML Workflow Utilities for Crypto Inference"
+authors = [{ name = "Your Name", email = "you@example.com" }]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.8"
+
+dependencies = [
+    "pandas",
+    "numpy",
+    "lightgbm",
+    "requests",
+    "dill",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourname/allora-ml-workflow"
+
+[tool.setuptools.packages.find]
+include = ["allora_ml_workflow"]
