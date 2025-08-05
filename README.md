@@ -20,6 +20,10 @@ Allora Forge will soon be available on PyPI. For now, you can install it directl
 ```bash  
 pip install git+https://github.com/jefferythewind/allora-forge-ml-workflow.git  
 ```  
+---
+
+## API Key
+Navigate to https://developer.allora.network/, register, and create your free API key. 
 
 ---
 
