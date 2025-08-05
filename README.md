@@ -4,6 +4,8 @@
 [![Last Commit](https://img.shields.io/github/last-commit/jefferythewind/allora-forge-ml-workflow)](https://github.com/jefferythewind/allora-forge-ml-workflow/commits/main)
 [![Stars](https://img.shields.io/github/stars/jefferythewind/allora-forge-ml-workflow?style=social)](https://github.com/jefferythewind/allora-forge-ml-workflow/stargazers)
 
+<img width="1536" height="1024" alt="frying_silicon" src="https://github.com/user-attachments/assets/466a445a-c1b5-4dcd-b7f9-a26834fc3739" />
+
 
 # Allora Forge ML Workflow  
 
@@ -16,7 +18,7 @@ Welcome to **Allora Forge**, a cutting-edge machine learning workflow package de
 Allora Forge will soon be available on PyPI. For now, you can install it directly from the GitHub repository:  
 
 ```bash  
-pip install git+https://github.com/yourusername/allora-forge.git  
+pip install git+https://github.com/jefferythewind/allora-forge-ml-workflow.git  
 ```  
 
 ---
