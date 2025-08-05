@@ -45,9 +45,13 @@ Export your trained models seamlessly for live inference. Deploy your models in 
 
 ## Example Notebook Highlights  
 
-Explore the full pipeline in action in the included Jupyter notebook:
+Explore the full pipeline in action in the included Jupyter notebooks. The first is a bare bone ML workflow to get a feel for how it works.
 
 [Allora Forge ML Workflow Example](https://github.com/jefferythewind/allora-forge-ml-workflow/blob/main/notebooks/Allora%20Forge%20ML%20Workflow.ipynb)
+
+The second is a more robust grid search pipeline, where you evaluate many models, choose the best, and deploy it live.
+
+[Allora Forge Signal Miner Example](https://github.com/allora-network/allora-forge-ml-workflow/blob/main/notebooks/Allora%20Forge%20Signal%20Miner.ipynb)
 
 The example notebook included in the repository demonstrates:  
 - **Dataset Creation**: Automatically split your data into train/validation/test sets.  
@@ -116,6 +120,32 @@ print(metrics)
 
 > {'correlation': 0.038930690096235177, 'directional_accuracy': 0.5414329504839673}
 
+### Model Deployment for Live Inference on The Allora Network
+```python
+# Final predict function
+def predict() -> pd.Series:
+    live_features = workflow.get_live_features("btcusd")
+    preds = model.predict(live_features)
+    return pd.Series(preds, index=live_features.index)
+
+# Pickle the function
+with open("predict.pkl", "wb") as f:
+    dill.dump(predict, f)
+
+# Load the pickled predict function
+with open("predict.pkl", "rb") as f:
+    predict_fn = dill.load(f)
+
+# Call the function and get predictions
+tic = time.time()
+prediction = predict_fn()
+toc = time.time()
+
+print("predict time: ", (toc - tic) )
+print("prediction: ", prediction )
+```
+> predict time:  0.49544739723205566
+> prediction:  2025-08-05 17:15:00+00:00    0.002185
 ---
 
 ## Get Started  
