@@ -41,7 +41,7 @@ The example notebook included in the repository demonstrates:
 
 ---
 
-## 🛠️ Get Started  
+## Get Started  
 
 Dive into the future of machine learning workflows with Allora Forge. Check out the example notebook to see the magic in action and start building your next ML project today!  
 
