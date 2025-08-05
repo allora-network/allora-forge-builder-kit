@@ -4,7 +4,7 @@
 [![Last Commit](https://img.shields.io/github/last-commit/jefferythewind/allora-forge-ml-workflow)](https://github.com/jefferythewind/allora-forge-ml-workflow/commits/main)
 [![Stars](https://img.shields.io/github/stars/jefferythewind/allora-forge-ml-workflow?style=social)](https://github.com/jefferythewind/allora-forge-ml-workflow/stargazers)
 
-<img width="1536" height="1024" alt="frying_silicon" src="https://github.com/user-attachments/assets/466a445a-c1b5-4dcd-b7f9-a26834fc3739" />
+<img width="1536" height="1024" alt="forge_silicon" src="https://github.com/user-attachments/assets/f1444abf-e649-4e48-a9f0-187b78b59ccc" />
 
 
 # Allora Forge ML Workflow  
