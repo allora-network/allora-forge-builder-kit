@@ -1,3 +1,10 @@
+[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](https://www.apache.org/licenses/LICENSE-2.0)
+[![GitHub issues](https://img.shields.io/github/issues/jefferythewind/allora-forge-ml-workflow)](https://github.com/jefferythewind/allora-forge-ml-workflow/issues)
+[![Last Commit](https://img.shields.io/github/last-commit/jefferythewind/allora-forge-ml-workflow)](https://github.com/jefferythewind/allora-forge-ml-workflow/commits/main)
+[![Stars](https://img.shields.io/github/stars/jefferythewind/allora-forge-ml-workflow?style=social)](https://github.com/jefferythewind/allora-forge-ml-workflow/stargazers)
+
+
 # Allora Forge ML Workflow  
 
 Welcome to **Allora Forge**, a cutting-edge machine learning workflow package designed to streamline your ML pipeline. Whether you're a seasoned data scientist or just starting your journey, Allora Forge provides the tools you need to build, evaluate, and deploy ML models with ease.  
@@ -14,7 +21,7 @@ pip install git+https://github.com/yourusername/allora-forge.git
 
 ---
 
-## 🌌 Features  
+## Features  
 
 ### 1. **Automated Dataset Generation**  
 Effortlessly generate datasets with train/validation/test splits. Allora Forge takes care of the heavy lifting, ensuring your data is ready for modeling in no time.  
