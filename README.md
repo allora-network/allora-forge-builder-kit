@@ -18,7 +18,7 @@ Welcome to **Allora Forge**, a cutting-edge machine learning workflow package de
 Allora Forge will soon be available on PyPI. For now, you can install it directly from the GitHub repository:  
 
 ```bash  
-pip install git+https://github.com/jefferythewind/allora-forge-ml-workflow.git  
+pip install git+https://https://github.com/allora-network/allora-forge-ml-workflow.git
 ```  
 ---
 
