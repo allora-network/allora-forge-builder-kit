@@ -3,6 +3,8 @@ import numpy as np
 import requests
 import time
 from datetime import datetime, timedelta
+import os
+import dill
 
 class AlloraMLWorkflow:
     def __init__(self, data_api_key, tickers, hours_needed, number_of_input_candles, target_length):
@@ -112,11 +114,13 @@ class AlloraMLWorkflow:
             trades_ = reshaped[:, :, 5].sum(axis=1)
     
             last_close = close_[-1]
-            if last_close == 0 or np.isnan(last_close):
+            last_volume = volume_[-1]
+            if last_close == 0 or np.isnan(last_close) or last_volume == 0 or np.isnan(last_volume):
                 continue
     
             features = np.stack([open_, high_, low_, close_, volume_, trades_], axis=1)
             features[:, :4] /= last_close  # Normalize OHLC
+            features[:, 4] /= last_volume  # Normalize volume
     
             features_list.append(features.flatten())
             index_list.append(T)
@@ -142,56 +146,6 @@ class AlloraMLWorkflow:
             raise ValueError("No features returned.")
         return features
 
-    def get_train_validation_data(self, from_month="2025-01", validation_months=3):
-        all_data = {}
-        for t in self.tickers:
-            print(f"Downloading Historical Data for {t}")
-            frames = []
-            for bucket in self.list_ready_buckets(t, from_month):
-                df = self.fetch_bucket_csv(bucket["download_url"])
-                df["bucket_start"] = bucket["start"]
-                df["bucket_end"] = bucket["end"]
-                df["availability"] = bucket["availability"]
-                frames.append(df)
-            combined_df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-            if not combined_df.empty:
-                latest_ts = sorted( pd.to_datetime(combined_df["date"]).dt.date.unique() )[-2]
-                live_df = self.fetch_ohlcv_data(t, latest_ts.strftime("%Y-%m-%d"))
-                combined_df = pd.concat([combined_df, live_df], ignore_index=True)
-                combined_df['date'] = pd.to_datetime(combined_df['date'])
-                combined_df = combined_df.drop_duplicates(subset='date')
-            all_data[t] = combined_df
-
-        datasets = []
-        for t in self.tickers:
-            print(f"processing 5 minute bars {t}")
-            df = self.create_5_min_bars(all_data[t])
-            print(f"computing target")
-            df = self.compute_target(df, self.target_length)
-            print(f"extracting features")
-            features = self.extract_rolling_daily_features(df, self.hours_needed, self.number_of_input_candles, df.index.tolist())
-            df = df.join(features)
-            df["ticker"] = t
-            datasets.append(df)
-
-        full_data = pd.concat(datasets).sort_index()
-        full_data.index = pd.MultiIndex.from_frame(full_data.reset_index()[["date", "ticker"]])
-        full_data = full_data.dropna()#[~full_data["target"].isna()]
-
-        val_cutoff = datetime.utcnow() - pd.DateOffset(months=validation_months)
-        val_mask = full_data.index.get_level_values("date") >= str( val_cutoff )
-        train_cutoff = val_cutoff - timedelta(hours=self.target_length)
-        train_mask = full_data.index.get_level_values("date") < str( train_cutoff )
-
-        self.validation_targets = full_data.loc[val_mask, ["target"]]
-
-        X_train = full_data.loc[train_mask].drop(columns=["target", "future_close"])
-        y_train = full_data.loc[train_mask]["target"]
-        X_val = full_data.loc[val_mask].drop(columns=["target", "future_close"])
-        y_val = full_data.loc[val_mask]["target"]
-
-        return X_train, y_train, X_val, y_val
-
     def evaluate_test_data(self, predictions: pd.Series) -> dict:
         if self.test_targets is None:
             raise ValueError("Test targets not set. Run get_train_validation_test_data first.")
@@ -199,7 +153,7 @@ class AlloraMLWorkflow:
         if not predictions.index.equals(self.test_targets.index):
             raise ValueError("Prediction index must match test target index.")
 
-        y_true = self.test_targets["target"]
+        y_true = self.test_targets
         y_pred = predictions
 
         corr = np.corrcoef(y_true, y_pred)[0, 1]
@@ -252,7 +206,33 @@ class AlloraMLWorkflow:
     
         return full_data
 
-    def get_train_validation_test_data(self, from_month="2025-01", validation_months=3, test_months=3):
+    def get_train_validation_test_data(self, from_month="2025-01", validation_months=3, test_months=3, force_redownload=False):
+        def generate_filename():
+            """Generate a unique filename based on parameters."""
+            tickers_str = "_".join(self.tickers)
+            return f"data_{tickers_str}_{from_month}_val{validation_months}_test{test_months}.pkl"
+
+        def save_to_disk(data, filename):
+            """Save data to disk."""
+            with open(filename, "wb") as f:
+                dill.dump(data, f)
+
+        def load_from_disk(filename):
+            """Load data from disk."""
+            with open(filename, "rb") as f:
+                X_train, y_train, X_val, y_val, X_test, y_test = dill.load(f)
+            self.test_targets = y_test
+            return X_train, y_train, X_val, y_val, X_test, y_test
+
+        # Generate the filename
+        filename = generate_filename()
+
+        # Check if the file exists and load it if not forcing a redownload
+        if os.path.exists(filename) and not force_redownload:
+            print(f"Loading data from {filename}")
+            return load_from_disk(filename)
+
+        # If file doesn't exist or force_redownload is True, proceed with data preparation
         all_data = {}
         for t in self.tickers:
             print(f"Downloading Historical Data for {t}")
@@ -311,7 +291,11 @@ class AlloraMLWorkflow:
         X_test = full_data.loc[test_mask].drop(columns=["target", "future_close"])
         y_test = full_data.loc[test_mask]["target"]
 
-        self.test_targets = full_data.loc[test_mask, ["target"]]
+        self.test_targets = y_test
+
+        # Save the prepared data to disk
+        print(f"Saving data to {filename}")
+        save_to_disk((X_train, y_train, X_val, y_val, X_test, y_test), filename)
 
         return X_train, y_train, X_val, y_val, X_test, y_test
 
