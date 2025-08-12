@@ -65,16 +65,47 @@ class AlloraMLWorkflow:
         df["date"] = pd.to_datetime(df["date"])
         return df
 
-    def create_5_min_bars(self, df: pd.DataFrame) -> pd.DataFrame:
+    def create_5_min_bars(self, df: pd.DataFrame, live_mode: bool = False) -> pd.DataFrame:
         df = df.set_index("date").sort_index()
-        return df.resample("5min").apply({
-            "open": "first",
-            "high": "max",
-            "low": "min",
-            "close": "last",
-            "volume": "sum",
-            "trades_done": "sum"
-        })
+        # print("Raw 1-min timestamps:", df.index[-10:])  # Show last 10 timestamps for debugging
+
+        if not live_mode:
+            bars = df.resample("5min").apply({
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum",
+                "trades_done": "sum"
+            })
+        else:
+            last_ts = df.index[-1]
+            now = datetime.utcnow().replace(tzinfo=last_ts.tzinfo)
+            if last_ts > now:
+                # print(f"Dropping incomplete 1-min bar at {last_ts} (future timestamp)")
+                df = df.iloc[:-1]
+            else:
+                # Drop the last bar if the current time in seconds is < 45
+                if last_ts.minute == now.minute and last_ts.hour == now.hour and now.second < 45:
+                    # print(f"Dropping incomplete 1-min bar at {last_ts} (current second: {now.second})")
+                    df = df.iloc[:-1]
+            last_ts = df.index[-1]
+            minute = last_ts.minute
+            offset_minutes = (minute + 1) % 5
+            offset = f"{offset_minutes}min" if offset_minutes != 0 else "0min"
+            # print(f"Live mode: last minute={minute}, offset_minutes={offset_minutes}, offset={offset}")
+            bars = df.resample("5min", offset=offset).apply({
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum",
+                "trades_done": "sum"
+            })
+            print("Live Mode Bars:  ", bars.tail(5))
+
+        # print("5-min bar timestamps:", bars.index[-10:])  # Show last 10 bar timestamps for debugging
+        return bars
 
     def compute_target(self, df: pd.DataFrame, hours: int = 24) -> pd.DataFrame:
         df["future_close"] = df["close"].shift(freq=f"-{hours}h")
@@ -94,7 +125,7 @@ class AlloraMLWorkflow:
     
         for T in start_times:
             # Find the last index <= T
-            pos = np.searchsorted(ts_index, T, side="right") - 1
+            pos = np.searchsorted(ts_index, T, side="right")
             if pos - candle_length < 0:
                 continue
     
@@ -137,7 +168,7 @@ class AlloraMLWorkflow:
     def get_live_features(self, ticker):
         from_date = self.compute_from_date()
         df = self.fetch_ohlcv_data(ticker, from_date)
-        five_min_bars = self.create_5_min_bars(df)
+        five_min_bars = self.create_5_min_bars(df, live_mode=True)
         if len(five_min_bars) < self.hours_needed * 12:
             raise ValueError("Not enough historical data.")
         live_time = five_min_bars.index[-2]
@@ -210,7 +241,10 @@ class AlloraMLWorkflow:
         def generate_filename():
             """Generate a unique filename based on parameters."""
             tickers_str = "_".join(self.tickers)
-            return f"data_{tickers_str}_{from_month}_val{validation_months}_test{test_months}.pkl"
+            return (
+                f"data_{tickers_str}_{from_month}_val{validation_months}_test{test_months}"
+                f"_candles{self.number_of_input_candles}.pkl"
+            )
 
         def save_to_disk(data, filename):
             """Save data to disk."""
