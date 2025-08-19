@@ -3,4 +3,4 @@ scikit-learn
 pandas
 numpy
 matplotlib
-dill
+cloudpickle
