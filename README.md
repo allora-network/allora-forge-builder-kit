@@ -152,6 +152,198 @@ print("prediction: ", prediction )
 
 Dive into the future of machine learning workflows with Allora Forge. Check out the example notebook to see the magic in action and start building your next ML project today!  
 
----  
-
 **Stay sharp. Stay cyber. Welcome to the Forge.**  
+
+---
+
+# AlloraMLWorkflow Documentation
+
+The `AlloraMLWorkflow` class provides methods to fetch, preprocess, and prepare financial time-series data for machine learning workflows.
+
+---
+
+## Class Initialization
+
+```python
+AlloraMLWorkflow(data_api_key, tickers, hours_needed, number_of_input_candles, target_length)
+```
+
+**Arguments:**
+
+- `data_api_key` (`str`): API key for accessing market data.
+- `tickers` (`list[str]`): List of ticker symbols to fetch data for.
+- `hours_needed` (`int`): Lookback window (in hours) for feature extraction.
+- `number_of_input_candles` (`int`): Number of candles to segment the lookback window into.
+- `target_length` (`int`): Target horizon in hours for predictive modeling.
+
+---
+
+## Methods
+
+### `compute_from_date(extra_hours: int = 12) -> str`
+
+Compute a starting date string based on the lookback window.
+
+**Arguments:**
+
+- `extra_hours` (`int`, default=12): Additional buffer hours before the cutoff.
+
+**Returns:**
+
+- `str` – Date string in format `YYYY-MM-DD`.
+
+---
+
+### `list_ready_buckets(ticker, from_month) -> list`
+
+Fetch list of ready data buckets for a ticker.
+
+**Arguments:**
+
+- `ticker` (`str`): Ticker symbol.
+- `from_month` (`str`): Month in format `YYYY-MM`.
+
+**Returns:**
+
+- `list[dict]` – Buckets where `state == "ready"`.
+
+---
+
+### `fetch_bucket_csv(download_url) -> pd.DataFrame`
+
+Download and load bucket CSV data.
+
+**Arguments:**
+
+- `download_url` (`str`): URL of the CSV file.
+
+**Returns:**
+
+- `pd.DataFrame` – Data from the bucket.
+
+---
+
+### `fetch_ohlcv_data(ticker, from_date: str, max_pages: int = 1000, sleep_sec: float = 0.1) -> pd.DataFrame`
+
+Fetch OHLCV data from the API, handling pagination.
+
+**Arguments:**
+
+- `ticker` (`str`): Ticker symbol.
+- `from_date` (`str`): Starting date (`YYYY-MM-DD`).
+- `max_pages` (`int`, default=1000): Maximum pages to fetch.
+- `sleep_sec` (`float`, default=0.1): Sleep between requests.
+
+**Returns:**
+
+- `pd.DataFrame` – Cleaned OHLCV dataset.
+
+---
+
+### `create_5_min_bars(df: pd.DataFrame, live_mode: bool = False) -> pd.DataFrame`
+
+Resample 1-minute OHLCV data into 5-minute bars.
+
+**Arguments:**
+
+- `df` (`pd.DataFrame`): Input data indexed by datetime.
+- `live_mode` (`bool`, default=False): Whether to adjust for incomplete live data.
+
+**Returns:**
+
+- `pd.DataFrame` – 5-minute bar data.
+
+---
+
+### `compute_target(df: pd.DataFrame, hours: int = 24) -> pd.DataFrame`
+
+Compute log return target over a future horizon.
+
+**Arguments:**
+
+- `df` (`pd.DataFrame`): OHLCV data with `close` column.
+- `hours` (`int`, default=24): Horizon for target calculation.
+
+**Returns:**
+
+- `pd.DataFrame` – DataFrame with `future_close` and `target` columns.
+
+---
+
+### `extract_rolling_daily_features(data: pd.DataFrame, lookback: int, number_of_candles: int, start_times: list) -> pd.DataFrame`
+
+Extract normalized OHLCV features over rolling windows.
+
+**Arguments:**
+
+- `data` (`pd.DataFrame`): Input OHLCV data with `date` index.
+- `lookback` (`int`): Lookback window (in hours).
+- `number_of_candles` (`int`): Number of candles to split the window into.
+- `start_times` (`list[datetime]`): Anchor times for feature extraction.
+
+**Returns:**
+
+- `pd.DataFrame` – Extracted rolling feature set.
+
+---
+
+### `get_live_features(ticker) -> pd.DataFrame`
+
+Fetch and compute live features for a ticker.
+
+**Arguments:**
+
+- `ticker` (`str`): Ticker symbol.
+
+**Returns:**
+
+- `pd.DataFrame` – Latest extracted features for live inference.
+
+---
+
+### `evaluate_test_data(predictions: pd.Series) -> dict`
+
+Evaluate predictions against stored test targets.
+
+**Arguments:**
+
+- `predictions` (`pd.Series`): Predicted values (index must match test targets).
+
+**Returns:**
+
+- `dict` with keys:
+  - `"correlation"` (`float`): Pearson correlation with true targets.
+  - `"directional_accuracy"` (`float`): Fraction of correct directional predictions.
+
+---
+
+### `get_full_feature_target_dataframe(from_month="2025-01") -> pd.DataFrame`
+
+Build complete dataset with features and targets for all tickers.
+
+**Arguments:**
+
+- `from_month` (`str`, default="2025-01"): Starting month for bucket retrieval.
+
+**Returns:**
+
+- `pd.DataFrame` – Full dataset indexed by `(date, ticker)`.
+
+---
+
+### `get_train_validation_test_data(from_month="2025-01", validation_months=3, test_months=3, force_redownload=False)`
+
+Prepare train/validation/test datasets with caching.
+
+**Arguments:**
+
+- `from_month` (`str`, default="2025-01\`): Starting month for data retrieval.
+- `validation_months` (`int`, default=3): Number of months for validation set.
+- `test_months` (`int`, default=3): Number of months for test set.
+- `force_redownload` (`bool`, default=False): If `True`, re-download instead of loading cached data.
+
+**Returns:**
+
+- `tuple` – `(X_train, y_train, X_val, y_val, X_test, y_test)` as `pd.DataFrame` / `pd.Series`.
+
+
