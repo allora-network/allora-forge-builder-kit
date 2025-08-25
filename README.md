@@ -7,9 +7,9 @@
 <img width="1536" height="1024" alt="forge_silicon" src="https://github.com/user-attachments/assets/f1444abf-e649-4e48-a9f0-187b78b59ccc" />
 
 
-# Allora Forge ML Workflow  
+# Allora Forge Builder Kit 
 
-Welcome to **Allora Forge**, a cutting-edge machine learning workflow package designed to streamline your ML pipeline. Whether you're a seasoned data scientist or just starting your journey, Allora Forge provides the tools you need to build, evaluate, and deploy ML models with ease. 
+Welcome to **Allora Forge Builder Kit**, a cutting-edge machine learning workflow package designed to streamline your ML pipeline. Whether you're a seasoned data scientist or just starting your journey, Allora Forge provides the tools you need to build, evaluate, and deploy ML models with ease. 
 
 TL;DR: [**Open the Zero-to-Deploy Notebook In Google Colab**](https://colab.research.google.com/github/allora-network/allora-forge-ml-workflow/blob/main/notebooks/Allora%20Forge%20ML%20Workflow.ipynb
 )
@@ -19,10 +19,10 @@ TL;DR: [**Open the Zero-to-Deploy Notebook In Google Colab**](https://colab.rese
 
 ## Installation  
 
-Allora Forge will soon be available on PyPI. For now, you can install it directly from the GitHub repository:  
+Allora Forge Builder Kit is packaged into Allora's Python SDK, which is installed with pip. 
 
 ```bash  
-pip install git+https://github.com/allora-network/allora-forge-ml-workflow.git
+pip install allora-sdk
 ```  
 ---
 
@@ -67,7 +67,7 @@ The example notebook included in the repository demonstrates:
 ### Quickstart Example Code
 
 ```python
-from allora_ml_workflow import AlloraMLWorkflow #Allora Forge
+from allora_sdk.ml_workflow import AlloraMLWorkflow #Allora Forge
 import lightgbm as lgb
 import pandas as pd
 
