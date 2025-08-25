@@ -1,25 +1,16 @@
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](https://www.apache.org/licenses/LICENSE-2.0)
-[![GitHub issues](https://img.shields.io/github/issues/jefferythewind/allora-forge-ml-workflow)](https://github.com/jefferythewind/allora-forge-ml-workflow/issues)
-[![Last Commit](https://img.shields.io/github/last-commit/jefferythewind/allora-forge-ml-workflow)](https://github.com/jefferythewind/allora-forge-ml-workflow/commits/main)
-[![Stars](https://img.shields.io/github/stars/jefferythewind/allora-forge-ml-workflow?style=social)](https://github.com/jefferythewind/allora-forge-ml-workflow/stargazers)
+[![GitHub issues](https://img.shields.io/github/issues/allora-network/allora-forge-builder-kit)](https://github.com/allora-network/allora-forge-builder-kit/issues)
+[![Last Commit](https://img.shields.io/github/last-commit/allora-network/allora-forge-builder-kit)](https://github.com/allora-network/allora-forge-builder-kit/commits/main)
+[![Stars](https://img.shields.io/github/stars/allora-network/allora-forge-builder-kit?style=social)](https://github.com/allora-network/allora-forge-builder-kit/stargazers)
 
 <img width="1536" height="1024" alt="forge_silicon" src="https://github.com/user-attachments/assets/f1444abf-e649-4e48-a9f0-187b78b59ccc" />
 
 
-# Allora Forge ML Workflow  
+# Allora Forge Builder Kit
 
-Welcome to **Allora Forge**, a cutting-edge machine learning workflow package designed to streamline your ML pipeline. Whether you're a seasoned data scientist or just starting your journey, Allora Forge provides the tools you need to build, evaluate, and deploy ML models with ease.  
+Welcome to **Allora Forge Builder Kit**, a cutting-edge machine learning workflow package designed to streamline your ML pipeline. Whether you're a seasoned data scientist or just starting your journey, the Forge Builder Kit provides the tools you need to build, evaluate, and deploy ML models with ease.  
 
----
-
-## Installation  
-
-Allora Forge will soon be available on PyPI. For now, you can install it directly from the GitHub repository:  
-
-```bash  
-pip install git+https://github.com/allora-network/allora-forge-ml-workflow.git
-```  
 ---
 
 ## API Key
@@ -27,27 +18,27 @@ Navigate to https://developer.allora.network/, register, and create your free AP
 
 ---
 
-## Features  
+## Features
 
-### 1. **Automated Dataset Generation**  
+### 1. **Automated Dataset Generation**
 Effortlessly generate datasets with train/validation/test splits. Allora Forge takes care of the heavy lifting, ensuring your data is ready for modeling in no time.  
 
-### 2. **Dynamic Feature Engineering**  
+### 2. **Dynamic Feature Engineering**
 Leverage automated feature generation based on historical bar data. The package dynamically creates features tailored to your dataset, saving you hours of manual work.  
 
-### 3. **Built-in Evaluation Metrics**  
+### 3. **Built-in Evaluation Metrics**
 Evaluate your models with a suite of built-in metrics, designed to provide deep insights into performance. From accuracy to precision, Allora Forge has you covered.  
 
-### 4. **Model Export for Live Inference**  
+### 4. **Model Export for Live Inference**
 Export your trained models seamlessly for live inference. Deploy your models in production environments with confidence and minimal effort.  
 
 ---
 
-## Example Notebook Highlights  
+## Example Notebook Highlights
 
-Explore the full pipeline in action in the included Jupyter notebooks. The first is a bare bone ML workflow to get a feel for how it works.
+Explore the full pipeline in action in the included Jupyter notebooks. The first is a barebones ML workflow to get a feel for how it works.
 
-[Allora Forge ML Workflow Example](https://github.com/jefferythewind/allora-forge-ml-workflow/blob/main/notebooks/Allora%20Forge%20ML%20Workflow.ipynb)
+[Allora Forge ML Workflow Example](https://github.com/allora-network/allora-forge-builder-kit/blob/main/notebooks/Allora%20Forge%20Builder%20Kit.ipynb)
 
 The second is a more robust grid search pipeline, where you evaluate many models, choose the best, and deploy it live.
 
@@ -63,7 +54,7 @@ The example notebook included in the repository demonstrates:
 ### Quickstart Example Code
 
 ```python
-from allora_ml_workflow import AlloraMLWorkflow #Allora Forge
+from allora_forge_builder_kit import AlloraMLWorkflow, get_api_key #Allora Forge
 import lightgbm as lgb
 import pandas as pd
 
@@ -74,7 +65,7 @@ target_length = 1*24            # Number of hours into the future for target
 
 # Instantiate the workflow
 workflow = AlloraMLWorkflow(
-    data_api_key=api_key,
+    data_api_key=get_api_key(),
     tickers=tickers,
     hours_needed=hours_needed,
     number_of_input_candles=number_of_input_candles,
@@ -120,8 +111,11 @@ print(metrics)
 
 > {'correlation': 0.038930690096235177, 'directional_accuracy': 0.5414329504839673}
 
-### Model Deployment for Live Inference on The Allora Network
+### Model Deployment for Live Inference on the Allora Network
+
 ```python
+from allora_sdk.worker import AlloraWorker
+
 # Final predict function
 def predict() -> pd.Series:
     live_features = workflow.get_live_features("btcusd")
@@ -136,23 +130,45 @@ with open("predict.pkl", "wb") as f:
 with open("predict.pkl", "rb") as f:
     predict_fn = dill.load(f)
 
-# Call the function and get predictions
-tic = time.time()
-prediction = predict_fn()
-toc = time.time()
 
-print("predict time: ", (toc - tic) )
-print("prediction: ", prediction )
+def my_model():
+    # Call the function and get predictions
+    tic = time.time()
+    prediction = predict_fn()
+    toc = time.time()
+
+    print("predict time: ", (toc - tic) )
+    print("prediction: ", prediction )
+    return prediction
+
+async def main():
+    worker = AlloraWorker(
+        # topic_id=69,  ### THIS IS OPTIONAL -- TOPIC 69 IS OPEN TO EVERYONE
+        predict_fn=my_model,
+        api_key="<your API key>",
+    )
+
+    async for result in worker.run():
+        if isinstance(result, Exception):
+            print(f"Error: {str(result)}")
+        else:
+            print(f"Prediction submitted to Allora: {result.prediction}")
+
+# IF RUNNING IN A NOTEBOOK:
+await main()
+
+# OR IF RUNNING FROM THE TERMINAL
+asyncio.run(main())
 ```
 > predict time:  0.49544739723205566
 > prediction:  2025-08-05 17:15:00+00:00    0.002185
 ---
 
-## Get Started  
+## Get Started
 
 Dive into the future of machine learning workflows with Allora Forge. Check out the example notebook to see the magic in action and start building your next ML project today!  
 
-**Stay sharp. Stay cyber. Welcome to the Forge.**  
+**Welcome to the Forge.**  
 
 ---
 

@@ -21,7 +21,7 @@ class AlloraMLWorkflow:
         return cutoff_time.strftime("%Y-%m-%d")
 
     def list_ready_buckets(self, ticker, from_month):
-        url = "https://api.upshot.xyz/v2/allora/market-data/ohlc/buckets/by-month"
+        url = "https://api.allora.network/v2/allora/market-data/ohlc/buckets/by-month"
         headers = {"x-api-key": self.api_key}
         resp = requests.get(url, headers=headers, params={"tickers": ticker, "from_month": from_month}, timeout=30)
         resp.raise_for_status()
@@ -32,7 +32,7 @@ class AlloraMLWorkflow:
         return pd.read_csv(download_url)
 
     def fetch_ohlcv_data(self, ticker, from_date: str, max_pages: int = 1000, sleep_sec: float = 0.1) -> pd.DataFrame:
-        url = "https://api.upshot.xyz/v2/allora/market-data/ohlc"
+        url = "https://api.allora.network/v2/allora/market-data/ohlc"
         headers = {"x-api-key": self.api_key}
         params = {"tickers": ticker, "from_date": from_date}
 

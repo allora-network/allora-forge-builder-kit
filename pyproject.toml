@@ -3,10 +3,10 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "allora-ml-workflow"
+name = "allora-forge-builder-kit"
 version = "0.1.0"
-description = "Allora ML Workflow Utilities for Crypto Inference"
-authors = [{ name = "Your Name", email = "you@example.com" }]
+description = "Allora ML Workflow Utilities"
+authors = [{ name = "Tim DeLise", email = "tim@alloralabs.xyz" }]
 license = {text = "MIT"}
 readme = "README.md"
 requires-python = ">=3.8"
@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourname/allora-ml-workflow"
+Homepage = "https://github.com/allora-network/allora-forge-builder-kit"
 
 [tool.setuptools.packages.find]
-include = ["allora_ml_workflow"]
+include = ["allora_forge_builder_kit"]

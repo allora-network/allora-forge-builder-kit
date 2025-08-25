@@ -46,3 +46,5 @@ env/
 *.pkl
 *.joblib
 
+.allora_key
+.allora_api_key
