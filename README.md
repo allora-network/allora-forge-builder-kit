@@ -9,7 +9,11 @@
 
 # Allora Forge ML Workflow  
 
-Welcome to **Allora Forge**, a cutting-edge machine learning workflow package designed to streamline your ML pipeline. Whether you're a seasoned data scientist or just starting your journey, Allora Forge provides the tools you need to build, evaluate, and deploy ML models with ease.  
+Welcome to **Allora Forge**, a cutting-edge machine learning workflow package designed to streamline your ML pipeline. Whether you're a seasoned data scientist or just starting your journey, Allora Forge provides the tools you need to build, evaluate, and deploy ML models with ease. 
+
+TL;DR: [**Open the Zero-to-Deploy Notebook In Google Colab**](https://colab.research.google.com/github/allora-network/allora-forge-ml-workflow/blob/main/notebooks/Allora%20Forge%20ML%20Workflow.ipynb
+)
+- You will need to provide an [Allora Dev API Key](https://github.com/allora-network/allora-forge-ml-workflow/edit/main/README.md#api-key) and an [Allora Wallet Menmonic Passphrase](https://github.com/allora-network/allora-forge-ml-workflow/blob/main/notebooks/Allora%20Wallet%20Creator.ipynb).
 
 ---
 
