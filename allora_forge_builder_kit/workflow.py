@@ -66,7 +66,7 @@ class AlloraMLWorkflow:
         return df
 
     def create_5_min_bars(self, df: pd.DataFrame, live_mode: bool = False) -> pd.DataFrame:
-        df = df.set_index("date").sort_index()
+        df = df.set_index("date").sort_index().dropna()
         # print("Raw 1-min timestamps:", df.index[-10:])  # Show last 10 timestamps for debugging
 
         if not live_mode:
@@ -105,6 +105,7 @@ class AlloraMLWorkflow:
             print("Live Mode Bars:  ", bars.tail(5))
 
         # print("5-min bar timestamps:", bars.index[-10:])  # Show last 10 bar timestamps for debugging
+        bars = bars.dropna()
         return bars
 
     def compute_target(self, df: pd.DataFrame, hours: int = 24) -> pd.DataFrame:
