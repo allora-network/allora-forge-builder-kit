@@ -11,10 +11,15 @@
 
 Welcome to **Allora Forge Builder Kit**, a cutting-edge machine learning workflow package designed to streamline your ML pipeline. Whether you're a seasoned data scientist or just starting your journey, the Forge Builder Kit provides the tools you need to build, evaluate, and deploy ML models with ease.  
 
+TL;DR. [Launch the Builder Kit in Google Colab](https://colab.research.google.com/github/allora-network/allora-forge-builder-kit/blob/main/notebooks/Allora%20Forge%20Builder%20Kit.ipynb)
+
 ---
 
-## API Key
-Navigate to https://developer.allora.network/, register, and create your free API key. 
+## Key Details
+- **API Key** 
+    - To use the builder kit, you will need an API key. Navigate to https://developer.allora.network/, register, and create your free API key. 
+- **Allora Chain Wallet** 
+    -  To run a worker, and to participate in Forge competitions, you will need to create and use a wallet. The worker client will create a new wallet for you if you leave the field blank, when prompted for the wallet mnemonic passphrase. Your wallet's mnemonic passphrase will be saved to a file called `.allora_key`. You will need to keep track of this mnemonic phrase, as this gives you access to your wallet. Also make sure to note the wallet's **address**, which you will use to identify your worker. 
 
 ---
 
