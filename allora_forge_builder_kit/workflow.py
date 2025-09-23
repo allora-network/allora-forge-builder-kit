@@ -63,6 +63,7 @@ class AlloraMLWorkflow:
         for col in ["open", "high", "low", "close", "volume", "volume_notional"]:
             df[col] = pd.to_numeric(df[col], errors="coerce")
         df["date"] = pd.to_datetime(df["date"])
+        df.drop(columns=['exchange_code'], inplace=True)
         return df
 
     def create_5_min_bars(self, df: pd.DataFrame, live_mode: bool = False) -> pd.DataFrame:
@@ -207,17 +208,21 @@ class AlloraMLWorkflow:
             frames = []
             for bucket in self.list_ready_buckets(t, from_month):
                 df = self.fetch_bucket_csv(bucket["download_url"])
-                df["bucket_start"] = bucket["start"]
-                df["bucket_end"] = bucket["end"]
-                df["availability"] = bucket["availability"]
                 frames.append(df)
             combined_df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
             if not combined_df.empty:
                 latest_ts = sorted(pd.to_datetime(combined_df["date"]).dt.date.unique())[-2]
-                live_df = self.fetch_ohlcv_data(t, latest_ts.strftime("%Y-%m-%d"))
-                combined_df = pd.concat([combined_df, live_df], ignore_index=True)
+                try:
+                    live_df = self.fetch_ohlcv_data(t, latest_ts.strftime("%Y-%m-%d"))
+                    combined_df = pd.concat([combined_df, live_df], ignore_index=True)
+                except ValueError:
+                    # No data returned from API, skip adding live_df
+                    pass
                 combined_df["date"] = pd.to_datetime(combined_df["date"])
                 combined_df = combined_df.drop_duplicates(subset="date")
+            else:
+                combined_df = self.fetch_ohlcv_data(t, f"{from_month}-01")
+                combined_df["date"] = pd.to_datetime(combined_df["date"])
             all_data[t] = combined_df
     
         datasets = []
@@ -274,17 +279,21 @@ class AlloraMLWorkflow:
             frames = []
             for bucket in self.list_ready_buckets(t, from_month):
                 df = self.fetch_bucket_csv(bucket["download_url"])
-                df["bucket_start"] = bucket["start"]
-                df["bucket_end"] = bucket["end"]
-                df["availability"] = bucket["availability"]
                 frames.append(df)
             combined_df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
             if not combined_df.empty:
                 latest_ts = sorted(pd.to_datetime(combined_df["date"]).dt.date.unique())[-2]
-                live_df = self.fetch_ohlcv_data(t, latest_ts.strftime("%Y-%m-%d"))
-                combined_df = pd.concat([combined_df, live_df], ignore_index=True)
+                try:
+                    live_df = self.fetch_ohlcv_data(t, latest_ts.strftime("%Y-%m-%d"))
+                    combined_df = pd.concat([combined_df, live_df], ignore_index=True)
+                except ValueError:
+                    # No data returned from API, skip adding live_df
+                    pass
                 combined_df['date'] = pd.to_datetime(combined_df['date'])
                 combined_df = combined_df.drop_duplicates(subset='date')
+            else:
+                combined_df = self.fetch_ohlcv_data(t, f"{from_month}-01")
+                combined_df["date"] = pd.to_datetime(combined_df["date"])
             all_data[t] = combined_df
 
         datasets = []
