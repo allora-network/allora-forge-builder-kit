@@ -29,7 +29,9 @@ class AlloraMLWorkflow:
         return [b for b in buckets if b["state"] == "ready"]
 
     def fetch_bucket_csv(self, download_url):
-        return pd.read_csv(download_url)
+        df = pd.read_csv(download_url)
+        df.drop(columns=['exchange_code'], inplace=True)
+        return df
 
     def fetch_ohlcv_data(self, ticker, from_date: str, max_pages: int = 1000, sleep_sec: float = 0.1) -> pd.DataFrame:
         url = "https://api.allora.network/v2/allora/market-data/ohlc"
@@ -103,7 +105,6 @@ class AlloraMLWorkflow:
                 "volume": "sum",
                 "trades_done": "sum"
             })
-            print("Live Mode Bars:  ", bars.tail(5))
 
         # print("5-min bar timestamps:", bars.index[-10:])  # Show last 10 bar timestamps for debugging
         bars = bars.dropna()
@@ -213,7 +214,7 @@ class AlloraMLWorkflow:
             if not combined_df.empty:
                 latest_ts = sorted(pd.to_datetime(combined_df["date"]).dt.date.unique())[-2]
                 try:
-                    live_df = self.fetch_ohlcv_data(t, latest_ts.strftime("%Y-%m-%d"))
+                    live_df = self.fetch_ohlcv_data(t, latest_ts.strftime("%Y-%m"))
                     combined_df = pd.concat([combined_df, live_df], ignore_index=True)
                 except ValueError:
                     # No data returned from API, skip adding live_df
