@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import requests
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 import dill
 
@@ -17,7 +17,7 @@ class AlloraMLWorkflow:
 
     def compute_from_date(self, extra_hours: int = 12) -> str:
         total_hours = self.hours_needed + extra_hours
-        cutoff_time = datetime.utcnow() - timedelta(hours=total_hours)
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=total_hours)
         return cutoff_time.strftime("%Y-%m-%d")
 
     def list_ready_buckets(self, ticker, from_month):
@@ -174,7 +174,7 @@ class AlloraMLWorkflow:
         five_min_bars = self.create_5_min_bars(df, live_mode=True)
         if len(five_min_bars) < self.hours_needed * 12:
             raise ValueError("Not enough historical data.")
-        live_time = five_min_bars.index[-2]
+        live_time = five_min_bars.index[-1]
         features = self.extract_rolling_daily_features(five_min_bars, self.hours_needed, self.number_of_input_candles, [live_time])
         if features.empty:
             raise ValueError("No features returned.")
@@ -314,7 +314,7 @@ class AlloraMLWorkflow:
         full_data = full_data.dropna()
 
         # Define cutoff dates for test, validation, and training sets
-        test_cutoff = datetime.utcnow() - pd.DateOffset(months=test_months)
+        test_cutoff = datetime.now(timezone.utc) - pd.DateOffset(months=test_months)
         val_cutoff_start = test_cutoff - timedelta(hours=self.target_length) - pd.DateOffset(months=validation_months)
         val_cutoff_end = test_cutoff - timedelta(hours=self.target_length)
         train_cutoff = val_cutoff_start - timedelta(hours=self.target_length)
