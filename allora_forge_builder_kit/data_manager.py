@@ -469,6 +469,39 @@ class DataManager:
         pdf = pdf.set_index(["symbol", "open_time"]).sort_index()
 
         return pdf
+    
+    def load_polars(
+        self,
+        symbols: List[str],
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None
+    ):
+        """
+        Load bars into a Pandas DataFrame with MultiIndex (symbol, open_time),
+        scanning all symbols in one pass.
+        """
+        glob_path = f"{self.base_dir}/symbol=*/dt=*.parquet"
+        try:
+            df = pl.scan_parquet(glob_path)
+        except Exception as e:
+            print(f"[error] parquet scan failed: {e}")
+            return None
+
+        if symbols:
+            df = df.filter(pl.col("symbol").is_in(symbols))
+        if start:
+            df = df.filter(pl.col("open_time") >= start)
+        if end:
+            df = df.filter(pl.col("open_time") <= end)
+
+        # Collect to pandas
+        pdf = df.collect()
+
+        # 🔹 Drop duplicate (symbol, open_time) rows, keep latest
+        pdf = pdf.unique(subset=["symbol", "open_time"], keep="last")
+        pdf = pdf.sort(["symbol", "open_time"])
+
+        return pdf
 
 
     def _clean_corrupt_files(self):
