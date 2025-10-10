@@ -48,3 +48,21 @@ env/
 
 .allora_key
 .allora_api_key
+notebooks/.allora_api_key
+
+# Data directories
+parquet_data/
+parquet_data_allora/
+parquet_data_binance/
+notebooks/parquet_data/
+notebooks/parquet_data_allora/
+notebooks/parquet_data_binance/
+*.parquet
+
+# Results and output directories
+notebooks/results/
+results/
+
+# Worker runtime files
+notebooks/run_worker.py
+notebooks/worker/

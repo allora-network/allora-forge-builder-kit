@@ -6,365 +6,688 @@
 
 <img width="1536" height="1024" alt="forge_silicon" src="https://github.com/user-attachments/assets/f1444abf-e649-4e48-a9f0-187b78b59ccc" />
 
+# Allora Forge Builder Kit 2.0
 
-# Allora Forge Builder Kit
+**A production-ready machine learning workflow for cryptocurrency prediction and trading, now with multi-source data management and live feature extraction.**
 
-Welcome to **Allora Forge Builder Kit**, a cutting-edge machine learning workflow package designed to streamline your ML pipeline. Whether you're a seasoned data scientist or just starting your journey, the Forge Builder Kit provides the tools you need to build, evaluate, and deploy ML models with ease.  
+Build, train, and deploy ML models with a single unified interface that works seamlessly across multiple data sources (Binance, Allora Network) while handling all the complexity of data management, feature engineering, and live inference for you.
 
-TL;DR. [Launch the Builder Kit in Google Colab](https://colab.research.google.com/github/allora-network/allora-forge-builder-kit/blob/main/notebooks/Allora%20Forge%20Builder%20Kit.ipynb)
-
----
-
-## Key Details
-- **API Key** 
-    - To use the builder kit, you will need an API key. Navigate to https://developer.allora.network/, register, and create your free API key. 
-- **Allora Chain Wallet** 
-    -  To run a worker, and to participate in Forge competitions, you will need to create and use a wallet. The worker client will create a new wallet for you if you leave the field blank, when prompted for the wallet mnemonic passphrase. Your wallet's mnemonic passphrase will be saved to a file called `.allora_key`. You will need to keep track of this mnemonic phrase, as this gives you access to your wallet. Also make sure to note the wallet's **address**, which you will use to identify your worker. 
+🚀 **[Launch the Builder Kit in Google Colab](https://colab.research.google.com/github/allora-network/allora-forge-builder-kit/blob/main/notebooks/Allora%20Forge%20Builder%20Kit.ipynb)**
 
 ---
 
-## Features
+## ✨ What's New in v2.0
 
-### 1. **Automated Dataset Generation**
-Effortlessly generate datasets with train/validation/test splits. Allora Forge takes care of the heavy lifting, ensuring your data is ready for modeling in no time.  
+### 🔄 **Modular Data Management Architecture**
+- **Multi-source support**: Binance (Spot & Futures) + Allora Network
+- **Factory pattern**: Easy instantiation with `DataManager(source="binance")`
+- **Extensible**: Add new data sources by implementing `BaseDataManager`
+- **Storage isolation**: Separate Parquet directories per source
 
-### 2. **Dynamic Feature Engineering**
-Leverage automated feature generation based on historical bar data. The package dynamically creates features tailored to your dataset, saving you hours of manual work.  
+### ⚡ **Live Feature Extraction**
+- **Real-time inference**: Fetch 1-minute bars, resample, extract features—all on-the-fly
+- **Data-source agnostic**: Same `get_live_features()` works for Binance or Allora
+- **Smart alignment**: Offset resampling ensures bars end exactly at last 1-minute bar
+- **No storage dependency**: Always fetches fresh data for inference
 
-### 3. **Built-in Evaluation Metrics**
-Evaluate your models with a suite of built-in metrics, designed to provide deep insights into performance. From accuracy to precision, Allora Forge has you covered.  
+### 🎯 **Production-Ready Testing**
+- **23 comprehensive tests**: Unit + integration tests
+- **Both data sources**: Validates Binance & Allora end-to-end
+- **Visual inspection**: Tests output actual data for verification
+- **CI/CD ready**: Separates unit tests (fast) from integration tests (network)
 
-### 4. **Model Export for Live Inference**
-Export your trained models seamlessly for live inference. Deploy your models in production environments with confidence and minimal effort.  
+### 📊 **Efficient Local Storage**
+- **Partitioned Parquet**: Fast queries, small files, automatic deduplication
+- **Smart backfill**: Gap detection, incremental updates, pagination
+- **Hot cache**: In-memory recent bars for repeated queries
 
 ---
 
-## Example Notebook Highlights
+## 🚀 Quick Start
 
-Explore the full pipeline in action in the included Jupyter notebooks. The first is a barebones ML workflow to get a feel for how it works.
+### Installation
 
-[Allora Forge ML Workflow Example](https://github.com/allora-network/allora-forge-builder-kit/blob/main/notebooks/Allora%20Forge%20Builder%20Kit.ipynb)
-
-The second is a more robust grid search pipeline, where you evaluate many models, choose the best, and deploy it live.
-
-[Allora Forge Signal Miner Example](https://github.com/allora-network/allora-forge-ml-workflow/blob/main/notebooks/Allora%20Forge%20Signal%20Miner.ipynb)
-
-The example notebook included in the repository demonstrates:  
-- **Dataset Creation**: Automatically split your data into train/validation/test sets.  
-- **Feature Engineering**: Generate dynamic features from historical bar data.  
-- **Model Training**: Train your ML models with ease.  
-- **Evaluation**: Use built-in metrics to assess model performance.  
-- **Export**: Save your model for live inference deployment.  
-
-### Quickstart Example Code
-
-```python
-from allora_forge_builder_kit import AlloraMLWorkflow, get_api_key #Allora Forge
-import lightgbm as lgb
-import pandas as pd
-
-tickers = ["btcusd", "ethusd", "solusd"]
-hours_needed = 1*24             # Number of historical hours for feature lookback window
-number_of_input_candles = 24    # Number of candles for input features
-target_length = 1*24            # Number of hours into the future for target
-
-# Instantiate the workflow
-workflow = AlloraMLWorkflow(
-    data_api_key=get_api_key(),
-    tickers=tickers,
-    hours_needed=hours_needed,
-    number_of_input_candles=number_of_input_candles,
-    target_length=target_length
-)
-
-# Get training, validation, and test data
-X_train, y_train, X_val, y_val, X_test, y_test = workflow.get_train_validation_test_data(
-    from_month="2023-01",
-    validation_months=3,
-    test_months=3
-)
-
-# Define feature columns and ML model
-feature_cols = [f for f in list(X_train) if 'feature' in f]
-
-# Define hyperparameters for the LightGBM model
-learning_rate = 0.001
-max_depth = 5
-num_leaves = 8
-
-# Initialize LightGBM model with hyperparameters
-model = lgb.LGBMRegressor(
-    n_estimators=50,
-    learning_rate=learning_rate,
-    max_depth=max_depth,
-    num_leaves=num_leaves
-)
-
-model.fit(
-    pd.concat([X_train[feature_cols], X_val[feature_cols]]), 
-    pd.concat([y_train, y_val])
-)
-
-# Evaluate on the test data
-test_preds = model.predict(X_test[feature_cols])
-test_preds = pd.Series(test_preds, index=X_test.index)
-
-# Show test metrics
-metrics = workflow.evaluate_test_data(test_preds)
-print(metrics)
+#### From GitHub (Recommended for Agents)
+```bash
+pip install git+https://github.com/allora-network/allora-forge-builder-kit.git
 ```
 
-> {'correlation': 0.038930690096235177, 'directional_accuracy': 0.5414329504839673}
+#### From Source
+```bash
+git clone https://github.com/allora-network/allora-forge-builder-kit.git
+cd allora-forge-builder-kit
+pip install -e .
+```
 
-### Model Deployment for Live Inference on the Allora Network
+#### With Conda (Full ML Environment)
+```bash
+git clone https://github.com/allora-network/allora-forge-builder-kit.git
+cd allora-forge-builder-kit
+conda env create -f environment.yml
+conda activate ml311_dev
+```
+
+### 30-Second Example (Topic 69)
+
+```python
+from allora_forge_builder_kit import AlloraMLWorkflow
+from datetime import datetime, timedelta, timezone
+import lightgbm as lgb
+import numpy as np
+
+# 1. Create workflow for 1-day Bitcoin prediction
+workflow = AlloraMLWorkflow(
+    tickers=["btcusd"],
+    hours_needed=7*24,         # 7 days lookback
+    number_of_input_candles=24,# 24 candles in features
+    target_length=1*24,        # 1 day prediction (Topic 69)
+    interval="1h",             # 1-hour bars
+    data_source="allora",      # Fast monthly buckets!
+    api_key="your-api-key"
+)
+
+# 2. Backfill data (fast with Allora!)
+start = datetime.now(timezone.utc) - timedelta(days=180)
+workflow.backfill(start=start)
+
+# 3. Get training data
+df = workflow.get_full_feature_target_dataframe_pandas(start_date=start)
+df = df.reset_index()
+feature_cols = [c for c in df.columns if c.startswith('feature_')]
+
+# 4. Train model on log returns
+model = lgb.LGBMRegressor(n_estimators=100)
+model.fit(df[feature_cols], df["target"])
+
+# 5. Live inference with price conversion
+def predict():
+    # Get live features (fresh 1-min data → resampled → features)
+    features = workflow.get_live_features("btcusd")
+    log_return = model.predict(features)[0]
+    
+    # Get current price
+    raw = workflow.load_raw(start=datetime.now(timezone.utc) - timedelta(hours=2))
+    current_price = raw["close"].iloc[-1]
+    
+    # Convert log return → price (Topic 69 requirement)
+    predicted_price = current_price * np.exp(log_return)
+    return float(predicted_price)
+
+print(f"Predicted BTC price (24h): ${predict():,.2f}")
+```
+
+**That's it!** Complete Topic 69 pipeline in 40 lines.
+
+💡 **See full example**: [`notebooks/example_topic_69_bitcoin_prediction.py`](notebooks/example_topic_69_bitcoin_prediction.py)
+
+---
+
+## 🎯 Key Features
+
+### 1. **Data-Source Agnostic Architecture**
+
+Work with multiple data sources through a single unified interface:
+
+```python
+# Use Binance (no API key required)
+workflow_binance = AlloraMLWorkflow(
+    tickers=["BTCUSDT", "ETHUSDT"],
+    data_source="binance",
+    market="futures",  # or "spot"
+    interval="5m",
+    hours_needed=32,
+    number_of_input_candles=8,
+    target_length=16
+)
+
+# Use Allora Network (API key required)
+workflow_allora = AlloraMLWorkflow(
+    tickers=["btcusd", "ethusd"],
+    data_source="allora",
+    api_key="your-allora-api-key",
+    interval="5m",
+    hours_needed=32,
+    number_of_input_candles=8,
+    target_length=16
+)
+
+# Both work identically!
+features_binance = workflow_binance.get_live_features("BTCUSDT")
+features_allora = workflow_allora.get_live_features("btcusd")
+```
+
+### 2. **Automated Data Management**
+
+The workflow handles everything:
+- ✅ Fetch historical data from APIs
+- ✅ Store efficiently in partitioned Parquet files
+- ✅ Detect and fill gaps automatically
+- ✅ Maintain in-memory cache for fast access
+- ✅ Handle rate limiting and pagination
+
+```python
+# Backfill last 30 days (detects gaps automatically)
+start = datetime.now(timezone.utc) - timedelta(days=30)
+workflow.backfill(start=start)
+
+# Periodic updates (only fills gaps)
+workflow.backfill()  # Smart gap detection
+```
+
+**Storage Structure:**
+```
+parquet_data_binance/
+├── symbol=BTCUSDT/
+│   ├── dt=2025-10-01.parquet
+│   ├── dt=2025-10-02.parquet
+│   └── dt=2025-10-03.parquet
+└── symbol=ETHUSDT/
+    └── dt=2025-10-01.parquet
+
+parquet_data_allora/
+└── symbol=BTCUSD/
+    └── dt=2025-10-01.parquet
+```
+
+### 3. **Live Feature Extraction**
+
+Real-time inference with fresh data:
+
+```python
+# Automatically:
+# 1. Fetches recent 1-minute bars from API
+# 2. Drops incomplete bars
+# 3. Resamples to workflow interval (e.g., 5m)
+# 4. Extracts normalized features
+# 5. Returns DataFrame ready for model.predict()
+
+features = workflow.get_live_features("BTCUSDT")
+prediction = model.predict(features)
+```
+
+**What happens under the hood:**
+1. Calculate required data: `hours_needed + 2 hours buffer`
+2. Fetch 1-minute bars from API (bypasses local storage)
+3. Drop incomplete bar (if current second < 45)
+4. Resample to target interval with offset alignment
+5. Extract 40 normalized features (8 candles × 5 OHLCV)
+6. Return 1-row DataFrame: shape `(1, 40)`
+
+### 4. **Flexible Feature Engineering**
+
+Normalized features from rolling windows:
+
+```python
+# Configuration
+workflow = AlloraMLWorkflow(
+    hours_needed=32,           # Lookback window
+    number_of_input_candles=8, # Split into 8 segments
+    interval="5m",             # Bar interval
+    ...
+)
+
+# Features: 8 candles × 5 OHLCV = 40 features
+# Normalized: prices relative to last close, volume relative to last volume
+features = workflow.get_live_features(ticker)
+# Shape: (1, 40)
+```
+
+**Feature Structure:**
+- `feature_0` to `feature_4`: Candle 1 (open, high, low, close, volume)
+- `feature_5` to `feature_9`: Candle 2
+- ...
+- `feature_35` to `feature_39`: Candle 8
+
+### 5. **Built-in Evaluation Metrics**
+
+```python
+# Get test predictions
+test_preds = model.predict(X_test[feature_cols])
+
+# Evaluate
+metrics = workflow.evaluate_test_data(test_preds)
+print(metrics)
+
+# Output:
+# {'correlation': 0.042, 'directional_accuracy': 0.548}
+```
+
+### 6. **WebSocket Streaming** (Binance Only)
+
+```python
+from allora_forge_builder_kit import BinanceDataManager
+
+dm = BinanceDataManager(interval="5m", market="futures")
+
+# Register callback for when bars complete
+def on_batch_complete(open_time, snapshot_dict):
+    print(f"Bar completed at {open_time}")
+    for symbol, bar in snapshot_dict.items():
+        print(f"  {symbol}: close={bar['close']}")
+
+dm.register_batch_callback(on_batch_complete)
+
+# Start streaming
+dm.live(["BTCUSDT", "ETHUSDT"])
+```
+
+---
+
+## 📚 Documentation
+
+### Core Documentation
+
+| Document | Description |
+|----------|-------------|
+| **[AGENT_GUIDE.md](AGENT_GUIDE.md)** | 📘 **Comprehensive guide for AI agents**: How to use the workflow, understand data flow, local storage, and live feature extraction |
+| **[ARCHITECTURE.md](ARCHITECTURE.md)** | 🏗️ Deep dive into data manager architecture, storage strategy, and API reference |
+| **[tests/README.md](tests/README.md)** | 🧪 Test documentation with examples and coverage details |
+
+### Quick Links
+
+- **Installation**: See [Installation](#installation) section above
+- **API Reference**: See [ARCHITECTURE.md - API Reference](ARCHITECTURE.md#api-reference)
+- **Testing**: See [tests/README.md](tests/README.md)
+- **Examples**: See [Example Notebooks](#example-notebooks) below
+
+---
+
+## 📖 Example Notebooks & Scripts
+
+### 1. **Topic 69: Bitcoin Price Prediction** (Complete Example)
+
+**Notebook**: [`notebooks/Topic 69 - Bitcoin Price Prediction.ipynb`](notebooks/Topic%2069%20-%20Bitcoin%20Price%20Prediction.ipynb)  
+**Script**: [`notebooks/example_topic_69_bitcoin_prediction.py`](notebooks/example_topic_69_bitcoin_prediction.py)
+
+Complete pipeline for 24-hour Bitcoin price prediction:
+- v2.0 workflow with Allora data (fast loading)
+- Train on log returns
+- Convert to price predictions for Topic 69
+- Full deployment example
+
+**Key Features:**
+- ✅ Uses Allora monthly buckets (much faster than Binance)
+- ✅ Trains on log returns (ML best practice)
+- ✅ Converts to actual prices (Topic 69 requirement)
+- ✅ Live feature extraction with offset resampling
+- ✅ Ready-to-deploy predict function
+
+### 2. **Signal Miner: Hyperparameter Grid Search**
+
+**Script**: [`notebooks/example_signal_miner_grid_search.py`](notebooks/example_signal_miner_grid_search.py)
+
+Systematic model selection pipeline:
+- Hyperparameter grid search (10+ models)
+- Time-series cross-validation (3 folds)
+- Model selection based on validation performance
+- Retrain best model on full dataset
+- Deploy best configuration
+
+**Inspired by ML MCP Server's experiment tracking**
+
+### 3. **Legacy: Basic ML Workflow**
+[Allora Forge ML Workflow Example](https://github.com/allora-network/allora-forge-builder-kit/blob/main/notebooks/Allora%20Forge%20Builder%20Kit.ipynb)
+
+Original example (pre-v2.0):
+- Data fetching with old API
+- Basic feature extraction
+- Simple model training
+
+---
+
+## 🔥 Complete Training & Deployment Example
+
+### Step 1: Setup & Data Collection
+
+```python
+from allora_forge_builder_kit import AlloraMLWorkflow
+from datetime import datetime, timedelta, timezone
+import lightgbm as lgb
+import pickle
+
+# Configuration
+TICKERS = ["BTCUSDT", "ETHUSDT"]
+HOURS_NEEDED = 32
+NUM_CANDLES = 8
+TARGET_LENGTH = 16
+INTERVAL = "5m"
+
+# Create workflow
+workflow = AlloraMLWorkflow(
+    tickers=TICKERS,
+    hours_needed=HOURS_NEEDED,
+    number_of_input_candles=NUM_CANDLES,
+    target_length=TARGET_LENGTH,
+    interval=INTERVAL,
+    data_source="binance",
+    market="futures"
+)
+
+# Backfill 30 days
+start = datetime.now(timezone.utc) - timedelta(days=30)
+print(f"Backfilling data from {start}...")
+workflow.backfill(start=start)
+print("Backfill complete!")
+```
+
+### Step 2: Feature Engineering & Training
+
+```python
+# Get training data
+print("Extracting features...")
+df_train = workflow.get_full_feature_target_dataframe_pandas(start_date=start)
+
+# Split features and target
+feature_cols = [f"feature_{i}" for i in range(40)]
+X = df_train[feature_cols]
+y = df_train["target"]
+
+print(f"Training data: {X.shape[0]} samples, {X.shape[1]} features")
+
+# Train model
+print("Training model...")
+model = lgb.LGBMRegressor(
+    n_estimators=100,
+    learning_rate=0.05,
+    max_depth=5,
+    num_leaves=31
+)
+model.fit(X, y)
+
+# Save model
+with open("model.pkl", "wb") as f:
+    pickle.dump(model, f)
+    
+print("Model trained and saved!")
+```
+
+### Step 3: Live Inference Loop
+
+```python
+import time
+
+# Load model
+with open("model.pkl", "rb") as f:
+    model = pickle.load(f)
+
+print("Starting live inference loop...")
+
+while True:
+    try:
+        # Get live features (fresh from API)
+        features = workflow.get_live_features("BTCUSDT")
+        
+        # Predict
+        prediction = model.predict(features)[0]
+        timestamp = features.index[0]
+        
+        print(f"[{timestamp}] BTCUSDT Prediction: {prediction:.6f}")
+        
+        # Your trading logic here...
+        
+    except ValueError as e:
+        print(f"Warning: {e}")
+    
+    # Wait for next bar (5 minutes)
+    time.sleep(5 * 60)
+```
+
+### Step 4: Deploy to Allora Network
 
 ```python
 from allora_sdk.worker import AlloraWorker
+import asyncio
 
-# Final predict function
-def predict() -> pd.Series:
-    live_features = workflow.get_live_features("btcusd")
-    preds = model.predict(live_features)
-    return pd.Series(preds, index=live_features.index)
+# Load workflow and model (same as above)
+workflow = AlloraMLWorkflow(...)
+model = pickle.load(open("model.pkl", "rb"))
 
-# Pickle the function
-with open("predict.pkl", "wb") as f:
-    dill.dump(predict, f)
-
-# Load the pickled predict function
-with open("predict.pkl", "rb") as f:
-    predict_fn = dill.load(f)
-
-
-def my_model():
-    # Call the function and get predictions
-    tic = time.time()
-    prediction = predict_fn()
-    toc = time.time()
-
-    print("predict time: ", (toc - tic) )
-    print("prediction: ", prediction )
+# Define predict function
+def predict():
+    features = workflow.get_live_features("btcusd")
+    prediction = model.predict(features)[0]
     return prediction
 
+# Deploy worker
 async def main():
     worker = AlloraWorker(
-        # topic_id=69,  ### THIS IS OPTIONAL -- TOPIC 69 IS OPEN TO EVERYONE
-        predict_fn=my_model,
-        api_key="<your API key>",
+        predict_fn=predict,
+        api_key="your-allora-api-key",
+        topic_id=69  # Optional
     )
 
     async for result in worker.run():
         if isinstance(result, Exception):
             print(f"Error: {str(result)}")
         else:
-            print(f"Prediction submitted to Allora: {result.prediction}")
+            print(f"Prediction submitted: {result.prediction}")
 
-# IF RUNNING IN A NOTEBOOK:
-await main()
-
-# OR IF RUNNING FROM THE TERMINAL
+# Run
 asyncio.run(main())
 ```
-> predict time:  0.49544739723205566
-> prediction:  2025-08-05 17:15:00+00:00    0.002185
----
-
-## Get Started
-
-Dive into the future of machine learning workflows with Allora Forge. Check out the example notebook to see the magic in action and start building your next ML project today!  
-
-**Welcome to the Forge.**  
 
 ---
 
-# AlloraMLWorkflow Documentation
+## 🧪 Testing
 
-The `AlloraMLWorkflow` class provides methods to fetch, preprocess, and prepare financial time-series data for machine learning workflows.
+The project includes comprehensive tests:
 
----
+```bash
+# Install test dependencies
+pip install pytest
 
-## Class Initialization
+# Run unit tests (fast, no network)
+pytest tests/test_data_managers.py -v
 
-```python
-AlloraMLWorkflow(data_api_key, tickers, hours_needed, number_of_input_candles, target_length)
+# Run all tests including integration (requires network)
+export RUN_INTEGRATION_TESTS=1
+pytest tests/test_data_managers.py -v
 ```
 
-**Arguments:**
+**Test Coverage:**
+- ✅ 17 Unit Tests (factory, initialization, storage)
+- ✅ 6 Integration Tests (Binance + Allora live APIs)
 
-- `data_api_key` (`str`): API key for accessing market data.
-- `tickers` (`list[str]`): List of ticker symbols to fetch data for.
-- `hours_needed` (`int`): Lookback window (in hours) for feature extraction.
-- `number_of_input_candles` (`int`): Number of candles to segment the lookback window into.
-- `target_length` (`int`): Target horizon in hours for predictive modeling.
+**Integration Tests:**
+- `test_binance_get_live_1min_data` - Verify 1-minute data fetching
+- `test_allora_get_live_1min_data` - Verify 1-minute data fetching
+- `test_workflow_binance_get_live_features` - End-to-end validation
+- `test_workflow_allora_get_live_features` - End-to-end validation
+- `test_workflow_live_mode_offset` - Visual inspection of offset logic
+- `test_workflow_get_live_features_end_to_end` - Full validation
 
----
-
-## Methods
-
-### `compute_from_date(extra_hours: int = 12) -> str`
-
-Compute a starting date string based on the lookback window.
-
-**Arguments:**
-
-- `extra_hours` (`int`, default=12): Additional buffer hours before the cutoff.
-
-**Returns:**
-
-- `str` – Date string in format `YYYY-MM-DD`.
+See [tests/README.md](tests/README.md) for detailed documentation.
 
 ---
 
-### `list_ready_buckets(ticker, from_month) -> list`
+## 🔧 Advanced Configuration
 
-Fetch list of ready data buckets for a ticker.
+### Custom Data Manager
 
-**Arguments:**
+```python
+from allora_forge_builder_kit import BinanceDataManager
 
-- `ticker` (`str`): Ticker symbol.
-- `from_month` (`str`): Month in format `YYYY-MM`.
+# Create custom data manager
+custom_dm = BinanceDataManager(
+    base_dir="/path/to/data",
+    interval="15m",
+    market="spot",
+    cache_len=2000,
+    batch_timeout=30,
+    rate_limit=0.3
+)
 
-**Returns:**
+# Pass to workflow
+workflow = AlloraMLWorkflow(
+    tickers=["BTCUSDT"],
+    hours_needed=32,
+    number_of_input_candles=8,
+    target_length=16,
+    data_manager=custom_dm  # Use custom manager
+)
+```
 
-- `list[dict]` – Buckets where `state == "ready"`.
+### Multiple Intervals
 
----
+```python
+# 5-minute bars for high-frequency
+workflow_5m = AlloraMLWorkflow(interval="5m", ...)
 
-### `fetch_bucket_csv(download_url) -> pd.DataFrame`
+# 1-hour bars for day trading
+workflow_1h = AlloraMLWorkflow(interval="1h", ...)
 
-Download and load bucket CSV data.
+# 4-hour bars for swing trading
+workflow_4h = AlloraMLWorkflow(interval="4h", ...)
+```
 
-**Arguments:**
+### Different Lookback Periods
 
-- `download_url` (`str`): URL of the CSV file.
+```python
+# Short-term (8 hours)
+workflow_short = AlloraMLWorkflow(hours_needed=8, ...)
 
-**Returns:**
+# Medium-term (32 hours)
+workflow_medium = AlloraMLWorkflow(hours_needed=32, ...)
 
-- `pd.DataFrame` – Data from the bucket.
-
----
-
-### `fetch_ohlcv_data(ticker, from_date: str, max_pages: int = 1000, sleep_sec: float = 0.1) -> pd.DataFrame`
-
-Fetch OHLCV data from the API, handling pagination.
-
-**Arguments:**
-
-- `ticker` (`str`): Ticker symbol.
-- `from_date` (`str`): Starting date (`YYYY-MM-DD`).
-- `max_pages` (`int`, default=1000): Maximum pages to fetch.
-- `sleep_sec` (`float`, default=0.1): Sleep between requests.
-
-**Returns:**
-
-- `pd.DataFrame` – Cleaned OHLCV dataset.
-
----
-
-### `create_5_min_bars(df: pd.DataFrame, live_mode: bool = False) -> pd.DataFrame`
-
-Resample 1-minute OHLCV data into 5-minute bars.
-
-**Arguments:**
-
-- `df` (`pd.DataFrame`): Input data indexed by datetime.
-- `live_mode` (`bool`, default=False): Whether to adjust for incomplete live data.
-
-**Returns:**
-
-- `pd.DataFrame` – 5-minute bar data.
+# Long-term (168 hours = 7 days)
+workflow_long = AlloraMLWorkflow(hours_needed=168, ...)
+```
 
 ---
 
-### `compute_target(df: pd.DataFrame, hours: int = 24) -> pd.DataFrame`
+## 🌟 Why Allora Forge Builder Kit?
 
-Compute log return target over a future horizon.
+### For Data Scientists
+- **Focus on ML**: Data management is handled automatically
+- **Reproducible**: Same workflow for training and inference
+- **Flexible**: Easy to experiment with different intervals and lookbacks
+- **Production-ready**: Robust error handling and logging
 
-**Arguments:**
+### For AI Agents
+- **Simple interface**: One class does everything
+- **Self-documenting**: Clear parameters and return types
+- **Comprehensive docs**: AGENT_GUIDE.md explains everything
+- **Easy installation**: `pip install git+https://github.com/...`
 
-- `df` (`pd.DataFrame`): OHLCV data with `close` column.
-- `hours` (`int`, default=24): Horizon for target calculation.
+### For Traders
+- **Live inference**: Always fresh data, no stale predictions
+- **Multi-source**: Compare Binance vs Allora data
+- **Real-time streaming**: WebSocket support for Binance
+- **Backtesting**: Historical data readily available
 
-**Returns:**
-
-- `pd.DataFrame` – DataFrame with `future_close` and `target` columns.
-
----
-
-### `extract_rolling_daily_features(data: pd.DataFrame, lookback: int, number_of_candles: int, start_times: list) -> pd.DataFrame`
-
-Extract normalized OHLCV features over rolling windows.
-
-**Arguments:**
-
-- `data` (`pd.DataFrame`): Input OHLCV data with `date` index.
-- `lookback` (`int`): Lookback window (in hours).
-- `number_of_candles` (`int`): Number of candles to split the window into.
-- `start_times` (`list[datetime]`): Anchor times for feature extraction.
-
-**Returns:**
-
-- `pd.DataFrame` – Extracted rolling feature set.
+### For Developers
+- **Modular architecture**: Easy to extend with new data sources
+- **Well-tested**: 23 tests covering all functionality
+- **Type-safe**: Clear interfaces and error messages
+- **Open source**: Apache 2.0 license
 
 ---
 
-### `get_live_features(ticker) -> pd.DataFrame`
+## 📊 Supported Intervals
 
-Fetch and compute live features for a ticker.
-
-**Arguments:**
-
-- `ticker` (`str`): Ticker symbol.
-
-**Returns:**
-
-- `pd.DataFrame` – Latest extracted features for live inference.
-
----
-
-### `evaluate_test_data(predictions: pd.Series) -> dict`
-
-Evaluate predictions against stored test targets.
-
-**Arguments:**
-
-- `predictions` (`pd.Series`): Predicted values (index must match test targets).
-
-**Returns:**
-
-- `dict` with keys:
-  - `"correlation"` (`float`): Pearson correlation with true targets.
-  - `"directional_accuracy"` (`float`): Fraction of correct directional predictions.
+| Interval | Description | Use Case |
+|----------|-------------|----------|
+| `1m` | 1-minute bars | Ultra high-frequency trading |
+| `5m` | 5-minute bars | High-frequency trading |
+| `15m` | 15-minute bars | Intraday trading |
+| `1h` | 1-hour bars | Day trading |
+| `4h` | 4-hour bars | Swing trading |
+| `1d` | Daily bars | Position trading |
 
 ---
 
-### `get_full_feature_target_dataframe(from_month="2025-01") -> pd.DataFrame`
+## 🚨 Requirements
 
-Build complete dataset with features and targets for all tickers.
+### Python Version
+- Python 3.8 or higher
 
-**Arguments:**
+### Core Dependencies
+```
+pandas>=1.3.0
+polars>=0.20.0
+requests>=2.31.0
+websocket-client>=1.6.0
+numba>=0.58.0
+```
 
-- `from_month` (`str`, default="2025-01"): Starting month for bucket retrieval.
+### ML Dependencies (Optional)
+```
+lightgbm>=4.0.0
+scikit-learn>=1.3.0
+```
 
-**Returns:**
+### Allora SDK (For Deployment)
+```
+allora-sdk>=0.1.0
+```
 
-- `pd.DataFrame` – Full dataset indexed by `(date, ticker)`.
+See `requirements.txt` or `environment.yml` for complete list.
 
 ---
 
-### `get_train_validation_test_data(from_month="2025-01", validation_months=3, test_months=3, force_redownload=False)`
+## 🗺️ Roadmap
 
-Prepare train/validation/test datasets with caching.
+### v2.1 (Coming Soon)
+- [ ] Additional data sources (Coinbase, Kraken)
+- [ ] Built-in model registry
+- [ ] Advanced feature engineering templates
+- [ ] Performance profiling tools
 
-**Arguments:**
+### v2.2 (Future)
+- [ ] Multi-asset portfolio support
+- [ ] Custom indicator library
+- [ ] AutoML integration
+- [ ] Dashboard for monitoring
 
-- `from_month` (`str`, default="2025-01\`): Starting month for data retrieval.
-- `validation_months` (`int`, default=3): Number of months for validation set.
-- `test_months` (`int`, default=3): Number of months for test set.
-- `force_redownload` (`bool`, default=False): If `True`, re-download instead of loading cached data.
+---
 
-**Returns:**
+## 🤝 Contributing
 
-- `tuple` – `(X_train, y_train, X_val, y_val, X_test, y_test)` as `pd.DataFrame` / `pd.Series`.
+We welcome contributions! Here's how:
 
+### Adding a New Data Source
+
+1. Create `your_data_manager.py` inheriting from `BaseDataManager`
+2. Implement abstract methods
+3. Add to factory in `data_manager_factory.py`
+4. Create tests in `tests/test_data_managers.py`
+5. Submit PR
+
+See [ARCHITECTURE.md - Contributing](ARCHITECTURE.md#contributing) for detailed guide.
+
+### Reporting Issues
+
+Found a bug? Have a feature request?
+- [GitHub Issues](https://github.com/allora-network/allora-forge-builder-kit/issues)
+
+---
+
+## 📄 License
+
+Apache 2.0 License - See [LICENSE](LICENSE) for details.
+
+---
+
+## 🌐 Community & Support
+
+- **Documentation**: [AGENT_GUIDE.md](AGENT_GUIDE.md) | [ARCHITECTURE.md](ARCHITECTURE.md)
+- **Discord**: [Join our community](https://discord.gg/allora)
+- **GitHub**: [allora-network/allora-forge-builder-kit](https://github.com/allora-network/allora-forge-builder-kit)
+- **Website**: [https://allora.network](https://allora.network)
+- **Developer Portal**: [https://developer.allora.network](https://developer.allora.network)
+
+---
+
+## 🙏 Acknowledgments
+
+Built with ❤️ by the Allora Team and contributors.
+
+Special thanks to:
+- Binance for providing free market data API
+- The Allora Network community
+- All open-source contributors
+
+---
+
+**Welcome to the Forge. Build the future of decentralized AI.**
 
