@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 import polars as pl
 from numba import jit
 
-from .data_manager import DataManager
+from .data_manager_factory import DataManager
+from .base_data_manager import BaseDataManager
 
 
 @jit(nopython=True, cache=True)
@@ -112,12 +113,49 @@ class AlloraMLWorkflow:
         number_of_input_candles,
         target_length,
         interval="5m",
-        market="futures",
-        base_dir="parquet_data",
+        data_source="binance",  # Simple string API
+        data_manager=None,  # Advanced: explicit instance
+        **data_manager_kwargs  # Pass through to data manager (market, api_key, etc.)
     ):
         """
         High-level ML workflow built on top of DataManager.
-        DataManager handles ingestion/storage, but stays internal.
+        
+        Args:
+            tickers: List of ticker symbols
+            hours_needed: Hours of lookback for features
+            number_of_input_candles: Number of candles in feature window
+            target_length: Prediction horizon in hours
+            interval: Bar interval (e.g. "5m", "1h")
+            data_source: Data source string ("binance" or "allora") - simple API
+            data_manager: Optional pre-configured data manager instance - advanced API
+            **data_manager_kwargs: Arguments passed to DataManager factory:
+                - Binance: market="futures", batch_timeout=20, base_dir="..."
+                - Allora: api_key="...", base_dir="...", max_pages=1000
+        
+        Examples:
+            # Simple API - Binance
+            workflow = AlloraMLWorkflow(
+                tickers=["BTCUSDT"],
+                hours_needed=24,
+                number_of_input_candles=24,
+                target_length=24,
+                data_source="binance",
+                market="futures"  # Binance-specific param
+            )
+            
+            # Simple API - Allora
+            workflow = AlloraMLWorkflow(
+                tickers=["BTC/USD"],
+                hours_needed=24,
+                number_of_input_candles=24,
+                target_length=24,
+                data_source="allora",
+                api_key="your-key"  # Allora-specific param
+            )
+            
+            # Advanced API - explicit instance
+            dm = DataManager(source="binance", interval="5m", market="futures")
+            workflow = AlloraMLWorkflow(..., data_manager=dm)
         """
         self.tickers = tickers
         self.hours_needed = hours_needed
@@ -126,8 +164,26 @@ class AlloraMLWorkflow:
         self.test_targets = None
         self.interval = interval
 
-        # 🔹 hide DataManager internally
-        self._dm = DataManager(interval=interval, market=market, base_dir=base_dir)
+        # 🔹 Use provided data manager OR create from factory
+        if data_manager is not None:
+            # Advanced API: explicit instance
+            if not isinstance(data_manager, BaseDataManager):
+                raise TypeError(
+                    f"data_manager must be an instance of BaseDataManager, "
+                    f"got {type(data_manager)}"
+                )
+            self._dm = data_manager
+            # Update interval if manager uses different interval
+            if hasattr(self._dm, 'interval'):
+                self.interval = self._dm.interval
+        else:
+            # Simple API: create from factory using string
+            self._dm = DataManager(
+                source=data_source,
+                interval=interval,
+                symbols=tickers,
+                **data_manager_kwargs
+            )
     
     def _parse_interval_to_bars_per_hour(self, interval: str) -> float:
         """Convert interval string (e.g., '5m', '1h', '15m') to bars per hour."""
@@ -176,8 +232,157 @@ class AlloraMLWorkflow:
         self._dm.register_batch_callback(callback)
         self._dm.live(self.tickers)
 
+    # ---------- Live data & features ----------
+    def get_live_features(self, ticker: str) -> pd.DataFrame:
+        """
+        Get live features for a single ticker (data-source agnostic).
+        
+        This replicates the functionality of the previous version:
+        1. Fetches recent 1-minute bars from the data manager
+        2. Resamples to the workflow's configured interval
+        3. Extracts rolling features from the most recent bar
+        
+        Args:
+            ticker: Symbol to fetch features for
+            
+        Returns:
+            DataFrame with features for the most recent complete bar
+            
+        Raises:
+            ValueError: If not enough historical data or no features extracted
+        """
+        # Calculate how much historical data we need
+        # We need enough to cover the lookback period
+        hours_back = self.hours_needed + 2  # Add 2 hours buffer
+        
+        # Fetch 1-minute bars from data manager (works for both Allora and Binance)
+        df_1min = self._dm.get_live_1min_data(ticker, hours_back=hours_back)
+        
+        if df_1min.empty:
+            raise ValueError(f"No 1-minute data returned for {ticker}")
+        
+        # Resample to the workflow's configured interval
+        interval_bars = self.create_interval_bars(df_1min, live_mode=True)
+        
+        # Check if we have enough bars
+        bars_per_hour = self._parse_interval_to_bars_per_hour(self.interval)
+        required_bars = int(self.hours_needed * bars_per_hour)
+        
+        if len(interval_bars) < required_bars:
+            raise ValueError(
+                f"Not enough historical data. Need {required_bars} bars, "
+                f"got {len(interval_bars)}"
+            )
+        
+        # Extract features for the most recent bar
+        live_time = interval_bars.index[-1]
+        features = self.extract_rolling_daily_features(
+            interval_bars,
+            self.hours_needed,
+            self.number_of_input_candles,
+            [live_time]
+        )
+        
+        if features.empty:
+            raise ValueError("No features returned.")
+        
+        return features
+
+    def create_interval_bars(self, df_1min: pd.DataFrame, live_mode: bool = False) -> pd.DataFrame:
+        """
+        Resample 1-minute bars to the workflow's configured interval.
+        
+        In live_mode, the last resampled bar will END at the last 1-minute bar time
+        by calculating an offset to shift the standard resampling buckets.
+        
+        Args:
+            df_1min: DataFrame with 1-minute bars (open_time index, OHLCV columns)
+            live_mode: If True, drop incomplete 1-min bars and align resampling to end at last bar
+            
+        Returns:
+            DataFrame with resampled bars at the configured interval
+        """
+        if df_1min.empty:
+            return pd.DataFrame()
+        
+        df = df_1min.copy()
+        
+        # Ensure index is datetime
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index, utc=True)
+        
+        # Drop incomplete bar in live mode
+        if live_mode:
+            now = datetime.now(timezone.utc)
+            last_ts = df.index[-1]
+            
+            # Ensure timezone aware
+            if last_ts.tzinfo is None:
+                last_ts = last_ts.tz_localize(timezone.utc)
+            
+            # Drop if last 1-min bar is incomplete (current second < 45)
+            if last_ts > now or (last_ts.minute == now.minute and last_ts.hour == now.hour and now.second < 45):
+                df = df.iloc[:-1]
+            
+            if df.empty:
+                return pd.DataFrame()
+        
+        # Convert interval to pandas frequency (e.g., "5m" -> "5min")
+        freq = self._interval_to_pandas_freq()
+        
+        # Calculate offset for live mode to make last bar END at last 1-min bar time
+        offset = None
+        if live_mode and self.interval.endswith('m'):
+            # Get the last bar time
+            last_ts = df.index[-1]
+            minute = last_ts.minute
+            interval_minutes = int(self.interval[:-1])
+            
+            # Calculate offset: (last_minute + 1) % interval_minutes
+            # This shifts the resampling so the last bucket ends at last_minute
+            offset_minutes = (minute + 1) % interval_minutes
+            offset = f"{offset_minutes}min" if offset_minutes != 0 else "0min"
+        
+        # Resample to target interval with offset
+        if offset:
+            resampled = df.resample(freq, offset=offset).agg({
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum"
+            }).dropna()
+        else:
+            resampled = df.resample(freq).agg({
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum"
+            }).dropna()
+        
+        return resampled
+
+    def _interval_to_pandas_freq(self) -> str:
+        """
+        Convert interval format (e.g., '5m') to pandas frequency string (e.g., '5min').
+        Pandas deprecated 'm' for minutes; now requires 'min' or 'T'.
+        """
+        interval = self.interval
+        if interval.endswith('m') and not interval.endswith('min'):
+            # Convert '5m' -> '5min'
+            return interval[:-1] + 'min'
+        elif interval.endswith('h'):
+            # Already correct format
+            return interval
+        elif interval.endswith('d'):
+            # Already correct format
+            return interval
+        return interval
+
     # ---------- Feature engineering ----------
     def create_5_min_bars(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Legacy method - use create_interval_bars instead."""
         df = df.copy()
         df = df.reset_index().set_index("open_time").sort_index()
         return df[["open", "high", "low", "close", "volume"]].dropna()
