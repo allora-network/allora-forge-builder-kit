@@ -51,25 +51,30 @@ print("="*80)
 print("\n[1/7] Configuring workflow...")
 
 TICKER = "btcusd"
-LOOKBACK_HOURS = 168  # 7 days of history
-TARGET_LENGTH = 24    # Predict 24 hours ahead
-INTERVAL = "1h"       # Hourly candles
-NUMBER_OF_CANDLES = 24  # 24 candles over 168 hours = 7-hour candles
+NUMBER_OF_INPUT_BARS = 24  # 24 hourly bars of input data
+TARGET_BARS = 24           # Predict 24 bars (hours) ahead
+INTERVAL = "1h"            # Hourly candles
+
+# Read Allora API key
+import os
+api_key_path = os.path.join(os.path.dirname(__file__), '.allora_api_key')
+with open(api_key_path, 'r') as f:
+    ALLORA_API_KEY = f.read().strip()
 
 workflow = AlloraMLWorkflow(
     tickers=[TICKER],
+    number_of_input_bars=NUMBER_OF_INPUT_BARS,
+    target_bars=TARGET_BARS,
     interval=INTERVAL,
-    lookback_hours=LOOKBACK_HOURS,
-    target_length=TARGET_LENGTH,
-    hours_needed=NUMBER_OF_CANDLES * (LOOKBACK_HOURS // NUMBER_OF_CANDLES),
-    number_of_input_candles=NUMBER_OF_CANDLES
+    data_source="allora",
+    api_key=ALLORA_API_KEY
 )
 
 print(f"✅ Workflow configured:")
 print(f"   - Asset: {TICKER}")
-print(f"   - Lookback: {LOOKBACK_HOURS} hours ({LOOKBACK_HOURS//24} days)")
-print(f"   - Target: {TARGET_LENGTH} hours ahead")
-print(f"   - Features: {NUMBER_OF_CANDLES} candles × 5 OHLCV = {NUMBER_OF_CANDLES*5} base features")
+print(f"   - Input bars: {NUMBER_OF_INPUT_BARS} (at {INTERVAL} intervals)")
+print(f"   - Target bars: {TARGET_BARS} bars ahead")
+print(f"   - Features: {NUMBER_OF_INPUT_BARS} bars × 5 OHLCV = {NUMBER_OF_INPUT_BARS*5} base features")
 
 # =============================================================================
 # STEP 2: Backfill Historical Data
@@ -97,11 +102,9 @@ print(f"   Date range: {df_all['open_time'].min().date()} to {df_all['open_time'
 unique_dates = sorted(df_all['open_time'].unique())
 n_dates = len(unique_dates)
 
-minute_cadence = 60
-embargo_gap = int(TARGET_LENGTH * 60 / minute_cadence)  # 24-hour gap
 test_size = int(0.2 * n_dates)
 
-tscv = TimeSeriesSplit(n_splits=2, gap=embargo_gap, test_size=test_size)
+tscv = TimeSeriesSplit(n_splits=2, gap=TARGET_BARS, test_size=test_size)
 splits = list(tscv.split(unique_dates))
 
 train_idx, val_idx = splits[0]
@@ -112,13 +115,13 @@ val_dates = [unique_dates[i] for i in val_idx]
 test_dates = [unique_dates[i] for i in test_idx]
 
 # Filter test dates to ensure embargo between val and test
-test_dates = [d for d in test_dates if d >= (val_dates[-1] + pd.Timedelta(hours=embargo_gap))]
+test_dates = [d for d in test_dates if d > val_dates[-TARGET_BARS]]
 
 train_data = df_all[df_all['open_time'].isin(train_dates)]
 val_data = df_all[df_all['open_time'].isin(val_dates)]
 test_data = df_all[df_all['open_time'].isin(test_dates)]
 
-print(f"✅ Data split with {embargo_gap}-hour embargo:")
+print(f"✅ Data split with {TARGET_BARS} bars embargo:")
 print(f"   Training:   {len(train_data):,} samples ({len(train_dates)/n_dates:.1%})")
 print(f"   Validation: {len(val_data):,} samples ({len(val_dates)/n_dates:.1%})")
 print(f"   Test:       {len(test_data):,} samples ({len(test_dates)/n_dates:.1%})")
