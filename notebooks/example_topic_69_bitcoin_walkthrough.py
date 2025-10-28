@@ -29,18 +29,17 @@ DAYS_OF_HISTORY = 500
 INTERVAL = "1h"
 
 # Feature Configuration
-NUMBER_OF_INPUT_BARS = 24  # Number of hourly bars for input features
+NUMBER_OF_INPUT_BARS = 48  # Number of hourly bars for input features
 TARGET_BARS = 24           # Predict 24 bars (hours) ahead
 
 # Cross-Validation Configuration
 N_SPLITS = 3               # Number of CV folds
-MIN_TRAIN_SIZE = 100       # Minimum training samples per fold
 MAX_TRAIN_SIZE = 100_000_000  # Maximum training samples per fold
 
 # Model Configuration
-N_ESTIMATORS_MAX = 2000    # Train with max trees, evaluate at checkpoints
-N_ESTIMATORS_CHECKPOINTS = [10, 100, 300, 500, 700, 1000, 1500, 2000]
-LEARNING_RATES = [0.01, 0.05, 0.1, 0.3]
+N_ESTIMATORS_MAX = 500    # Train with max trees, evaluate at checkpoints
+N_ESTIMATORS_CHECKPOINTS = [100, 300, 500]
+LEARNING_RATES = [0.01, 0.05, 0.1]
 MAX_DEPTHS = [3, 5, 7]
 NUM_LEAVES = [15, 31, 63]
 
@@ -86,19 +85,51 @@ workflow.backfill(start=start_date)
 print("✅ Backfill complete")
 
 # =============================================================================
-# STEP 3: Extract Features & Setup Cross-Validation
+# STEP 3: Extract Features & Engineer New Features
 # =============================================================================
-print("\n[3/6] Extracting features and setting up CV...")
+print("\n[3/6] Extracting and engineering features...")
 
 df_all = workflow.get_full_feature_target_dataframe(start_date=start_date).reset_index()
-feature_cols = [col for col in df_all.columns if col.startswith('feature_')]
+
+# Feature Engineering: Add log returns to base features
+# For detailed TA indicators and visualizations, see: feature_engineering_example.py
+
+def engineer_returns(row):
+    """Add log return features over multiple horizons (no data leakage - same row only)"""
+    # NOTE: Base features are already normalized (z-scored) by the workflow
+    closes = np.array([row[f'feature_close_{i}'] for i in range(NUMBER_OF_INPUT_BARS)])
+    
+    # Log returns over different time horizons
+    returns = {}
+    returns['log_return_1h'] = np.log(closes[-1] + 1e-8) - np.log(closes[-2] + 1e-8) if NUMBER_OF_INPUT_BARS >= 2 else 0
+    returns['log_return_6h'] = np.log(closes[-1] + 1e-8) - np.log(closes[-7] + 1e-8) if NUMBER_OF_INPUT_BARS >= 7 else 0
+    returns['log_return_12h'] = np.log(closes[-1] + 1e-8) - np.log(closes[-13] + 1e-8) if NUMBER_OF_INPUT_BARS >= 13 else 0
+    returns['log_return_24h'] = np.log(closes[-1] + 1e-8) - np.log(closes[-25] + 1e-8) if NUMBER_OF_INPUT_BARS >= 25 else 0
+    
+    return pd.Series(returns)
+
+# Get base features
+base_feature_cols = [col for col in df_all.columns if col.startswith('feature_')]
+
+# Apply feature engineering
+print("   Engineering log return features...")
+engineered_features = df_all.apply(engineer_returns, axis=1)
+df_all = pd.concat([df_all, engineered_features], axis=1)
+
+# Use base features + engineered returns
+feature_cols = base_feature_cols + list(engineered_features.columns)
 df_all = df_all.dropna(subset=feature_cols + ['target'])
 
 print(f"✅ Dataset: {len(df_all):,} samples ({df_all['open_time'].min().date()} to {df_all['open_time'].max().date()})")
-print(f"   Features: {len(feature_cols)} base features")
+print(f"   Features: {len(base_feature_cols)} base + {len(engineered_features.columns)} returns = {len(feature_cols)} total")
+print(f"   📚 See feature_engineering_example.py for more TA indicators")
 
 # Setup time series cross-validation
-tscv = TimeSeriesSplit(n_splits=N_SPLITS, gap=TARGET_BARS, max_train_size=MAX_TRAIN_SIZE)
+tscv = TimeSeriesSplit(
+    n_splits=N_SPLITS, 
+    gap=TARGET_BARS, 
+    max_train_size=MAX_TRAIN_SIZE
+)
 
 print(f"✅ Walk-forward CV: {N_SPLITS} splits, {TARGET_BARS}-bar embargo")
 for fold_idx, (train_idx, test_idx) in enumerate(tscv.split(df_all)):
@@ -223,17 +254,20 @@ def predict(nonce: int = None) -> float:
     if live_row is None or len(live_row) == 0:
         raise ValueError("Could not get live features")
     
+    # Engineer return features from live data (same as training)
+    live_returns = engineer_returns(live_row.iloc[0])
+    
+    # Combine base features + engineered returns
+    live_features = pd.concat([live_row[base_feature_cols].iloc[0], live_returns])
+    
     # Get current price
     now = datetime.now(timezone.utc)
     recent_start = now - timedelta(hours=1)
     raw_data = workflow.load_raw(start=recent_start, end=now)
     current_price = raw_data["close"].iloc[-1] if len(raw_data) > 0 else 0.0
     
-    # Use base features directly
-    live_features = live_row[feature_cols]
-    
     # Predict log return
-    predicted_log_return = final_model.predict(live_features)[0]
+    predicted_log_return = final_model.predict(live_features[feature_cols].values.reshape(1, -1))[0]
     
     # Convert log return to price
     predicted_price = current_price * np.exp(predicted_log_return)
