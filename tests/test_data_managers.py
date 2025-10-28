@@ -250,9 +250,8 @@ def test_workflow_with_binance_string_api(tmp_path):
     """Test AlloraMLWorkflow with Binance using string API."""
     workflow = AlloraMLWorkflow(
         tickers=["BTCUSDT"],
-        hours_needed=24,
-        number_of_input_candles=24,
-        target_length=24,
+        number_of_input_bars=288,  # 24 hours of 5-min bars
+        target_bars=24,
         interval="5m",
         data_source="binance",
         market="futures",
@@ -267,9 +266,8 @@ def test_workflow_with_allora_string_api(tmp_path):
     """Test AlloraMLWorkflow with Allora using string API."""
     workflow = AlloraMLWorkflow(
         tickers=["btcusd"],  # Allora uses lowercase format
-        hours_needed=24,
-        number_of_input_candles=24,
-        target_length=24,
+        number_of_input_bars=288,  # 24 hours of 5-min bars
+        target_bars=24,
         interval="5m",
         data_source="allora",
         api_key="test-key",
@@ -290,9 +288,8 @@ def test_workflow_with_explicit_manager(tmp_path):
     
     workflow = AlloraMLWorkflow(
         tickers=["BTCUSDT"],
-        hours_needed=24,
-        number_of_input_candles=24,
-        target_length=24,
+        number_of_input_bars=288,  # 24 hours of 5-min bars
+        target_bars=24,
         data_manager=dm
     )
     
@@ -305,9 +302,8 @@ def test_workflow_invalid_manager():
     with pytest.raises(TypeError, match="must be an instance of BaseDataManager"):
         AlloraMLWorkflow(
             tickers=["BTCUSDT"],
-            hours_needed=24,
-            number_of_input_candles=24,
-            target_length=24,
+            number_of_input_bars=288,
+            target_bars=24,
             data_manager="not-a-manager"  # Should be BaseDataManager instance
         )
 
@@ -491,9 +487,8 @@ def test_workflow_binance_backfill_and_features(tmp_path, test_symbols_binance, 
     """Test full workflow with Binance: backfill + feature extraction."""
     workflow = AlloraMLWorkflow(
         tickers=test_symbols_binance,
-        hours_needed=24,
-        number_of_input_candles=24,
-        target_length=16,
+        number_of_input_bars=288,  # 24 hours of 5-min bars
+        target_bars=16,
         interval="5m",
         data_source="binance",
         market="futures",
@@ -509,7 +504,7 @@ def test_workflow_binance_backfill_and_features(tmp_path, test_symbols_binance, 
     assert not df_raw.empty
     
     # Extract features
-    df_features = workflow.get_full_feature_target_dataframe_pandas(start_date=start)
+    df_features = workflow.get_full_feature_target_dataframe(start_date=start)
     assert not df_features.empty
     assert "target" in df_features.columns
     
@@ -523,9 +518,8 @@ def test_workflow_binance_get_live_features(test_symbols_binance, integration_ch
     """Test workflow get_live_features with Binance."""
     workflow = AlloraMLWorkflow(
         tickers=test_symbols_binance,
-        hours_needed=2,  # Small lookback for testing
-        number_of_input_candles=8,
-        target_length=16,
+        number_of_input_bars=24,  # 2 hours of 5-min bars
+        target_bars=16,
         interval="5m",
         data_source="binance",
         market="futures"
@@ -536,7 +530,7 @@ def test_workflow_binance_get_live_features(test_symbols_binance, integration_ch
     
     assert not features.empty
     assert features.shape[0] == 1  # Should return 1 row (latest bar)
-    assert features.shape[1] == 8 * 5  # 8 candles × 5 OHLCV features
+    assert features.shape[1] == 24 * 5  # 24 bars × 5 OHLCV features
     assert isinstance(features.index, pd.DatetimeIndex)
     
     # Verify features are normalized (should be around 1.0)
@@ -544,105 +538,13 @@ def test_workflow_binance_get_live_features(test_symbols_binance, integration_ch
     assert (features.iloc[0] < 10).all(), "Features should be normalized (< 10)"
 
 
-@pytest.mark.integration  
-def test_workflow_create_interval_bars(test_symbols_binance, integration_check):
-    """Test workflow create_interval_bars resamples 1-min to target interval."""
-    workflow = AlloraMLWorkflow(
-        tickers=test_symbols_binance,
-        hours_needed=24,
-        number_of_input_candles=24,
-        target_length=16,
-        interval="5m",
-        data_source="binance",
-        market="futures"
-    )
-    
-    # Get 1-minute data
-    df_1min = workflow._dm.get_live_1min_data(test_symbols_binance[0], hours_back=2)
-    
-    # Resample to 5-minute bars
-    df_5min = workflow.create_interval_bars(df_1min, live_mode=False)
-    
-    assert not df_5min.empty
-    assert isinstance(df_5min.index, pd.DatetimeIndex)
-    assert list(df_5min.columns) == ["open", "high", "low", "close", "volume"]
-    
-    # Verify resampling worked (should have ~24 5-min bars in 2 hours)
-    expected_bars = int((2 * 60) / 5)  # 2 hours × 60 min / 5 min
-    assert len(df_5min) <= expected_bars + 5  # Allow some tolerance
-    
-    # Verify it's 5-minute bars
-    if len(df_5min) > 1:
-        time_diff = (df_5min.index[1] - df_5min.index[0]).total_seconds() / 60
-        assert abs(time_diff - 5.0) < 0.1, f"Expected 5-minute bars, got {time_diff} minutes"
-
-
-@pytest.mark.integration
-def test_workflow_live_mode_offset(test_symbols_binance, integration_check):
-    """Test that live_mode applies offset to align last bar with last 1-min bar."""
-    workflow = AlloraMLWorkflow(
-        tickers=test_symbols_binance,
-        hours_needed=2,
-        number_of_input_candles=8,
-        target_length=16,
-        interval="5m",
-        data_source="binance",
-        market="futures"
-    )
-    
-    # Get 1-minute data
-    df_1min = workflow._dm.get_live_1min_data(test_symbols_binance[0], hours_back=2)
-    
-    # Print for visual inspection
-    print(f"\n{'='*80}")
-    print(f"1-minute bars fetched: {len(df_1min)}")
-    print(f"Last 10 1-minute bars:")
-    print(df_1min.tail(10)[['close']])
-    print(f"Last 1-min bar time: {df_1min.index[-1]}")
-    
-    # Resample with live_mode=True (should apply offset)
-    df_5min_live = workflow.create_interval_bars(df_1min, live_mode=True)
-    
-    print(f"\n5-minute bars after resampling with live_mode=True: {len(df_5min_live)}")
-    print(f"Last 5 5-minute bars:")
-    print(df_5min_live.tail(5)[['close']])
-    print(f"Last 5-min bar time: {df_5min_live.index[-1]}")
-    
-    # Also test without live_mode for comparison
-    df_5min_no_live = workflow.create_interval_bars(df_1min, live_mode=False)
-    print(f"\n5-minute bars after resampling with live_mode=False: {len(df_5min_no_live)}")
-    print(f"Last 5 5-minute bars:")
-    print(df_5min_no_live.tail(5)[['close']])
-    print(f"Last 5-min bar time: {df_5min_no_live.index[-1]}")
-    print(f"{'='*80}\n")
-    
-    assert not df_5min_live.empty
-    
-    # Verify the close price of the last 5-min bar matches one of the recent 1-min bars
-    # (since the last 5-min bar is aggregated from the last 5 complete 1-min bars)
-    last_5min_close = df_5min_live.iloc[-1]['close']
-    recent_1min_closes = df_1min.tail(10)['close'].values
-    
-    # The last 5-min bar's close should match one of the recent 1-min bar closes
-    # (it's the close of the last 1-min bar that fell within that 5-min window)
-    assert last_5min_close in recent_1min_closes, \
-        f"Last 5-min close ({last_5min_close}) should match one of recent 1-min closes"
-    
-    # Verify that with live_mode we get offset-aligned bars
-    # The last bar time modulo 5 should give us the offset
-    last_5min_time = df_5min_live.index[-1]
-    offset_minutes = (last_5min_time.minute + 1) % 5
-    print(f"Offset applied: {offset_minutes} minutes")
-
-
 @pytest.mark.integration
 def test_workflow_get_live_features_end_to_end(test_symbols_binance, integration_check):
     """End-to-end test of get_live_features() with validation and visual inspection."""
     workflow = AlloraMLWorkflow(
         tickers=test_symbols_binance,
-        hours_needed=2,
-        number_of_input_candles=8,
-        target_length=16,
+        number_of_input_bars=24,  # 2 hours of 5-min bars
+        target_bars=16,
         interval="5m",
         data_source="binance",
         market="futures"
@@ -652,8 +554,7 @@ def test_workflow_get_live_features_end_to_end(test_symbols_binance, integration
     print(f"End-to-End: get_live_features() for {test_symbols_binance[0]}")
     print(f"Configuration:")
     print(f"  - interval: {workflow.interval}")
-    print(f"  - hours_needed: {workflow.hours_needed}")
-    print(f"  - number_of_input_candles: {workflow.number_of_input_candles}")
+    print(f"  - number_of_input_bars: {workflow.number_of_input_bars}")
     
     # Get live features
     features = workflow.get_live_features(test_symbols_binance[0])
@@ -667,7 +568,7 @@ def test_workflow_get_live_features_end_to_end(test_symbols_binance, integration
     print(f"{'='*80}\n")
     
     # Verify shape
-    assert features.shape == (1, 40), f"Expected (1, 40), got {features.shape}"
+    assert features.shape == (1, 120), f"Expected (1, 120), got {features.shape}"
     
     # Verify features are normalized
     assert (features.iloc[0] > 0).all(), "All features should be positive"
@@ -689,9 +590,8 @@ def test_workflow_allora_backfill_and_features(tmp_path, test_symbols_allora, al
     """Test full workflow with Allora: backfill + feature extraction."""
     workflow = AlloraMLWorkflow(
         tickers=test_symbols_allora,
-        hours_needed=24,
-        number_of_input_candles=24,
-        target_length=16,
+        number_of_input_bars=288,  # 24 hours of 5-min bars
+        target_bars=16,
         interval="5m",
         data_source="allora",
         api_key=allora_api_key,
@@ -707,7 +607,7 @@ def test_workflow_allora_backfill_and_features(tmp_path, test_symbols_allora, al
     assert not df_raw.empty
     
     # Extract features
-    df_features = workflow.get_full_feature_target_dataframe_pandas(start_date=start)
+    df_features = workflow.get_full_feature_target_dataframe(start_date=start)
     assert not df_features.empty
     assert "target" in df_features.columns
     
@@ -740,9 +640,8 @@ def test_workflow_allora_get_live_features(test_symbols_allora, allora_api_key, 
     
     workflow = AlloraMLWorkflow(
         tickers=test_symbols_allora,
-        hours_needed=2,  # Small lookback for testing
-        number_of_input_candles=8,
-        target_length=16,
+        number_of_input_bars=24,  # 2 hours of 5-min bars
+        target_bars=16,
         interval="5m",
         data_source="allora",
         api_key=allora_api_key
@@ -758,63 +657,12 @@ def test_workflow_allora_get_live_features(test_symbols_allora, allora_api_key, 
     
     assert not features.empty
     assert features.shape[0] == 1  # Should return 1 row (latest bar)
-    assert features.shape[1] == 8 * 5  # 8 candles × 5 OHLCV features
+    assert features.shape[1] == 24 * 5  # 24 bars × 5 OHLCV features
     assert isinstance(features.index, pd.DatetimeIndex)
     
     # Verify features are normalized (should be around 1.0)
     assert (features.iloc[0] > 0).all(), "All features should be positive"
     assert (features.iloc[0] < 10).all(), "Features should be normalized (< 10)"
-
-
-@pytest.mark.integration  
-def test_workflow_allora_create_interval_bars(test_symbols_allora, allora_api_key, integration_check):
-    """Test workflow create_interval_bars resamples 1-min to target interval with Allora."""
-    # Verify API key works first
-    import requests
-    headers = {"x-api-key": allora_api_key}
-    params = {"tickers": "btcusd", "from_date": "2025-10-09"}
-    
-    try:
-        response = requests.get(
-            "https://api.allora.network/v2/allora/market-data/ohlc",
-            headers=headers,
-            params=params,
-            timeout=10
-        )
-        if response.status_code == 401:
-            pytest.skip("Allora API key is invalid or expired")
-        elif response.status_code != 200:
-            pytest.skip(f"Allora API returned {response.status_code}")
-    except Exception as e:
-        pytest.skip(f"Cannot connect to Allora API: {e}")
-    
-    workflow = AlloraMLWorkflow(
-        tickers=test_symbols_allora,
-        hours_needed=24,
-        number_of_input_candles=24,
-        target_length=16,
-        interval="5m",
-        data_source="allora",
-        api_key=allora_api_key
-    )
-    
-    # Get 1-minute data
-    df_1min = workflow._dm.get_live_1min_data(test_symbols_allora[0], hours_back=2)
-    
-    if df_1min.empty:
-        pytest.skip("Allora API returned no data (may have limited historical availability)")
-    
-    # Resample to 5-minute bars
-    df_5min = workflow.create_interval_bars(df_1min, live_mode=False)
-    
-    assert not df_5min.empty
-    assert isinstance(df_5min.index, pd.DatetimeIndex)
-    assert list(df_5min.columns) == ["open", "high", "low", "close", "volume"]
-    
-    # Verify it's 5-minute bars
-    if len(df_5min) > 1:
-        time_diff = (df_5min.index[1] - df_5min.index[0]).total_seconds() / 60
-        assert abs(time_diff - 5.0) < 0.1, f"Expected 5-minute bars, got {time_diff} minutes"
 
 
 # ============================================================================
@@ -829,9 +677,8 @@ def test_both_sources_coexist(tmp_path, integration_check):
     # Create both workflows
     binance_wf = AlloraMLWorkflow(
         tickers=["BTCUSDT"],
-        hours_needed=24,
-        number_of_input_candles=24,
-        target_length=16,
+        number_of_input_bars=288,  # 24 hours of 5-min bars
+        target_bars=16,
         data_source="binance",
         market="futures",
         base_dir=str(tmp_path / "binance")
@@ -839,9 +686,8 @@ def test_both_sources_coexist(tmp_path, integration_check):
     
     allora_wf = AlloraMLWorkflow(
         tickers=["btcusd"],  # Allora uses lowercase format
-        hours_needed=24,
-        number_of_input_candles=24,
-        target_length=16,
+        number_of_input_bars=288,  # 24 hours of 5-min bars
+        target_bars=16,
         data_source="allora",
         api_key=allora_key,
         base_dir=str(tmp_path / "allora")

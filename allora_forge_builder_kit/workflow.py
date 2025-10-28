@@ -13,15 +13,14 @@ def _extract_features_numba(
     ts_index, 
     data_values, 
     start_times_int, 
-    candle_length, 
-    number_of_candles,
-    bars_per_group
+    number_of_input_bars
 ):
     """
     JIT-compiled core loop for feature extraction.
+    Data is already resampled, so we just extract windows of bars.
     Returns features array and valid indices.
     """
-    n_features = number_of_candles * 5
+    n_features = number_of_input_bars * 5
     max_results = len(start_times_int)
     features_out = np.empty((max_results, n_features), dtype=np.float64)
     valid_indices = np.empty(max_results, dtype=np.int64)
@@ -41,57 +40,27 @@ def _extract_features_numba(
                 right = mid
         pos = left
         
-        if pos - candle_length < 0:
+        if pos - number_of_input_bars < 0:
             continue
         
-        window = data_values[pos - candle_length:pos]
+        window = data_values[pos - number_of_input_bars:pos]
         
-        if window.shape[0] != candle_length:
+        if window.shape[0] != number_of_input_bars:
             continue
         
-        # Check if reshape is valid
-        if window.shape[0] % number_of_candles != 0:
-            continue
-        
-        # Manual reshape and aggregation
-        feature_idx = 0
-        last_close = 0.0
-        last_volume = 0.0
-        
-        # Store OHLCV for each candle
-        ohlcv = np.empty((number_of_candles, 5), dtype=np.float64)
-        
-        for candle_i in range(number_of_candles):
-            start_idx = candle_i * bars_per_group
-            end_idx = start_idx + bars_per_group
-            
-            candle_data = window[start_idx:end_idx]
-            
-            # OHLCV aggregation
-            open_val = candle_data[0, 0]
-            high_val = candle_data[:, 1].max()
-            low_val = candle_data[:, 2].min()
-            close_val = candle_data[-1, 3]
-            volume_val = candle_data[:, 4].sum()
-            
-            ohlcv[candle_i, 0] = open_val
-            ohlcv[candle_i, 1] = high_val
-            ohlcv[candle_i, 2] = low_val
-            ohlcv[candle_i, 3] = close_val
-            ohlcv[candle_i, 4] = volume_val
-            
-            if candle_i == number_of_candles - 1:
-                last_close = close_val
-                last_volume = volume_val
+        # Extract OHLCV directly (no aggregation needed since data is already resampled)
+        last_close = window[-1, 3]
+        last_volume = window[-1, 4]
         
         # Validate last values
         if last_close == 0 or np.isnan(last_close) or last_volume == 0 or np.isnan(last_volume):
             continue
         
         # Normalize and flatten
-        for candle_i in range(number_of_candles):
+        feature_idx = 0
+        for bar_i in range(number_of_input_bars):
             for feat_i in range(5):
-                val = ohlcv[candle_i, feat_i]
+                val = window[bar_i, feat_i]
                 if feat_i < 4:  # OHLC
                     val /= last_close
                 else:  # Volume
@@ -109,9 +78,8 @@ class AlloraMLWorkflow:
     def __init__(
         self,
         tickers,
-        hours_needed,
-        number_of_input_candles,
-        target_length,
+        number_of_input_bars,
+        target_bars,
         interval="5m",
         data_source="binance",  # Simple string API
         data_manager=None,  # Advanced: explicit instance
@@ -122,9 +90,8 @@ class AlloraMLWorkflow:
         
         Args:
             tickers: List of ticker symbols
-            hours_needed: Hours of lookback for features
-            number_of_input_candles: Number of candles in feature window
-            target_length: Prediction horizon in hours
+            number_of_input_bars: Number of resampled bars to use as features (at the specified interval)
+            target_bars: Number of bars ahead to predict (at the specified interval)
             interval: Bar interval (e.g. "5m", "1h")
             data_source: Data source string ("binance" or "allora") - simple API
             data_manager: Optional pre-configured data manager instance - advanced API
@@ -133,22 +100,22 @@ class AlloraMLWorkflow:
                 - Allora: api_key="...", base_dir="...", max_pages=1000
         
         Examples:
-            # Simple API - Binance
+            # Simple API - Binance (24 hours ahead with 1-hour bars)
             workflow = AlloraMLWorkflow(
                 tickers=["BTCUSDT"],
-                hours_needed=24,
-                number_of_input_candles=24,
-                target_length=24,
+                number_of_input_bars=24,  # Use 24 bars (24 hours at 1h interval)
+                target_bars=24,  # Predict 24 bars ahead (24 hours)
+                interval="1h",
                 data_source="binance",
                 market="futures"  # Binance-specific param
             )
             
-            # Simple API - Allora
+            # Simple API - Allora (24 hours ahead with 5-min bars)
             workflow = AlloraMLWorkflow(
                 tickers=["BTC/USD"],
-                hours_needed=24,
-                number_of_input_candles=24,
-                target_length=24,
+                number_of_input_bars=288,  # Use 288 bars (24 hours of 5-min bars)
+                target_bars=288,  # Predict 288 bars ahead (24 hours)
+                interval="5m",
                 data_source="allora",
                 api_key="your-key"  # Allora-specific param
             )
@@ -158,9 +125,8 @@ class AlloraMLWorkflow:
             workflow = AlloraMLWorkflow(..., data_manager=dm)
         """
         self.tickers = tickers
-        self.hours_needed = hours_needed
-        self.number_of_input_candles = number_of_input_candles
-        self.target_length = target_length
+        self.number_of_input_bars = number_of_input_bars
+        self.target_bars = target_bars
         self.test_targets = None
         self.interval = interval
 
@@ -212,17 +178,17 @@ class AlloraMLWorkflow:
     def stream_live_predictions(self, model, feature_fn=None):
         """
         Stream live predictions by attaching to DataManager's websocket.
-        Calls feature_fn if provided, otherwise uses extract_rolling_daily_features.
+        Calls feature_fn if provided, otherwise uses extract_features.
         """
 
         def callback(open_time, snapshot):
             latest_rows = []
             for sym, bars in snapshot.items():
                 df = pd.DataFrame.from_records(bars).set_index("open_time")
-                if len(df) < self.hours_needed * 12:
+                if len(df) < self.number_of_input_bars:
                     continue
-                feats = (feature_fn or self.extract_rolling_daily_features)(
-                    df, self.hours_needed, self.number_of_input_candles, [df.index[-1]]
+                feats = (feature_fn or self.extract_features)(
+                    df, self.number_of_input_bars, [df.index[-1]]
                 )
                 if feats.empty:
                     continue
@@ -237,10 +203,14 @@ class AlloraMLWorkflow:
         """
         Get live features for a single ticker (data-source agnostic).
         
-        This replicates the functionality of the previous version:
+        Uses the shared stand_alone_features_from_1min_bars function to ensure
+        identical transformations for live and historical data.
+        
+        Process:
         1. Fetches recent 1-minute bars from the data manager
-        2. Resamples to the workflow's configured interval
-        3. Extracts rolling features from the most recent bar
+        2. Uses shared function with live_mode=True to:
+           - Resample to workflow interval with live alignment
+           - Extract features from resampled data
         
         Args:
             ticker: Symbol to fetch features for
@@ -252,199 +222,94 @@ class AlloraMLWorkflow:
             ValueError: If not enough historical data or no features extracted
         """
         # Calculate how much historical data we need
-        # We need enough to cover the lookback period
-        hours_back = self.hours_needed + 2  # Add 2 hours buffer
+        # We need enough bars to cover number_of_input_bars, plus buffer
+        bars_per_hour = self._parse_interval_to_bars_per_hour(self.interval)
+        hours_back = int(self.number_of_input_bars / bars_per_hour) + 2  # Add 2 hours buffer
         
         # Fetch 1-minute bars from data manager (works for both Allora and Binance)
-        df_1min = self._dm.get_live_1min_data(ticker, hours_back=hours_back)
+        df_1min_pandas = self._dm.get_live_1min_data(ticker, hours_back=hours_back)
         
-        if df_1min.empty:
+        if df_1min_pandas.empty:
             raise ValueError(f"No 1-minute data returned for {ticker}")
         
-        # Resample to the workflow's configured interval
-        interval_bars = self.create_interval_bars(df_1min, live_mode=True)
+        # Convert to polars for shared pipeline
+        df_1min_polars = pl.from_pandas(df_1min_pandas.reset_index())
         
-        # Check if we have enough bars
-        bars_per_hour = self._parse_interval_to_bars_per_hour(self.interval)
-        required_bars = int(self.hours_needed * bars_per_hour)
-        
-        if len(interval_bars) < required_bars:
-            raise ValueError(
-                f"Not enough historical data. Need {required_bars} bars, "
-                f"got {len(interval_bars)}"
-            )
-        
-        # Extract features for the most recent bar
-        live_time = interval_bars.index[-1]
-        features = self.extract_rolling_daily_features(
-            interval_bars,
-            self.hours_needed,
-            self.number_of_input_candles,
-            [live_time]
+        # Use shared function with live_mode=True
+        df_with_features = self.stand_alone_features_from_1min_bars(
+            df_1min_polars, 
+            live_mode=True
         )
         
-        if features.empty:
+        # Check if we have enough bars
+        if df_with_features.height < self.number_of_input_bars:
+            raise ValueError(
+                f"Not enough historical data. Need {self.number_of_input_bars} bars, "
+                f"got {df_with_features.height}"
+            )
+        
+        # Get the last row (most recent bar) and extract just the features
+        last_row = df_with_features.tail(1)
+        
+        # Extract feature columns
+        feature_cols = [col for col in last_row.columns if col.startswith("feature_")]
+        
+        if len(feature_cols) == 0:
             raise ValueError("No features returned.")
         
-        return features
-
-    def create_interval_bars(self, df_1min: pd.DataFrame, live_mode: bool = False) -> pd.DataFrame:
-        """
-        Resample 1-minute bars to the workflow's configured interval.
+        # Convert to pandas and return just features with open_time as index
+        features_pandas = last_row.select(["open_time"] + feature_cols).to_pandas()
+        features_pandas = features_pandas.set_index("open_time")
         
-        In live_mode, the last resampled bar will END at the last 1-minute bar time
-        by calculating an offset to shift the standard resampling buckets.
+        return features_pandas
+
+    def stand_alone_features_from_1min_bars(
+        self, 
+        df_1min_polars: pl.DataFrame, 
+        live_mode: bool = False
+    ) -> pl.DataFrame:
+        """
+        Shared function to extract features from 1-minute bars.
+        
+        This is the single source of truth for feature extraction, used by both:
+        - get_live_features (with live_mode=True)
+        - get_full_feature_target_dataframe (with live_mode=False)
         
         Args:
-            df_1min: DataFrame with 1-minute bars (open_time index, OHLCV columns)
-            live_mode: If True, drop incomplete 1-min bars and align resampling to end at last bar
+            df_1min_polars: Polars DataFrame with 1-minute OHLCV data
+            live_mode: If True, aligns resampling to end at last bar
             
         Returns:
-            DataFrame with resampled bars at the configured interval
+            Polars DataFrame with resampled OHLCV data and extracted features
         """
-        if df_1min.empty:
-            return pd.DataFrame()
+        # Resample to workflow interval
+        df = self.resample_ohlcv_polars(
+            df_1min_polars, 
+            freq=self.interval, 
+            live_mode=live_mode
+        )
         
-        df = df_1min.copy()
+        # Normalize datetime precision to microseconds for consistent joins
+        # This prevents precision mismatch errors (ns vs μs) when joining dataframes
+        df = df.with_columns([
+            pl.col("open_time").cast(pl.Datetime("us", "UTC"))
+        ])
         
-        # Ensure index is datetime
-        if not isinstance(df.index, pd.DatetimeIndex):
-            df.index = pd.to_datetime(df.index, utc=True)
+        # Extract features for all timestamps
+        features = self.extract_features_polars(
+            df, 
+            self.number_of_input_bars, 
+            df["open_time"].to_list()
+        )
         
-        # Drop incomplete bar in live mode
-        if live_mode:
-            now = datetime.now(timezone.utc)
-            last_ts = df.index[-1]
-            
-            # Ensure timezone aware
-            if last_ts.tzinfo is None:
-                last_ts = last_ts.tz_localize(timezone.utc)
-            
-            # Drop if last 1-min bar is incomplete (current second < 45)
-            if last_ts > now or (last_ts.minute == now.minute and last_ts.hour == now.hour and now.second < 45):
-                df = df.iloc[:-1]
-            
-            if df.empty:
-                return pd.DataFrame()
-        
-        # Convert interval to pandas frequency (e.g., "5m" -> "5min")
-        freq = self._interval_to_pandas_freq()
-        
-        # Calculate offset for live mode to make last bar END at last 1-min bar time
-        offset = None
-        if live_mode and self.interval.endswith('m'):
-            # Get the last bar time
-            last_ts = df.index[-1]
-            minute = last_ts.minute
-            interval_minutes = int(self.interval[:-1])
-            
-            # Calculate offset: (last_minute + 1) % interval_minutes
-            # This shifts the resampling so the last bucket ends at last_minute
-            offset_minutes = (minute + 1) % interval_minutes
-            offset = f"{offset_minutes}min" if offset_minutes != 0 else "0min"
-        
-        # Resample to target interval with offset
-        if offset:
-            resampled = df.resample(freq, offset=offset).agg({
-                "open": "first",
-                "high": "max",
-                "low": "min",
-                "close": "last",
-                "volume": "sum"
-            }).dropna()
-        else:
-            resampled = df.resample(freq).agg({
-                "open": "first",
-                "high": "max",
-                "low": "min",
-                "close": "last",
-                "volume": "sum"
-            }).dropna()
-        
-        return resampled
-
-    def _interval_to_pandas_freq(self) -> str:
-        """
-        Convert interval format (e.g., '5m') to pandas frequency string (e.g., '5min').
-        Pandas deprecated 'm' for minutes; now requires 'min' or 'T'.
-        """
-        interval = self.interval
-        if interval.endswith('m') and not interval.endswith('min'):
-            # Convert '5m' -> '5min'
-            return interval[:-1] + 'min'
-        elif interval.endswith('h'):
-            # Already correct format
-            return interval
-        elif interval.endswith('d'):
-            # Already correct format
-            return interval
-        return interval
-
-    # ---------- Feature engineering ----------
-    def create_5_min_bars(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Legacy method - use create_interval_bars instead."""
-        df = df.copy()
-        df = df.reset_index().set_index("open_time").sort_index()
-        return df[["open", "high", "low", "close", "volume"]].dropna()
-
-    def compute_target(self, df: pd.DataFrame, hours: int = 24) -> pd.DataFrame:
-        df["future_close"] = df["close"].shift(freq=f"-{hours}h")
-        df["target"] = np.log(df["future_close"]) - np.log(df["close"])
+        # Join features back to resampled data
+        df = df.join(features, on="open_time", how="left")
         return df
-
-    def extract_rolling_daily_features(
-        self, data: pd.DataFrame, lookback: int, number_of_candles: int, start_times: list
-    ) -> pd.DataFrame:
-        ts_index = data.index.to_numpy()
-        data_values = data[["open", "high", "low", "close", "volume"]].to_numpy()
-        features_list, index_list = [], []
-        # Use actual bars per hour based on current interval
-        bars_per_hour = self._parse_interval_to_bars_per_hour(self.interval)
-        candle_length = int(lookback * bars_per_hour)
-
-        for T in start_times:
-            pos = np.searchsorted(ts_index, T, side="right")
-            if pos - candle_length < 0:
-                continue
-            window = data_values[pos - candle_length:pos]
-            try:
-                reshaped = window.reshape(number_of_candles, -1, 5)
-            except ValueError:
-                continue
-            open_ = reshaped[:, 0, 0]
-            high_ = reshaped[:, :, 1].max(axis=1)
-            low_ = reshaped[:, :, 2].min(axis=1)
-            close_ = reshaped[:, -1, 3]
-            volume_ = reshaped[:, :, 4].sum(axis=1)
-            last_close = close_[-1]
-            last_volume = volume_[-1]
-            if last_close == 0 or np.isnan(last_close) or last_volume == 0 or np.isnan(last_volume):
-                continue
-            features = np.stack([open_, high_, low_, close_, volume_], axis=1)
-            features[:, :4] /= last_close
-            features[:, 4] /= last_volume
-            features_list.append(features.flatten())
-            index_list.append(T)
-
-        if not features_list:
-            return pd.DataFrame(columns=[
-                f"feature_{f}_{i}"
-                for i in range(number_of_candles)
-                for f in ["open", "high", "low", "close", "volume"]
-            ])
-
-        features_array = np.vstack(features_list)
-        columns = [
-            f"feature_{f}_{i}"
-            for i in range(number_of_candles)
-            for f in ["open", "high", "low", "close", "volume"]
-        ]
-        return pd.DataFrame(features_array, index=index_list, columns=columns)
 
     # ---------- Historical features/targets ----------
     def get_full_feature_target_dataframe(self, start_date=None, end_date=None) -> pl.DataFrame:
         print(f"[workflow] Loading data")
-        raw = self._dm.load_polars(self.tickers, start=start_date, end=end_date)  # You need to implement load_polars
+        raw = self._dm.load_polars(self.tickers, start=start_date, end=end_date)
 
         datasets = []
         for t in self.tickers:
@@ -456,12 +321,8 @@ class AlloraMLWorkflow:
                 print(f"[workflow] Skipping {t} - no data available")
                 continue
 
-            df = self.resample_ohlcv_polars(df, freq=self._dm.interval)
-            df = self.compute_target_polars(df, self.target_length)
-            features = self.extract_rolling_daily_features_polars(
-                df, self.hours_needed, self.number_of_input_candles, df["open_time"].to_list()
-            )
-            df = df.join(features, on="open_time", how="left")
+            df = self.stand_alone_features_from_1min_bars(df, live_mode=False)
+            df = self.compute_target_polars(df, self.target_bars)
             df = df.with_columns([pl.lit(t).alias("ticker")])
             datasets.append(df)
 
@@ -469,53 +330,6 @@ class AlloraMLWorkflow:
         # If you need a MultiIndex, you can convert to pandas at the end:
         return full_data.to_pandas().set_index(["ticker", "open_time"])
         # return full_data.drop_nulls()
-    
-    def get_full_feature_target_dataframe_pandas(self, start_date=None, end_date=None) -> pd.DataFrame:
-        """
-        Pandas-based version of feature/target generation.
-        Uses load_pandas and existing pandas feature extraction functions.
-        """
-        print(f"[workflow] Loading data (pandas)")
-        raw = self._dm.load_pandas(self.tickers, start=start_date, end=end_date)
-        
-        if raw.empty:
-            print("[workflow] No data loaded")
-            return pd.DataFrame()
-        
-        datasets = []
-        for t in self.tickers:
-            if t not in raw.index.get_level_values('symbol'):
-                print(f"[workflow] Skipping {t} - no data available")
-                continue
-            
-            df = raw.xs(t, level='symbol')
-            print(f"[workflow] Processing {t} ({len(df)} rows)")
-            
-            if len(df) == 0:
-                print(f"[workflow] Skipping {t} - no data available")
-                continue
-            
-            # Prepare data
-            df = self.create_5_min_bars(df)
-            df = self.compute_target(df, self.target_length)
-            
-            # Extract features
-            features = self.extract_rolling_daily_features(
-                df, self.hours_needed, self.number_of_input_candles, df.index.tolist()
-            )
-            
-            # Join features
-            df = df.join(features, how='left')
-            df['ticker'] = t
-            datasets.append(df)
-        
-        if not datasets:
-            print("[workflow] No datasets processed")
-            return pd.DataFrame()
-        
-        full_data = pd.concat(datasets)
-        full_data = full_data.reset_index().set_index(['ticker', 'open_time']).sort_index()
-        return full_data
 
     def resample_ohlcv_polars(
         self,
@@ -524,12 +338,21 @@ class AlloraMLWorkflow:
         freq: str = "5m",
         ohlcv_cols: dict = None,
         groupby: list = None,
+        live_mode: bool = False,
     ) -> pl.DataFrame:
         """
         General OHLCV resampling for polars DataFrames.
-        freq: polars duration string, e.g. '5m', '1h', '1d'
-        ohlcv_cols: dict mapping OHLCV column names to their aggregation functions
-        groupby: list of columns to group by (e.g. ['symbol'])
+        
+        Args:
+            df: Polars DataFrame with OHLCV data
+            time_col: Name of the timestamp column
+            freq: Polars duration string, e.g. '5m', '1h', '1d'
+            ohlcv_cols: Dict mapping OHLCV column names to aggregation functions
+            groupby: List of columns to group by (e.g. ['symbol'])
+            live_mode: If True, drop incomplete bars and align to end at last timestamp
+        
+        Returns:
+            Polars DataFrame with resampled OHLCV data
         """
         if ohlcv_cols is None:
             ohlcv_cols = {
@@ -542,10 +365,48 @@ class AlloraMLWorkflow:
         if groupby is None:
             groupby = []
 
-        # Floor timestamps to the desired frequency
-        df = df.with_columns([
-            pl.col(time_col).dt.truncate(freq).alias("resample_time")
-        ])
+        # Live mode: drop incomplete 1-min bars
+        if live_mode:
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
+            last_ts = df[time_col].max()
+            
+            # Drop if last 1-min bar is incomplete (current second < 45)
+            if last_ts > now or (last_ts.minute == now.minute and last_ts.hour == now.hour and now.second < 45):
+                df = df.filter(pl.col(time_col) < last_ts)
+            
+            if df.is_empty():
+                return df
+
+        # Calculate offset for live mode
+        # Shift timestamps forward, resample, then shift back to align end at last bar
+        offset_minutes = 0
+        if live_mode and freq.endswith('m'):
+            last_ts = df[time_col].max()
+            minute = last_ts.minute
+            interval_minutes = int(freq[:-1])
+            
+            # Calculate offset: (last_minute + 1) % interval_minutes
+            offset_minutes = (minute + 1) % interval_minutes
+
+        # Apply offset: shift origin backwards, truncate, shift back
+        # This replicates pandas resample(offset=...) behavior
+        if offset_minutes != 0:
+            df = df.with_columns([
+                pl.col(time_col).dt.offset_by(f"-{offset_minutes}m").alias("shifted_time")
+            ])
+            df = df.with_columns([
+                pl.col("shifted_time").dt.truncate(freq).alias("resample_time")
+            ])
+            df = df.with_columns([
+                pl.col("resample_time").dt.offset_by(f"{offset_minutes}m").alias("resample_time")
+            ])
+            df = df.drop("shifted_time")
+        else:
+            # No offset needed
+            df = df.with_columns([
+                pl.col(time_col).dt.truncate(freq).alias("resample_time")
+            ])
 
         # Group by resample_time and any additional columns (e.g. symbol)
         gb_cols = ["resample_time"] + groupby
@@ -557,42 +418,48 @@ class AlloraMLWorkflow:
         out = out.rename({"resample_time": time_col})
         return out
 
-    def compute_target_polars(self, df: pl.DataFrame, hours: int = 24) -> pl.DataFrame:
+    def compute_target_polars(self, df: pl.DataFrame, target_bars: int) -> pl.DataFrame:
         """
         Compute log return to future close for polars DataFrame.
-        Assumes 'open_time' is sorted and of type datetime, and 'close' is present.
+        
+        Args:
+            df: Polars DataFrame with OHLCV data (sorted by time)
+            target_bars: Number of bars ahead to predict
+            
+        Returns:
+            Polars DataFrame with 'future_close' and 'target' columns added
         """
-        # Calculate the number of rows to shift forward (future)
-        # Use actual bars per hour based on current interval
-        bars_per_hour = self._parse_interval_to_bars_per_hour(self.interval)
-        bars_ahead = int(hours * bars_per_hour)
         df = df.with_columns([
-            pl.col("close").shift(-bars_ahead).alias("future_close")
+            pl.col("close").shift(-target_bars).alias("future_close")
         ])
         df = df.with_columns([
             (pl.col("future_close").log() - pl.col("close").log()).alias("target")
         ])
         return df
     
-    def extract_rolling_daily_features_polars(
+    def extract_features_polars(
         self,
         df: pl.DataFrame,
-        lookback: int,
-        number_of_candles: int,
+        number_of_input_bars: int,
         start_times: list,
         time_col: str = "open_time",
     ) -> pl.DataFrame:
         """
-        Numba-optimized version of rolling daily feature extraction.
+        Numba-optimized version of feature extraction (polars).
+        Extracts features from already resampled OHLCV data.
         Returns a polars DataFrame indexed by start_times.
-        ~9x faster than the previous Python-loop version.
+        
+        Args:
+            df: Polars DataFrame with resampled OHLCV data
+            number_of_input_bars: Number of bars to use as lookback window
+            start_times: List of timestamps to extract features for
+            time_col: Name of the time column
+            
+        Returns:
+            Polars DataFrame with extracted features
         """
         ts_index = df[time_col].cast(pl.Int64).to_numpy()
         data_values = df.select(["open", "high", "low", "close", "volume"]).to_numpy()
-        
-        bars_per_hour = self._parse_interval_to_bars_per_hour(self.interval)
-        candle_length = int(lookback * bars_per_hour)
-        bars_per_group = candle_length // number_of_candles
         
         # Pre-convert timestamps to integers
         start_times_int = np.array([
@@ -603,13 +470,12 @@ class AlloraMLWorkflow:
         
         # Call JIT-compiled function (first call includes compilation time)
         features_array, valid_indices = _extract_features_numba(
-            ts_index, data_values, start_times_int, 
-            candle_length, number_of_candles, bars_per_group
+            ts_index, data_values, start_times_int, number_of_input_bars
         )
         
         columns = [
             f"feature_{f}_{i}"
-            for i in range(number_of_candles)
+            for i in range(number_of_input_bars)
             for f in ["open", "high", "low", "close", "volume"]
         ]
         
@@ -623,6 +489,6 @@ class AlloraMLWorkflow:
         out_df = pl.DataFrame(features_array, schema=columns)
         valid_times = [start_times[i] for i in valid_indices]
         out_df = out_df.with_columns([
-            pl.Series(time_col, valid_times)
+            pl.Series(time_col, valid_times, dtype=pl.Datetime("us", "UTC"))
         ])
         return out_df

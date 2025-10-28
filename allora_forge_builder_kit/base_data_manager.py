@@ -91,7 +91,7 @@ class BaseDataManager(ABC):
     # ---------- File paths ----------
     @staticmethod
     def _normalize_symbol_for_path(symbol: str) -> str:
-        """
+        r"""
         Normalize symbol for use in file system paths.
         Removes characters that could cause path issues: / \ : * ? " < > |
         
@@ -172,17 +172,26 @@ class BaseDataManager(ABC):
 
     def _clean_corrupt_files(self):
         """Detect and remove corrupt Parquet files."""
+        all_files = glob.glob(f"{self.base_dir}/symbol=*/dt=*.parquet")
         bad_files = []
-        for f in glob.glob(f"{self.base_dir}/symbol=*/dt=*.parquet"):
+        
+        if all_files:
+            print(f"[cleanup] Checking {len(all_files)} parquet files for corruption...")
+        
+        for f in all_files:
             try:
                 pl.read_parquet(f, n_rows=1)
             except Exception as e:
                 print(f"[corrupt] {os.path.basename(f)}: {e}, deleting...")
                 bad_files.append(f)
+        
         for f in bad_files:
             os.remove(f)
+        
         if bad_files:
             print(f"[cleanup] Deleted {len(bad_files)} corrupt parquet files")
+        elif all_files:
+            print(f"[cleanup] All {len(all_files)} parquet files are valid")
 
     # ---------- Backfill (abstract - implementation-specific) ----------
     @abstractmethod
@@ -251,7 +260,8 @@ class BaseDataManager(ABC):
         """
         glob_path = f"{self.base_dir}/symbol=*/dt=*.parquet"
         try:
-            df = pl.scan_parquet(glob_path)
+            # Handle missing columns - Allora data doesn't have quote_volume
+            df = pl.scan_parquet(glob_path, missing_columns="insert")
         except Exception as e:
             print(f"[error] parquet scan failed: {e}")
             return pd.DataFrame()
@@ -265,6 +275,16 @@ class BaseDataManager(ABC):
 
         # Collect to pandas
         pdf = df.collect().to_pandas()
+        
+        # Ensure standard columns exist (Allora data has different naming)
+        if "quote_volume" not in pdf.columns:
+            pdf["quote_volume"] = None
+        
+        # Map trades_done to n_trades for consistency
+        if "trades_done" in pdf.columns and "n_trades" not in pdf.columns:
+            pdf["n_trades"] = pdf["trades_done"]
+        elif "n_trades" not in pdf.columns:
+            pdf["n_trades"] = None
 
         if pdf.empty:
             return pd.DataFrame()
@@ -309,7 +329,8 @@ class BaseDataManager(ABC):
         
         glob_path = f"{self.base_dir}/symbol=*/dt=*.parquet"
         try:
-            df = pl.scan_parquet(glob_path)
+            # Handle missing columns - Allora data doesn't have quote_volume
+            df = pl.scan_parquet(glob_path, missing_columns="insert")
         except Exception as e:
             print(f"[error] parquet scan failed: {e}")
             return pl.DataFrame()
@@ -322,6 +343,16 @@ class BaseDataManager(ABC):
             df = df.filter(pl.col("open_time") <= end)
 
         pdf = df.collect()
+        
+        # Ensure standard columns exist (Allora data has different naming)
+        if "quote_volume" not in pdf.columns:
+            pdf = pdf.with_columns([pl.lit(None).cast(pl.Float64).alias("quote_volume")])
+        
+        # Map trades_done to n_trades for consistency
+        if "trades_done" in pdf.columns and "n_trades" not in pdf.columns:
+            pdf = pdf.with_columns([pl.col("trades_done").alias("n_trades")])
+        elif "n_trades" not in pdf.columns:
+            pdf = pdf.with_columns([pl.lit(None).cast(pl.Int64).alias("n_trades")])
 
         # Drop duplicate (symbol, open_time) rows, keep latest
         pdf = pdf.unique(subset=["symbol", "open_time"], keep="last")

@@ -262,7 +262,7 @@ class AlloraDataManager(BaseDataManager):
         }
 
     # ---------- Backfill (Implementation of Abstract Methods) ----------
-    def backfill_symbol(self, symbol: str, start: datetime, end: Optional[datetime] = None):
+    def backfill_symbol(self, symbol: str, start: datetime, end: Optional[datetime] = None, only_days: Optional[set] = None):
         """
         Backfill historical data for a single symbol.
         Uses monthly buckets where available, then API for recent data.
@@ -271,6 +271,7 @@ class AlloraDataManager(BaseDataManager):
             symbol: Symbol to backfill (e.g. "BTC/USD")
             start: Start datetime (UTC)
             end: End datetime (UTC), defaults to now
+            only_days: Optional set of date objects - if provided, only write bars from these specific days
         """
         self._in_backfill = True
         
@@ -353,15 +354,33 @@ class AlloraDataManager(BaseDataManager):
             self._in_backfill = False
             return
         
-        # Step 3: Aggregate to target interval and write to Parquet
-        bars = self._create_interval_bars(combined_df, live_mode=False)
+        # Step 3: Store raw 1-minute bars (NO resampling during backfill)
+        # Resampling happens when loading data for the workflow
+        # Rename 'date' column to 'open_time' to match expected format
+        combined_df = combined_df.rename(columns={'date': 'open_time'})
         
-        print(f"[Allora backfill] {symbol}: writing {len(bars)} bars to Parquet")
+        # Filter to only_days if specified (for efficient gap-filling)
+        if only_days:
+            combined_df['date'] = pd.to_datetime(combined_df['open_time']).dt.date
+            combined_df = combined_df[combined_df['date'].isin(only_days)]
+            combined_df = combined_df.drop(columns=['date'])
+            print(f"[Allora backfill] {symbol}: filtered to {len(only_days)} incomplete days, writing {len(combined_df)} bars to Parquet")
+        else:
+            print(f"[Allora backfill] {symbol}: writing {len(combined_df)} bars to Parquet")
         
         # Bulk write for performance (instead of row-by-row)
+        # Convert dataframe rows to bar dictionaries
         bars_list = []
-        for timestamp, row in bars.iterrows():
-            bar = self._parse_allora_bar(timestamp, row, symbol)
+        for _, row in combined_df.iterrows():
+            bar = {
+                'open_time': row['open_time'],
+                'open': float(row['open']),
+                'high': float(row['high']),
+                'low': float(row['low']),
+                'close': float(row['close']),
+                'volume': float(row['volume']) if 'volume' in row else 0.0,
+                'symbol': symbol  # Fixed: use 'symbol' not 'ticker'
+            }
             bars_list.append(bar)
         
         # Group by date and write each day's data at once
@@ -423,7 +442,10 @@ class AlloraDataManager(BaseDataManager):
         """
         self._clean_corrupt_files()
         now = datetime.now(timezone.utc)
-        expected_per_day = (24 * 60) // int(self.interval[:-1])  # e.g. 288 for 5m
+        
+        # Allora always stores 1-minute bars (downsampling happens in code)
+        # Expected bars per day for 1-minute base interval
+        expected_per_day = 24 * 60  # 1440 bars per day for 1-minute bars
 
         # Default start = 2020-01-01
         start = start or datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -442,22 +464,50 @@ class AlloraDataManager(BaseDataManager):
                       .group_by("date")
                       .agg(pl.len().alias("n_bars"))
                       .collect())
+                print(f"[Allora backfill-missing] Found {len(files)} parquet files for {sym}")
+                print(f"[Allora backfill-missing] Date range: {df['date'].min()} to {df['date'].max()}")
+                print(f"[Allora backfill-missing] Complete days (1440 bars): {len(df.filter(pl.col('n_bars') == expected_per_day))}")
             else:
+                print(f"[Allora backfill-missing] No parquet files found for {sym} at {glob_path}")
                 df = pl.DataFrame({"date": [], "n_bars": []})
 
             complete_days = set(
                 df.filter(pl.col("n_bars") == expected_per_day)["date"].to_list()
             )
 
+            # Collect all incomplete days
+            incomplete_days = []
             d = start.date()
             # Fill any incomplete days up to yesterday (if last exists)
             while last and d < last.date():
                 if d not in complete_days:
-                    day_start = datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
-                    day_end = day_start + timedelta(days=1) - timedelta(milliseconds=1)
-                    print(f"[Allora backfill-missing] {sym}: day {d} incomplete, refetching whole day")
-                    self.backfill_symbol(sym, day_start, end=day_end)
+                    incomplete_days.append(d)
                 d += timedelta(days=1)
+            
+            # If there are incomplete days, backfill them (only write those specific days)
+            if incomplete_days:
+                # Group incomplete days by month to minimize bucket downloads
+                from collections import defaultdict
+                months_needed = defaultdict(list)
+                for day in incomplete_days:
+                    month_key = (day.year, day.month)
+                    months_needed[month_key].append(day)
+                
+                first_day = min(incomplete_days)
+                last_day = max(incomplete_days)
+                print(f"[Allora backfill-missing] {sym}: {len(incomplete_days)} incomplete days across {len(months_needed)} months, backfilling {first_day} → {last_day}")
+                
+                # Download only the months we need
+                for (year, month), days_in_month in months_needed.items():
+                    month_start = datetime(year, month, 1, tzinfo=timezone.utc)
+                    # Last day of month
+                    if month == 12:
+                        month_end = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - timedelta(microseconds=1)
+                    else:
+                        month_end = datetime(year, month + 1, 1, tzinfo=timezone.utc) - timedelta(microseconds=1)
+                    
+                    print(f"[Allora backfill-missing] {sym}: backfilling {len(days_in_month)} days in {year}-{month:02d}")
+                    self.backfill_symbol(sym, month_start, end=month_end, only_days=set(days_in_month))
 
             # Fill latest day from last known → now
             if last:
@@ -539,8 +589,11 @@ class AlloraDataManager(BaseDataManager):
         # Calculate start date (Allora API uses date strings)
         from_date = (datetime.now(timezone.utc) - timedelta(hours=hours_back)).strftime("%Y-%m-%d")
         
-        # Calculate reasonable max_pages (Allora returns ~1440 bars per day)
-        max_pages = min((hours_back // 24) + 2, 5)  # +2 for buffer, cap at 5
+        # Calculate reasonable max_pages (Allora returns ~2000 bars per page)
+        # Each page ≈ 1.4 days of 1-min data, so days needed = hours_back / 24
+        # Add buffer (+2 pages) and set reasonable upper limit to prevent excessive API calls
+        days_needed = (hours_back / 24) + 2
+        max_pages = min(int(days_needed), 50)  # Cap at 50 pages (~70 days)
         
         # Fetch 1-minute bars
         df_1min = self._fetch_ohlcv_data(symbol, from_date, max_pages=max_pages)

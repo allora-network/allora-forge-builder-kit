@@ -23,6 +23,9 @@ Build, train, and deploy ML models with a single unified interface that works se
 - **Factory pattern**: Easy instantiation with `DataManager(source="binance")`
 - **Extensible**: Add new data sources by implementing `BaseDataManager`
 - **Storage isolation**: Separate Parquet directories per source
+- **Partitioned Parquet**: Fast queries, small files, automatic deduplication
+- **Smart backfill**: Gap detection, incremental updates, pagination
+- **Hot cache**: In-memory recent bars for repeated queries
 
 ### ⚡ **Live Feature Extraction**
 - **Real-time inference**: Fetch 1-minute bars, resample, extract features—all on-the-fly
@@ -30,16 +33,17 @@ Build, train, and deploy ML models with a single unified interface that works se
 - **Smart alignment**: Offset resampling ensures bars end exactly at last 1-minute bar
 - **No storage dependency**: Always fetches fresh data for inference
 
+### 📏 **Official Performance Metrics**
+- **8 primary metrics**: Directional Accuracy, Pearson Correlation, WRMSE/ZPTAE Improvement, Log Aspect Ratio + statistical significance
+- **Auto-grading**: A+ to F grades based on metrics passed
+- **Research-aligned**: Same framework used by Allora Research team
+- **Comprehensive reporting**: 15+ additional metrics (MAE, MSE, R², Precision, Recall, F1)
+
 ### 🎯 **Production-Ready Testing**
 - **23 comprehensive tests**: Unit + integration tests
 - **Both data sources**: Validates Binance & Allora end-to-end
 - **Visual inspection**: Tests output actual data for verification
 - **CI/CD ready**: Separates unit tests (fast) from integration tests (network)
-
-### 📊 **Efficient Local Storage**
-- **Partitioned Parquet**: Fast queries, small files, automatic deduplication
-- **Smart backfill**: Gap detection, incremental updates, pagination
-- **Hot cache**: In-memory recent bars for repeated queries
 
 ---
 
