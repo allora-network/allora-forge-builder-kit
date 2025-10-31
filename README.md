@@ -18,32 +18,97 @@ Build, train, and deploy ML models with a single unified interface that works se
 
 ## ✨ What's New in v2.0
 
-### 🔄 **Modular Data Management Architecture**
-- **Multi-source support**: Binance (Spot & Futures) + Allora Network
-- **Factory pattern**: Easy instantiation with `DataManager(source="binance")`
-- **Extensible**: Add new data sources by implementing `BaseDataManager`
-- **Storage isolation**: Separate Parquet directories per source
-- **Partitioned Parquet**: Fast queries, small files, automatic deduplication
-- **Smart backfill**: Gap detection, incremental updates, pagination
-- **Hot cache**: In-memory recent bars for repeated queries
+v2.0 represents a complete architectural overhaul focused on three major upgrades:
 
-### ⚡ **Live Feature Extraction**
-- **Real-time inference**: Fetch 1-minute bars, resample, extract features—all on-the-fly
-- **Data-source agnostic**: Same `get_live_features()` works for Binance or Allora
-- **Smart alignment**: Offset resampling ensures bars end exactly at last 1-minute bar
-- **No storage dependency**: Always fetches fresh data for inference
+### 1. **Data Manager Abstract Class & Multi-Source Support**
 
-### 📏 **Official Performance Metrics**
-- **8 primary metrics**: Directional Accuracy, Pearson Correlation, WRMSE/ZPTAE Improvement, Log Aspect Ratio + statistical significance
-- **Auto-grading**: A+ to F grades based on metrics passed
-- **Research-aligned**: Same framework used by Allora Research team
-- **Comprehensive reporting**: 15+ additional metrics (MAE, MSE, R², Precision, Recall, F1)
+The biggest upgrade is the introduction of the **`BaseDataManager` abstract class**—essentially a standalone sub-program dedicated to data management. This modular architecture now supports multiple data APIs while maintaining a unified interface.
 
-### 🎯 **Production-Ready Testing**
-- **23 comprehensive tests**: Unit + integration tests
-- **Both data sources**: Validates Binance & Allora end-to-end
-- **Visual inspection**: Tests output actual data for verification
-- **CI/CD ready**: Separates unit tests (fast) from integration tests (network)
+**Key Features:**
+- **Multi-source support**: Works with both Binance API (Spot & Futures) and Allora's in-house data API
+- **Extensible design**: Easily add new data sources by implementing the abstract base class
+- **Local storage with remote sync**: Data is stored locally in efficient Parquet files and kept synced with remote APIs
+- **Reduced latency**: Load raw data from disk instead of fetching from the cloud every time
+- **Storage isolation**: Separate directories per source (`parquet_data_binance/` vs `parquet_data_allora/`)
+- **Smart backfill**: Automatic gap detection, incremental updates, and efficient pagination
+- **Hot cache**: In-memory caching of recent bars for faster repeated queries
+
+**Why This Matters:** By managing data locally and syncing intelligently with remote sources, you get the best of both worlds—fast local access during development and training, with fresh data available for live inference.
+
+### 2. **Official Performance Metrics with A+ to F Grading**
+
+Your model predictions are now scored using an **official performance evaluation system** that provides clear, actionable feedback on model quality.
+
+**The Grading System:**
+- **8 primary metrics** with pass/fail thresholds:
+  - Directional Accuracy (≥ 55%)
+  - DA Confidence Interval Lower Bound (≥ 52%)
+  - DA Statistical Significance (p < 0.05)
+  - Pearson Correlation (≥ 0.05)
+  - Pearson Statistical Significance (p < 0.05)
+  - WRMSE Improvement vs Baseline (≥ 10%)
+  - ZPTAE Improvement vs Baseline (≥ 20%)
+  - Log Aspect Ratio (|value| < 0.5)
+
+- **Auto-grading**: Get an A+ to F grade based on how many metrics you pass
+  - 8/8 metrics → A+ (100%)
+  - 7/8 metrics → A (87.5%)
+  - 6/8 metrics → B+ (75%)
+  - 5/8 metrics → B (62.5%)
+  - 4/8 metrics → C (50%)
+  - < 4/8 metrics → D or F
+
+- **15+ additional metrics**: MAE, MSE, RMSE, R², MAPE, Precision, Recall, F1, Specificity, Spearman correlation, and more
+
+**Why This Matters:** Instead of guessing whether your model is "good enough," you get objective, research-aligned metrics that help you understand prediction quality and iterate faster.
+
+### 3. **Enhanced Workflow & Feature Engineering**
+
+Comprehensive improvements to the core workflow make it easier to build, test, and deploy models.
+
+**What's New:**
+- **Standalone feature conversion**: Clean function to convert 1-minute candles into features at any interval
+- **Feature engineering guidance**: Examples and templates for adding technical analysis indicators (SMAs, MACD, RSI, etc.)
+- **Better validation framework**: 23 comprehensive tests covering unit tests and integration tests for both data sources
+- **Improved live feature extraction**: Better testing and validation of the `get_live_features()` method for production reliability
+- **Enhanced error handling**: Better logging and error messages throughout the codebase
+
+**Why This Matters:** These workflow improvements reduce development time and help you avoid common pitfalls when building ML models for crypto prediction.
+
+---
+
+### Migrate to v2.0
+
+**Binance Example:**
+```python
+workflow = AlloraMLWorkflow(
+    tickers=["BTCUSDT"],
+    number_of_input_bars=48,
+    target_bars=24,
+    interval="1h",
+    data_source="binance",
+    market="futures"  # or "spot"
+)
+```
+
+**Allora Example:**
+```python
+workflow = AlloraMLWorkflow(
+    tickers=["btcusd"],
+    number_of_input_bars=48,
+    target_bars=24,
+    interval="1h",
+    data_source="allora",
+    api_key="your-api-key"
+)
+```
+
+**Key Changes:**
+- Added `data_source` parameter to specify data provider
+- `number_of_input_bars` and `target_bars` are now measured in units of the `interval` parameter
+  - Example: `interval="1h"` with `target_bars=24` means predict 24 hours ahead
+  - Example: `interval="5m"` with `target_bars=24` means predict 120 minutes (2 hours) ahead
+- Unified API works consistently across both Binance and Allora data sources
 
 ---
 
@@ -79,14 +144,13 @@ from datetime import datetime, timedelta, timezone
 import lightgbm as lgb
 import numpy as np
 
-# 1. Create workflow for 1-day Bitcoin prediction
+# 1. Create workflow for 24-hour Bitcoin prediction
 workflow = AlloraMLWorkflow(
     tickers=["btcusd"],
-    hours_needed=7*24,         # 7 days lookback
-    number_of_input_candles=24,# 24 candles in features
-    target_length=1*24,        # 1 day prediction (Topic 69)
-    interval="1h",             # 1-hour bars
-    data_source="allora",      # Fast monthly buckets!
+    number_of_input_bars=48,   # 48 hourly bars for features
+    target_bars=24,            # Predict 24 hours ahead
+    interval="1h",
+    data_source="allora",
     api_key="your-api-key"
 )
 
@@ -95,8 +159,7 @@ start = datetime.now(timezone.utc) - timedelta(days=180)
 workflow.backfill(start=start)
 
 # 3. Get training data
-df = workflow.get_full_feature_target_dataframe_pandas(start_date=start)
-df = df.reset_index()
+df = workflow.get_full_feature_target_dataframe(start_date=start).reset_index()
 feature_cols = [c for c in df.columns if c.startswith('feature_')]
 
 # 4. Train model on log returns
@@ -122,7 +185,77 @@ print(f"Predicted BTC price (24h): ${predict():,.2f}")
 
 **That's it!** Complete Topic 69 pipeline in 40 lines.
 
-💡 **See full example**: [`notebooks/example_topic_69_bitcoin_prediction.py`](notebooks/example_topic_69_bitcoin_prediction.py)
+💡 **See full examples**:
+- [`notebooks/Allora Forge Builder Kit.ipynb`](notebooks/Allora%20Forge%20Builder%20Kit.ipynb) - Main walkthrough notebook with grid search and evaluation
+- [`notebooks/example_topic_69_bitcoin_walkthrough.py`](notebooks/example_topic_69_bitcoin_walkthrough.py) - Python script version of complete walkthrough
+- [`notebooks/feature_engineering_example.py`](notebooks/feature_engineering_example.py) - Feature engineering with technical indicators
+- [`notebooks/Allora Wallet Creator.ipynb`](notebooks/Allora%20Wallet%20Creator.ipynb) - Create and fund Allora wallets for deployment
+- [`notebooks/deploy_worker.py`](notebooks/deploy_worker.py) - Deploy your trained model to Allora Network
+
+---
+
+## 🔄 How It Works
+
+### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      AlloraMLWorkflow                        │
+│  (Your primary interface - orchestrates everything)          │
+└───────────────────────┬─────────────────────────────────────┘
+                        │
+                        │ delegates data operations to
+                        ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      Data Manager                            │
+│  (Handles all data fetching & storage)                       │
+│  - BinanceDataManager   OR   AlloraDataManager              │
+└───────────────────────┬─────────────────────────────────────┘
+                        │
+                        │ stores/loads from
+                        ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  Local Parquet Storage                       │
+│  (Efficient, partitioned, persistent)                        │
+│  parquet_data_binance/ or parquet_data_allora/              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Data Flow for Training
+
+```
+1. User creates workflow
+   ↓
+2. workflow.backfill(start)
+   ↓
+3. Data Manager fetches from API
+   ↓
+4. Data stored in Parquet files (partitioned by symbol/date)
+   ↓
+5. workflow.get_full_feature_target_dataframe_pandas()
+   ↓
+6. Data Manager loads from Parquet
+   ↓
+7. Workflow extracts features + targets
+   ↓
+8. Returns DataFrame ready for training
+```
+
+### Data Flow for Live Inference
+
+```
+1. workflow.get_live_features(ticker)
+   ↓
+2. Data Manager fetches 1-minute bars from API (NO local storage)
+   ↓
+3. Workflow resamples to target interval
+   ↓
+4. Workflow extracts features
+   ↓
+5. Returns 1-row DataFrame ready for model.predict()
+```
+
+**Key Insight:** Training uses local storage for speed, while live inference always fetches fresh data from APIs for accuracy.
 
 ---
 
@@ -136,23 +269,21 @@ Work with multiple data sources through a single unified interface:
 # Use Binance (no API key required)
 workflow_binance = AlloraMLWorkflow(
     tickers=["BTCUSDT", "ETHUSDT"],
+    number_of_input_bars=48,
+    target_bars=24,
+    interval="1h",
     data_source="binance",
-    market="futures",  # or "spot"
-    interval="5m",
-    hours_needed=32,
-    number_of_input_candles=8,
-    target_length=16
+    market="futures"  # or "spot"
 )
 
 # Use Allora Network (API key required)
 workflow_allora = AlloraMLWorkflow(
     tickers=["btcusd", "ethusd"],
+    number_of_input_bars=48,
+    target_bars=24,
+    interval="1h",
     data_source="allora",
-    api_key="your-allora-api-key",
-    interval="5m",
-    hours_needed=32,
-    number_of_input_candles=8,
-    target_length=16
+    api_key="your-allora-api-key"
 )
 
 # Both work identically!
@@ -210,12 +341,12 @@ prediction = model.predict(features)
 ```
 
 **What happens under the hood:**
-1. Calculate required data: `hours_needed + 2 hours buffer`
+1. Calculate required data based on `number_of_input_bars` and `interval`
 2. Fetch 1-minute bars from API (bypasses local storage)
 3. Drop incomplete bar (if current second < 45)
 4. Resample to target interval with offset alignment
-5. Extract 40 normalized features (8 candles × 5 OHLCV)
-6. Return 1-row DataFrame: shape `(1, 40)`
+5. Extract normalized features (number_of_input_bars × 5 OHLCV)
+6. Return 1-row DataFrame ready for inference
 
 ### 4. **Flexible Feature Engineering**
 
@@ -224,23 +355,26 @@ Normalized features from rolling windows:
 ```python
 # Configuration
 workflow = AlloraMLWorkflow(
-    hours_needed=32,           # Lookback window
-    number_of_input_candles=8, # Split into 8 segments
-    interval="5m",             # Bar interval
+    tickers=["BTCUSDT"],
+    number_of_input_bars=48,   # Number of input bars
+    target_bars=24,            # Prediction horizon
+    interval="1h",             # Bar interval
+    data_source="binance",
     ...
 )
 
-# Features: 8 candles × 5 OHLCV = 40 features
+# Features: 48 bars × 5 OHLCV = 240 features
 # Normalized: prices relative to last close, volume relative to last volume
-features = workflow.get_live_features(ticker)
-# Shape: (1, 40)
+features = workflow.get_live_features("BTCUSDT")
+# Shape: (1, 240)
 ```
 
 **Feature Structure:**
-- `feature_0` to `feature_4`: Candle 1 (open, high, low, close, volume)
-- `feature_5` to `feature_9`: Candle 2
-- ...
-- `feature_35` to `feature_39`: Candle 8
+- `feature_open_0` to `feature_open_47`: Open prices for 48 bars
+- `feature_high_0` to `feature_high_47`: High prices for 48 bars
+- `feature_low_0` to `feature_low_47`: Low prices for 48 bars
+- `feature_close_0` to `feature_close_47`: Close prices for 48 bars
+- `feature_volume_0` to `feature_volume_47`: Volume for 48 bars
 
 ### 5. **Built-in Evaluation Metrics**
 
@@ -275,200 +409,62 @@ dm.register_batch_callback(on_batch_complete)
 dm.live(["BTCUSDT", "ETHUSDT"])
 ```
 
+### 7. **Standardized Data Format**
+
+All data managers return data in a consistent format across sources:
+
+**Single Bar (Dictionary):**
+```python
+{
+    "symbol": str,          # e.g., "BTCUSDT" or "BTC/USD"
+    "open_time": datetime,  # UTC timezone-aware
+    "open": float,
+    "high": float,
+    "low": float,
+    "close": float,
+    "volume": float,        # Base asset volume
+    "quote_volume": float,  # Quote asset volume
+    "n_trades": int         # Number of trades
+}
+```
+
+**DataFrame (MultiIndex):**
+```python
+# Index: (symbol, open_time)
+# Columns: open, high, low, close, volume, quote_volume, n_trades
+
+                              open      high       low     close    volume  quote_volume  n_trades
+symbol   open_time                                                                                
+BTCUSDT  2025-10-31 12:00:00  62500.0  62800.0  62400.0  62700.0  125.45  7856234.50   1523
+         2025-10-31 12:05:00  62700.0  62900.0  62600.0  62850.0  98.32   6172845.60   1321
+```
+
+**Storage Structure:**
+```
+parquet_data_binance/
+├── symbol=BTCUSDT/
+│   ├── dt=2025-10-01.parquet  # Daily partitions
+│   ├── dt=2025-10-02.parquet
+│   └── dt=2025-10-03.parquet
+└── symbol=ETHUSDT/
+    └── dt=2025-10-01.parquet
+```
+
+**Benefits:**
+- Fast queries (only read relevant date partitions)
+- Automatic deduplication on load
+- Columnar compression (5-10x smaller than CSV)
+- Type safety with schema enforcement
+
 ---
 
 ## 📚 Documentation
 
-### Core Documentation
+All documentation is consolidated in this README. For additional details:
 
-| Document | Description |
-|----------|-------------|
-| **[AGENT_GUIDE.md](AGENT_GUIDE.md)** | 📘 **Comprehensive guide for AI agents**: How to use the workflow, understand data flow, local storage, and live feature extraction |
-| **[ARCHITECTURE.md](ARCHITECTURE.md)** | 🏗️ Deep dive into data manager architecture, storage strategy, and API reference |
-| **[tests/README.md](tests/README.md)** | 🧪 Test documentation with examples and coverage details |
-
-### Quick Links
-
-- **Installation**: See [Installation](#installation) section above
-- **API Reference**: See [ARCHITECTURE.md - API Reference](ARCHITECTURE.md#api-reference)
-- **Testing**: See [tests/README.md](tests/README.md)
-- **Examples**: See [Example Notebooks](#example-notebooks) below
-
----
-
-## 📖 Example Notebooks & Scripts
-
-### 1. **Topic 69: Bitcoin Price Prediction** (Complete Example)
-
-**Notebook**: [`notebooks/Topic 69 - Bitcoin Price Prediction.ipynb`](notebooks/Topic%2069%20-%20Bitcoin%20Price%20Prediction.ipynb)  
-**Script**: [`notebooks/example_topic_69_bitcoin_prediction.py`](notebooks/example_topic_69_bitcoin_prediction.py)
-
-Complete pipeline for 24-hour Bitcoin price prediction:
-- v2.0 workflow with Allora data (fast loading)
-- Train on log returns
-- Convert to price predictions for Topic 69
-- Full deployment example
-
-**Key Features:**
-- ✅ Uses Allora monthly buckets (much faster than Binance)
-- ✅ Trains on log returns (ML best practice)
-- ✅ Converts to actual prices (Topic 69 requirement)
-- ✅ Live feature extraction with offset resampling
-- ✅ Ready-to-deploy predict function
-
-### 2. **Signal Miner: Hyperparameter Grid Search**
-
-**Script**: [`notebooks/example_signal_miner_grid_search.py`](notebooks/example_signal_miner_grid_search.py)
-
-Systematic model selection pipeline:
-- Hyperparameter grid search (10+ models)
-- Time-series cross-validation (3 folds)
-- Model selection based on validation performance
-- Retrain best model on full dataset
-- Deploy best configuration
-
-**Inspired by ML MCP Server's experiment tracking**
-
-### 3. **Legacy: Basic ML Workflow**
-[Allora Forge ML Workflow Example](https://github.com/allora-network/allora-forge-builder-kit/blob/main/notebooks/Allora%20Forge%20Builder%20Kit.ipynb)
-
-Original example (pre-v2.0):
-- Data fetching with old API
-- Basic feature extraction
-- Simple model training
-
----
-
-## 🔥 Complete Training & Deployment Example
-
-### Step 1: Setup & Data Collection
-
-```python
-from allora_forge_builder_kit import AlloraMLWorkflow
-from datetime import datetime, timedelta, timezone
-import lightgbm as lgb
-import pickle
-
-# Configuration
-TICKERS = ["BTCUSDT", "ETHUSDT"]
-HOURS_NEEDED = 32
-NUM_CANDLES = 8
-TARGET_LENGTH = 16
-INTERVAL = "5m"
-
-# Create workflow
-workflow = AlloraMLWorkflow(
-    tickers=TICKERS,
-    hours_needed=HOURS_NEEDED,
-    number_of_input_candles=NUM_CANDLES,
-    target_length=TARGET_LENGTH,
-    interval=INTERVAL,
-    data_source="binance",
-    market="futures"
-)
-
-# Backfill 30 days
-start = datetime.now(timezone.utc) - timedelta(days=30)
-print(f"Backfilling data from {start}...")
-workflow.backfill(start=start)
-print("Backfill complete!")
-```
-
-### Step 2: Feature Engineering & Training
-
-```python
-# Get training data
-print("Extracting features...")
-df_train = workflow.get_full_feature_target_dataframe_pandas(start_date=start)
-
-# Split features and target
-feature_cols = [f"feature_{i}" for i in range(40)]
-X = df_train[feature_cols]
-y = df_train["target"]
-
-print(f"Training data: {X.shape[0]} samples, {X.shape[1]} features")
-
-# Train model
-print("Training model...")
-model = lgb.LGBMRegressor(
-    n_estimators=100,
-    learning_rate=0.05,
-    max_depth=5,
-    num_leaves=31
-)
-model.fit(X, y)
-
-# Save model
-with open("model.pkl", "wb") as f:
-    pickle.dump(model, f)
-    
-print("Model trained and saved!")
-```
-
-### Step 3: Live Inference Loop
-
-```python
-import time
-
-# Load model
-with open("model.pkl", "rb") as f:
-    model = pickle.load(f)
-
-print("Starting live inference loop...")
-
-while True:
-    try:
-        # Get live features (fresh from API)
-        features = workflow.get_live_features("BTCUSDT")
-        
-        # Predict
-        prediction = model.predict(features)[0]
-        timestamp = features.index[0]
-        
-        print(f"[{timestamp}] BTCUSDT Prediction: {prediction:.6f}")
-        
-        # Your trading logic here...
-        
-    except ValueError as e:
-        print(f"Warning: {e}")
-    
-    # Wait for next bar (5 minutes)
-    time.sleep(5 * 60)
-```
-
-### Step 4: Deploy to Allora Network
-
-```python
-from allora_sdk.worker import AlloraWorker
-import asyncio
-
-# Load workflow and model (same as above)
-workflow = AlloraMLWorkflow(...)
-model = pickle.load(open("model.pkl", "rb"))
-
-# Define predict function
-def predict():
-    features = workflow.get_live_features("btcusd")
-    prediction = model.predict(features)[0]
-    return prediction
-
-# Deploy worker
-async def main():
-    worker = AlloraWorker(
-        predict_fn=predict,
-        api_key="your-allora-api-key",
-        topic_id=69  # Optional
-    )
-
-    async for result in worker.run():
-        if isinstance(result, Exception):
-            print(f"Error: {str(result)}")
-        else:
-            print(f"Prediction submitted: {result.prediction}")
-
-# Run
-asyncio.run(main())
-```
+- **Testing**: See [tests/README.md](tests/README.md) for test documentation and coverage
+- **Examples**: See the [Quick Start](#-quick-start) section for links to example notebooks and scripts
+- **API Reference**: All classes and methods are documented with docstrings in the source code
 
 ---
 
@@ -504,61 +500,6 @@ See [tests/README.md](tests/README.md) for detailed documentation.
 
 ---
 
-## 🔧 Advanced Configuration
-
-### Custom Data Manager
-
-```python
-from allora_forge_builder_kit import BinanceDataManager
-
-# Create custom data manager
-custom_dm = BinanceDataManager(
-    base_dir="/path/to/data",
-    interval="15m",
-    market="spot",
-    cache_len=2000,
-    batch_timeout=30,
-    rate_limit=0.3
-)
-
-# Pass to workflow
-workflow = AlloraMLWorkflow(
-    tickers=["BTCUSDT"],
-    hours_needed=32,
-    number_of_input_candles=8,
-    target_length=16,
-    data_manager=custom_dm  # Use custom manager
-)
-```
-
-### Multiple Intervals
-
-```python
-# 5-minute bars for high-frequency
-workflow_5m = AlloraMLWorkflow(interval="5m", ...)
-
-# 1-hour bars for day trading
-workflow_1h = AlloraMLWorkflow(interval="1h", ...)
-
-# 4-hour bars for swing trading
-workflow_4h = AlloraMLWorkflow(interval="4h", ...)
-```
-
-### Different Lookback Periods
-
-```python
-# Short-term (8 hours)
-workflow_short = AlloraMLWorkflow(hours_needed=8, ...)
-
-# Medium-term (32 hours)
-workflow_medium = AlloraMLWorkflow(hours_needed=32, ...)
-
-# Long-term (168 hours = 7 days)
-workflow_long = AlloraMLWorkflow(hours_needed=168, ...)
-```
-
----
-
 ## 🌟 Why Allora Forge Builder Kit?
 
 ### For Data Scientists
@@ -570,8 +511,8 @@ workflow_long = AlloraMLWorkflow(hours_needed=168, ...)
 ### For AI Agents
 - **Simple interface**: One class does everything
 - **Self-documenting**: Clear parameters and return types
-- **Comprehensive docs**: AGENT_GUIDE.md explains everything
 - **Easy installation**: `pip install git+https://github.com/...`
+- **Comprehensive examples**: Multiple working examples included
 
 ### For Traders
 - **Live inference**: Always fresh data, no stale predictions
@@ -626,22 +567,6 @@ allora-sdk>=0.1.0
 ```
 
 See `requirements.txt` or `environment.yml` for complete list.
-
----
-
-## 🗺️ Roadmap
-
-### v2.1 (Coming Soon)
-- [ ] Additional data sources (Coinbase, Kraken)
-- [ ] Built-in model registry
-- [ ] Advanced feature engineering templates
-- [ ] Performance profiling tools
-
-### v2.2 (Future)
-- [ ] Multi-asset portfolio support
-- [ ] Custom indicator library
-- [ ] AutoML integration
-- [ ] Dashboard for monitoring
 
 ---
 
