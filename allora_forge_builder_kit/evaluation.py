@@ -2,8 +2,7 @@
 Allora Forge Builder Kit - Performance Metrics Evaluation
 ==========================================================
 
-Official metrics for log return predictions, aligned with Research team's framework.
-Reference: Linear issue ENGN-4244 and research repo RES-1087
+Official metrics for log return predictions with comprehensive evaluation framework.
 
 Usage:
     from allora_forge_builder_kit import PerformanceEvaluator
@@ -28,10 +27,8 @@ class PerformanceEvaluator:
     """
     Comprehensive performance metrics calculator for financial time-series predictions.
     
-    Implements 8 primary metrics with pass/fail thresholds plus additional metrics.
-    Aligned with Research team's implementation in:
-    - research_notebooks/financial_predictions/evaluation/metrics.py
-    - PR #178 (RES-1087)
+    Implements 8 primary metrics with pass/fail thresholds plus additional metrics
+    for evaluating predictive model performance.
     """
     
     # Primary metric thresholds (8 core metrics)
