@@ -1,0 +1,203 @@
+# Test Suite for Allora Forge Builder Kit
+
+## Overview
+
+Comprehensive test suite for the data manager architecture and ML workflow.
+
+## Test Coverage
+
+### Unit Tests (No network required)
+- ✅ Factory pattern (DataManager routing)
+- ✅ BinanceDataManager initialization
+- ✅ AlloraDataManager initialization
+- ✅ Data format parsing
+- ✅ Storage separation
+- ✅ Workflow integration
+
+### Integration Tests (Requires network + API keys)
+- ✅ Binance backfill and load
+- ✅ Binance live snapshot
+- ✅ Allora backfill and load (requires API key)
+- ✅ Allora live snapshot (requires API key)
+- ✅ Workflow with Binance (full pipeline)
+- ✅ Workflow with Allora (full pipeline)
+- ✅ Both sources coexist without collision
+
+## Running Tests
+
+### Run All Unit Tests (Fast, No Network)
+```bash
+pytest tests/test_data_managers.py -v -m "not integration"
+```
+
+### Run Unit Tests Only (Explicit)
+```bash
+pytest tests/test_data_managers.py -v -k "not test_binance_backfill and not test_allora and not test_workflow"
+```
+
+### Run All Tests Including Integration (Requires API keys)
+```bash
+# Set environment variables
+export RUN_INTEGRATION_TESTS=1
+export ALLORA_API_KEY="your-allora-api-key"
+
+# Run all tests
+pytest tests/test_data_managers.py -v
+```
+
+### Run Only Binance Integration Tests
+```bash
+export RUN_INTEGRATION_TESTS=1
+pytest tests/test_data_managers.py -v -k "binance"
+```
+
+### Run Only Allora Integration Tests
+```bash
+export RUN_INTEGRATION_TESTS=1
+export ALLORA_API_KEY="your-allora-api-key"
+pytest tests/test_data_managers.py -v -k "allora"
+```
+
+### Run Specific Test
+```bash
+pytest tests/test_data_managers.py::test_factory_returns_binance_manager -v
+```
+
+## Test Organization
+
+```
+tests/
+├── test_data_managers.py    # Main test suite
+└── README.md                 # This file
+
+Test Structure:
+├── Unit Tests - Factory Pattern (5 tests)
+├── Unit Tests - BinanceDataManager (3 tests)
+├── Unit Tests - AlloraDataManager (3 tests)
+├── Unit Tests - Storage Structure (2 tests)
+├── Unit Tests - Workflow Integration (4 tests)
+├── Integration Tests - Binance (2 tests)
+├── Integration Tests - Allora (2 tests)
+├── Integration Tests - Workflow Binance (1 test)
+├── Integration Tests - Workflow Allora (1 test)
+└── Integration Tests - Compare Sources (1 test)
+
+Total: 24 tests
+```
+
+## Requirements
+
+### For Unit Tests
+```
+pytest
+pandas
+polars
+```
+
+### For Integration Tests
+```
+# Same as above, plus:
+- Network connection
+- Allora API key (for Allora tests)
+```
+
+## Test Markers
+
+Tests are marked with:
+- `@pytest.mark.integration` - Requires network and/or API keys
+
+## Expected Results
+
+### Unit Tests (Should Always Pass)
+```
+======================== test session starts =========================
+tests/test_data_managers.py::test_factory_returns_binance_manager PASSED
+tests/test_data_managers.py::test_factory_returns_allora_manager PASSED
+tests/test_data_managers.py::test_factory_invalid_source PASSED
+...
+======================== 17 passed in 2.5s ==========================
+```
+
+### Integration Tests (May be slow)
+```
+======================== test session starts =========================
+tests/test_data_managers.py::test_binance_backfill_and_load PASSED [10s]
+tests/test_data_managers.py::test_allora_backfill_and_load PASSED [15s]
+...
+======================== 24 passed in 45s ==========================
+```
+
+## Troubleshooting
+
+### "ALLORA_API_KEY not set"
+Set your API key:
+```bash
+export ALLORA_API_KEY="your-key-here"
+```
+
+### "Integration test. Set RUN_INTEGRATION_TESTS=1"
+Enable integration tests:
+```bash
+export RUN_INTEGRATION_TESTS=1
+```
+
+### Network Timeout
+Increase timeout in test if needed, or check internet connection.
+
+### Test Data Location
+Tests use `tmp_path` fixture, so data is stored in temporary directories and cleaned up automatically.
+
+## CI/CD Integration
+
+For CI pipelines:
+```yaml
+# Run unit tests only (fast)
+- run: pytest tests/test_data_managers.py -v -m "not integration"
+
+# Run integration tests (if API keys available)
+- run: |
+    export RUN_INTEGRATION_TESTS=1
+    export ALLORA_API_KEY=${{ secrets.ALLORA_API_KEY }}
+    pytest tests/test_data_managers.py -v
+```
+
+## What Each Test Validates
+
+### Factory Pattern Tests
+- Correct manager instantiation based on source string
+- Error handling for invalid sources
+- API key validation for Allora
+
+### Manager Tests
+- Proper initialization
+- Default directory assignment
+- Data parsing accuracy
+- Standardized format compliance
+
+### Storage Tests
+- Directory separation between sources
+- Partition path generation
+- No collision between Binance and Allora data
+
+### Workflow Tests
+- Integration with both data sources
+- String API functionality
+- Explicit manager usage
+- Feature extraction pipeline
+
+### Integration Tests
+- Real API calls work correctly
+- Data is downloaded and stored
+- Format is correct
+- Full pipeline (backfill → load → features) works
+
+## Notes
+
+- Unit tests are fast and should always pass
+- Integration tests require network and may be slower
+- Allora tests require valid API key
+- All tests use temporary directories for data
+- Tests are independent (can run in any order)
+
+
+
