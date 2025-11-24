@@ -31,7 +31,7 @@ async def main():
     
     worker = AlloraWorker(
         topic_id=TOPIC_ID,
-        predict_fn=predict_fn,
+        run=predict_fn,
         api_key=api_key,
         debug=DEBUG_MODE
     )
