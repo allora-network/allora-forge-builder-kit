@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
 ================================================================================
-Allora Forge Builder Kit v2.0 - Topic 69 Bitcoin Price Prediction Walkthrough
+Allora Forge Builder Kit v3.0 - Topic 69 Bitcoin Price Prediction Walkthrough
 ================================================================================
 
 This walkthrough demonstrates 24-hour Bitcoin price prediction using the 
 Allora ML Workflow Kit with base features and LightGBM.
+
+Data is sourced from the Atlas data service (Tiingo 1-min candles).
 
 ================================================================================
 """
@@ -48,7 +50,7 @@ NUM_LEAVES = [15, 31, 63]
 # =============================================================================
 
 print("="*80)
-print("Allora Forge Builder Kit v2.0 - Topic 69 Walkthrough")
+print("Allora Forge Builder Kit v3.0 - Topic 69 Walkthrough")
 print("="*80)
 
 # =============================================================================
@@ -194,7 +196,7 @@ for lr in LEARNING_RATES:
                     **metrics
                 })
                 
-                print(f"   [{config_num:2d}] n={n_est:4d}, lr={lr:.2f}, d={depth}, l={leaves:2d} → "
+                print(f"   [{config_num:2d}] n={n_est:4d}, lr={lr:.2f}, d={depth}, l={leaves:2d} -> "
                       f"{metrics['num_passed']}/8 ({metrics['score']:.1%} - {metrics['grade']})")
 
 # Analyze results
@@ -210,8 +212,8 @@ print(results_df[top5_cols].head().to_string(index=False))
 best_result = results[results_df.iloc[0]['config_num'] - 1]
 best_params = {k: best_result[k] for k in ['n_estimators', 'learning_rate', 'max_depth', 'num_leaves']}
 
-print(f"\n✅ Best: Config #{best_result['config_num']}")
-print(f"   {best_result['num_passed']}/8 metrics ({best_result['score']:.1%}) | "
+print(f"\nBest: Config #{best_result['config_num']}")
+print(f"   {best_result['num_passed']}/8 points ({best_result['score']:.1%}) | "
       f"n={best_params['n_estimators']}, lr={best_params['learning_rate']}, d={best_params['max_depth']}, l={best_params['num_leaves']}")
 
 # =============================================================================
@@ -283,12 +285,11 @@ test_prediction = predict()
 with open("predict.pkl", "wb") as f:
     cloudpickle.dump(predict, f)
 
-# Summary
 print("\n" + "="*80)
 print("COMPLETE!")
 print("="*80)
-print(f"✅ {len(feature_cols)} features | {best_result['num_passed']}/8 metrics ({best_result['score']:.1%})")
-print(f"✅ Saved to predict.pkl")
+print(f"{len(feature_cols)} features | {best_result['num_passed']}/8 points ({best_result['score']:.1%})")
+print(f"Saved to predict.pkl")
 print("="*80)
-print("\n🚀 Deploy: python deploy_worker.py")
+print("\nDeploy: python deploy_worker.py")
 

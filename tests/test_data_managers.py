@@ -80,7 +80,9 @@ def test_factory_returns_binance_manager(tmp_path):
 
 
 def test_factory_returns_allora_manager(tmp_path):
-    """Test that factory returns AlloraDataManager for source='allora'."""
+    """Test that factory returns AtlasDataManager for source='allora' (new default)."""
+    from allora_forge_builder_kit.atlas_data_manager import AtlasDataManager
+
     dm = DataManager(
         source="allora",
         interval="5m",
@@ -88,7 +90,7 @@ def test_factory_returns_allora_manager(tmp_path):
         base_dir=str(tmp_path / "allora_data")
     )
     
-    assert isinstance(dm, AlloraDataManager)
+    assert isinstance(dm, AtlasDataManager)
     assert isinstance(dm, BaseDataManager)
     assert dm.interval == "5m"
     assert dm.api_key == "test-key"
@@ -263,10 +265,12 @@ def test_workflow_with_binance_string_api(tmp_path):
 
 
 def test_workflow_with_allora_string_api(tmp_path):
-    """Test AlloraMLWorkflow with Allora using string API."""
+    """Test AlloraMLWorkflow with Allora using string API (now Atlas backend)."""
+    from allora_forge_builder_kit.atlas_data_manager import AtlasDataManager
+
     workflow = AlloraMLWorkflow(
-        tickers=["btcusd"],  # Allora uses lowercase format
-        number_of_input_bars=288,  # 24 hours of 5-min bars
+        tickers=["btcusd"],
+        number_of_input_bars=288,
         target_bars=24,
         interval="5m",
         data_source="allora",
@@ -274,7 +278,7 @@ def test_workflow_with_allora_string_api(tmp_path):
         base_dir=str(tmp_path / "allora_data")
     )
     
-    assert isinstance(workflow._dm, AlloraDataManager)
+    assert isinstance(workflow._dm, AtlasDataManager)
     assert workflow.interval == "5m"
 
 

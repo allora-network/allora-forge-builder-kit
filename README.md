@@ -40,23 +40,22 @@ The biggest upgrade is the introduction of the **`BaseDataManager` abstract clas
 Your model predictions are now scored using an **official performance evaluation system** that provides clear, actionable feedback on model quality.
 
 **The Grading System:**
-- **8 primary metrics** with pass/fail thresholds:
-  - Directional Accuracy (≥ 55%)
-  - DA Confidence Interval Lower Bound (≥ 52%)
-  - DA Statistical Significance (p < 0.05)
+- **7 primary metrics** with pass/fail thresholds:
+  - Directional Accuracy (≥ 52%)
+  - DA CI Lower Bound (≥ 50%)
+  - DA Statistical Significance (p < 0.05, z-test with autocorrelation-aware effective n)
   - Pearson Correlation (≥ 0.05)
   - Pearson Statistical Significance (p < 0.05)
-  - WRMSE Improvement vs Baseline (≥ 10%)
-  - ZPTAE Improvement vs Baseline (≥ 20%)
-  - Log Aspect Ratio (|value| < 0.5)
+  - WRMSE Improvement vs Baseline (≥ 5%)
+  - CZAR Improvement vs Oracle (≥ 10%)
 
-- **Auto-grading**: Get an A+ to F grade based on how many metrics you pass
-  - 8/8 metrics → A+ (100%)
-  - 7/8 metrics → A (87.5%)
-  - 6/8 metrics → B+ (75%)
-  - 5/8 metrics → B (62.5%)
-  - 4/8 metrics → C (50%)
-  - < 4/8 metrics → D or F
+- **Auto-grading**: Get an A+ to F grade based on metrics passed + temporal coverage (max 8 points)
+  - 8/8 points → A+ (100%)
+  - 7/8 points → A (87.5%)
+  - 6/8 points → B+ (75%)
+  - 5/8 points → B (62.5%)
+  - 4/8 points → C (50%)
+  - < 4/8 points → D or F
 
 - **15+ additional metrics**: MAE, MSE, RMSE, R², MAPE, Precision, Recall, F1, Specificity, Spearman correlation, and more
 
