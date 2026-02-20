@@ -9,7 +9,7 @@ Comprehensive test suite for the data manager architecture and ML workflow.
 ### Unit Tests (No network required)
 - ✅ Factory pattern (DataManager routing)
 - ✅ BinanceDataManager initialization
-- ✅ AlloraDataManager initialization
+- ✅ AtlasDataManager initialization
 - ✅ Data format parsing
 - ✅ Storage separation
 - ✅ Workflow integration
@@ -73,7 +73,7 @@ tests/
 Test Structure:
 ├── Unit Tests - Factory Pattern (5 tests)
 ├── Unit Tests - BinanceDataManager (3 tests)
-├── Unit Tests - AlloraDataManager (3 tests)
+├── Unit Tests - AtlasDataManager (2 tests)
 ├── Unit Tests - Storage Structure (2 tests)
 ├── Unit Tests - Workflow Integration (4 tests)
 ├── Integration Tests - Binance (2 tests)

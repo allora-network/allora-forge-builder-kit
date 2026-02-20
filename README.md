@@ -1,4 +1,4 @@
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![GitHub issues](https://img.shields.io/github/issues/allora-network/allora-forge-builder-kit)](https://github.com/allora-network/allora-forge-builder-kit/issues)
 [![Last Commit](https://img.shields.io/github/last-commit/allora-network/allora-forge-builder-kit)](https://github.com/allora-network/allora-forge-builder-kit/commits/main)
@@ -6,38 +6,36 @@
 
 <img width="1536" height="1024" alt="forge_silicon" src="https://github.com/user-attachments/assets/f1444abf-e649-4e48-a9f0-187b78b59ccc" />
 
-# Allora Forge Builder Kit 2.0
+# Allora Forge Builder Kit 3.0
 
-**A production-ready machine learning workflow for cryptocurrency prediction and trading, now with multi-source data management and live feature extraction.**
+**A production-ready machine learning workflow for cryptocurrency prediction and trading, designed for both humans and AI agents.**
 
-Build, train, and deploy ML models with a single unified interface that works seamlessly across multiple data sources (Binance, Allora Network) while handling all the complexity of data management, feature engineering, and live inference for you.
+Build, train, and deploy ML models with a single unified interface that works seamlessly across multiple data sources (Atlas, Binance, Allora Network) while handling all the complexity of data management, feature engineering, evaluation, and live inference for you.
 
 🚀 **[Launch the Builder Kit in Google Colab](https://colab.research.google.com/github/allora-network/allora-forge-builder-kit/blob/main/notebooks/Allora%20Forge%20Builder%20Kit.ipynb)**
 
 ---
 
-## ✨ What's New in v2.0
+## ✨ What's New in v3.0
 
-v2.0 represents a complete architectural overhaul focused on three major upgrades:
+v3.0 builds on the v2.0 architecture with new data sources, corrected evaluation metrics, topic discovery, and AI agent support.
 
-### 1. **Data Manager Abstract Class & Multi-Source Support**
+### 1. **Atlas Data Service (New Default)**
 
-The biggest upgrade is the introduction of the **`BaseDataManager` abstract class**—essentially a standalone sub-program dedicated to data management. This modular architecture now supports multiple data APIs while maintaining a unified interface.
+The default `"allora"` data source now connects to the **Atlas API** (`forge-data.allora.run`) — Tiingo-sourced 1-minute OHLCV candles with low latency and broad asset coverage.
 
 **Key Features:**
-- **Multi-source support**: Works with both Binance API (Spot & Futures) and Allora's in-house data API
-- **Extensible design**: Easily add new data sources by implementing the abstract base class
-- **Local storage with remote sync**: Data is stored locally in efficient Parquet files and kept synced with remote APIs
-- **Reduced latency**: Load raw data from disk instead of fetching from the cloud every time
-- **Storage isolation**: Separate directories per source (`parquet_data_binance/` vs `parquet_data_allora/`)
-- **Smart backfill**: Automatic gap detection, incremental updates, and efficient pagination
-- **Hot cache**: In-memory caching of recent bars for faster repeated queries
+- **76 Tiingo 1-minute datasets** available (BTC, ETH, SOL, and more)
+- **Paginated bulk download** with smart gap detection and incremental backfill
+- **Data lag fallback**: Automatically discovers latest available data if there's API lag
+- **Same API key** as the legacy Allora data service
+- **Multi-source support**: Atlas, Binance (Spot & Futures), and legacy Allora API
+- **Extensible design**: Add new data sources by implementing the `BaseDataManager` abstract class
+- **Local Parquet storage** with remote sync, deduplication, and in-memory caching
 
-**Why This Matters:** By managing data locally and syncing intelligently with remote sources, you get the best of both worlds—fast local access during development and training, with fresh data available for live inference.
+### 2. **Updated Performance Metrics with A+ to F Grading**
 
-### 2. **Official Performance Metrics with A+ to F Grading**
-
-Your model predictions are now scored using an **official performance evaluation system** that provides clear, actionable feedback on model quality.
+Model predictions are scored using the **Research team's latest evaluation framework** (RES-1271, RES-1293, RES-1257, RES-1375) with clear, actionable feedback.
 
 **The Grading System:**
 - **7 primary metrics** with pass/fail thresholds:
@@ -61,22 +59,23 @@ Your model predictions are now scored using an **official performance evaluation
 
 **Why This Matters:** Instead of guessing whether your model is "good enough," you get objective, research-aligned metrics that help you understand prediction quality and iterate faster.
 
-### 3. **Enhanced Workflow & Feature Engineering**
+### 3. **Topic Discovery & AI Agent Support**
 
-Comprehensive improvements to the core workflow make it easier to build, test, and deploy models.
+- **`AlloraTopicDiscovery`**: Query all active Allora Network topics and their configuration via `allora_sdk`
+- **`AGENTS.md`**: Structured instructions for AI agents working with this repository
+- **`.cursor/skills/`**: Focused skill packages for model building and data exploration
+- **SDK compatibility**: Updated for `allora_sdk >= 1.0.6`
 
-**What's New:**
-- **Standalone feature conversion**: Clean function to convert 1-minute candles into features at any interval
-- **Feature engineering guidance**: Examples and templates for adding technical analysis indicators (SMAs, MACD, RSI, etc.)
-- **Better validation framework**: 23 comprehensive tests covering unit tests and integration tests for both data sources
-- **Improved live feature extraction**: Better testing and validation of the `get_live_features()` method for production reliability
-- **Enhanced error handling**: Better logging and error messages throughout the codebase
+### 4. **Enhanced Workflow & Feature Engineering**
 
-**Why This Matters:** These workflow improvements reduce development time and help you avoid common pitfalls when building ML models for crypto prediction.
+- **Standalone feature conversion**: Convert 1-minute candles into features at any interval
+- **Feature engineering guidance**: Examples for SMAs, MACD, RSI, and more
+- **28 tests**: 16 unit + 12 integration tests covering all data sources
+- **Improved live feature extraction** with production-ready error handling
 
 ---
 
-### Migrate to v2.0
+### Migrate to v3.0
 
 **Binance Example:**
 ```python
@@ -208,7 +207,7 @@ print(f"Predicted BTC price (24h): ${predict():,.2f}")
 ┌─────────────────────────────────────────────────────────────┐
 │                      Data Manager                            │
 │  (Handles all data fetching & storage)                       │
-│  - BinanceDataManager   OR   AlloraDataManager              │
+│  AtlasDataManager (default)  |  BinanceDataManager          │
 └───────────────────────┬─────────────────────────────────────┘
                         │
                         │ stores/loads from
@@ -378,15 +377,13 @@ features = workflow.get_live_features("BTCUSDT")
 ### 5. **Built-in Evaluation Metrics**
 
 ```python
-# Get test predictions
-test_preds = model.predict(X_test[feature_cols])
+from allora_forge_builder_kit import PerformanceEvaluator
 
-# Evaluate
-metrics = workflow.evaluate_test_data(test_preds)
-print(metrics)
+evaluator = PerformanceEvaluator()
+report = evaluator.evaluate(y_true=actual_returns, y_pred=predicted_returns)
+evaluator.print_report(report)
 
-# Output:
-# {'correlation': 0.042, 'directional_accuracy': 0.548}
+# Output: grade (A+ to F), 7 primary metrics with pass/fail, additional metrics
 ```
 
 ### 6. **WebSocket Streaming** (Binance Only)
@@ -543,29 +540,32 @@ See [tests/README.md](tests/README.md) for detailed documentation.
 ## 🚨 Requirements
 
 ### Python Version
-- Python 3.8 or higher
+- Python 3.10 or higher
 
 ### Core Dependencies
 ```
-pandas>=1.3.0
-polars>=0.20.0
-requests>=2.31.0
-websocket-client>=1.6.0
-numba>=0.58.0
+pandas
+numpy
+polars
+pyarrow
+pytz
+requests
+lightgbm
+numba
+scipy
+dill
+allora-sdk>=1.0.6
 ```
 
-### ML Dependencies (Optional)
+### Optional Dependencies
 ```
-lightgbm>=4.0.0
-scikit-learn>=1.3.0
-```
-
-### Allora SDK (For Deployment)
-```
-allora-sdk>=0.1.0
+websocket-client   # Binance WebSocket streaming
+scikit-learn       # Cross-validation utilities
+cloudpickle        # Serializing prediction functions
+matplotlib         # Feature visualization
 ```
 
-See `requirements.txt` or `environment.yml` for complete list.
+See `pyproject.toml` for the complete list.
 
 ---
 
@@ -598,7 +598,7 @@ Apache 2.0 License - See [LICENSE](LICENSE) for details.
 
 ## 🌐 Community & Support
 
-- **Documentation**: [AGENT_GUIDE.md](AGENT_GUIDE.md) | [ARCHITECTURE.md](ARCHITECTURE.md)
+- **AI Agent Guide**: [AGENTS.md](AGENTS.md)
 - **Discord**: [Join our community](https://discord.gg/allora)
 - **GitHub**: [allora-network/allora-forge-builder-kit](https://github.com/allora-network/allora-forge-builder-kit)
 - **Website**: [https://allora.network](https://allora.network)

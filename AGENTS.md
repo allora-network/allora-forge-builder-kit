@@ -67,8 +67,7 @@ report = PerformanceEvaluator().evaluate(y_true, y_pred)
 allora_forge_builder_kit/
   __init__.py               # Package exports (v3.0.0)
   workflow.py               # AlloraMLWorkflow — the main orchestrator
-  atlas_data_manager.py     # NEW: Atlas data service (forge-data.allora.run)
-  allora_data_manager.py    # Legacy Allora Network REST API
+  atlas_data_manager.py     # Atlas data service (forge-data.allora.run)
   binance_data_manager.py   # Binance REST + WebSocket
   base_data_manager.py      # Abstract base class for data managers
   data_manager_factory.py   # DataManager() factory function
@@ -92,7 +91,6 @@ tests/
 |------------------|-----------------------------------------|-------|
 | `"allora"`       | Atlas (`forge-data.allora.run`)         | **Default.** Tiingo 1-min candles. |
 | `"atlas"`        | Same as `"allora"`                      | Explicit alias. |
-| `"allora-legacy"`| `api.allora.network` REST API           | Deprecated; kept for backward compat. |
 | `"binance"`      | Binance spot/futures REST + WebSocket   | Free, no API key needed. |
 
 Atlas requires an API key passed via `X-API-Key` header.  The same key

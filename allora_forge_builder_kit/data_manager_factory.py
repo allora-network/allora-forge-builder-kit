@@ -10,8 +10,8 @@ Provides a simple string-based API for creating data managers::
     dm = DataManager(source="allora", interval="5m", api_key="...")
     dm = DataManager(source="atlas", interval="5m", api_key="...")
 
-``"allora"`` now defaults to the Atlas backend.  Use ``"allora-legacy"``
-to explicitly use the old Allora Network REST API.
+``"allora"`` and ``"atlas"`` both use the Atlas backend
+(forge-data.allora.run).
 """
 
 from typing import Optional, List
@@ -31,7 +31,7 @@ def DataManager(
 
     Args:
         source: Data source — one of ``"binance"``, ``"allora"`` (Atlas),
-            ``"atlas"`` (explicit), or ``"allora-legacy"`` (old API).
+            or ``"atlas"`` (explicit alias).
         base_dir: Directory for Parquet storage (auto-set based on source).
         interval: Bar interval (e.g. ``"5m"``, ``"1h"``).
         symbols: List of symbols to manage.
@@ -39,7 +39,6 @@ def DataManager(
         **kwargs: Source-specific parameters:
             - **Binance**: ``market``, ``batch_timeout``, ``rate_limit``
             - **Allora / Atlas**: ``api_key``, ``base_url``, ``page_size``
-            - **Allora-legacy**: ``api_key``, ``max_pages``, ``sleep_sec``
 
     Returns:
         A ``BaseDataManager`` subclass instance.
@@ -71,7 +70,7 @@ def DataManager(
             rate_limit=rate_limit,
         )
 
-    # ── Atlas / Allora (new default) ─────────────────────────────────
+    # ── Atlas / Allora ───────────────────────────────────────────────
     if source_lower in ("allora", "atlas"):
         from .atlas_data_manager import AtlasDataManager
 
@@ -100,33 +99,9 @@ def DataManager(
 
         return AtlasDataManager(**ctor_kwargs)
 
-    # ── Allora legacy API ────────────────────────────────────────────
-    if source_lower == "allora-legacy":
-        from .allora_data_manager import AlloraDataManager
-
-        if base_dir is None:
-            base_dir = "parquet_data_allora"
-
-        api_key = kwargs.pop("api_key", None)
-        if api_key is None:
-            raise ValueError("api_key is required for the Allora data source")
-
-        max_pages = kwargs.pop("max_pages", 1000)
-        sleep_sec = kwargs.pop("sleep_sec", 0.1)
-
-        return AlloraDataManager(
-            base_dir=base_dir,
-            interval=interval,
-            symbols=symbols,
-            cache_len=cache_len,
-            api_key=api_key,
-            max_pages=max_pages,
-            sleep_sec=sleep_sec,
-        )
-
     raise ValueError(
         f"Unknown data source: '{source}'.  "
-        f"Supported: 'binance', 'allora', 'atlas', 'allora-legacy'"
+        f"Supported: 'binance', 'allora', 'atlas'"
     )
 
 
@@ -147,10 +122,5 @@ def list_data_sources():
         "atlas": {
             "description": "Alias for 'allora' — Atlas data service",
             "parameters": ["api_key", "base_url", "page_size"],
-        },
-        "allora-legacy": {
-            "description": "Legacy Allora Network REST API (deprecated)",
-            "features": ["Monthly buckets", "Paginated API"],
-            "parameters": ["api_key", "max_pages", "sleep_sec"],
         },
     }

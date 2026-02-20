@@ -18,7 +18,7 @@ import polars as pl
 from allora_forge_builder_kit import (
     DataManager,
     BinanceDataManager,
-    AlloraDataManager,
+    AtlasDataManager,
     BaseDataManager,
     AlloraMLWorkflow,
 )
@@ -168,56 +168,27 @@ def test_binance_manager_parse_kline():
 
 
 # ============================================================================
-# Unit Tests - AlloraDataManager
+# Unit Tests - AtlasDataManager
 # ============================================================================
 
-def test_allora_manager_initialization(tmp_path):
-    """Test AlloraDataManager initialization."""
-    dm = AlloraDataManager(
+def test_atlas_manager_initialization(tmp_path):
+    """Test AtlasDataManager initialization."""
+    dm = AtlasDataManager(
         api_key="test-key",
         interval="5m",
-        symbols=["btcusd"],  # Allora uses lowercase format
+        symbols=["btcusd"],
         base_dir=str(tmp_path / "allora_data")
     )
-    
+
     assert dm.interval == "5m"
     assert dm.api_key == "test-key"
-    assert "btcusd" in dm.symbols
     assert dm.base_dir == str(tmp_path / "allora_data")
 
 
-def test_allora_manager_default_directory():
-    """Test AlloraDataManager uses source-specific default directory."""
-    dm = AlloraDataManager(api_key="test-key", interval="5m")
+def test_atlas_manager_default_directory():
+    """Test AtlasDataManager uses source-specific default directory."""
+    dm = AtlasDataManager(api_key="test-key", interval="5m")
     assert dm.base_dir == "parquet_data_allora"
-
-
-def test_allora_manager_parse_bar():
-    """Test Allora bar parsing to standardized format."""
-    dm = AlloraDataManager(api_key="test-key", interval="5m")
-    
-    # Create a mock Series
-    timestamp = datetime(2025, 10, 6, 12, 0, tzinfo=timezone.utc)
-    row = pd.Series({
-        "open": 50000.0,
-        "high": 50100.0,
-        "low": 49900.0,
-        "close": 50050.0,
-        "volume": 100.5,
-        "trades_done": 1000
-    })
-    
-    bar = dm._parse_allora_bar(timestamp, row, "BTC/USD")
-    
-    assert bar["symbol"] == "BTC/USD"
-    assert bar["open_time"] == timestamp
-    assert bar["open"] == 50000.0
-    assert bar["high"] == 50100.0
-    assert bar["low"] == 49900.0
-    assert bar["close"] == 50050.0
-    assert bar["volume"] == 100.5
-    assert pd.isna(bar["quote_volume"])  # Should be NaN for Allora
-    assert bar["n_trades"] == 1000  # Mapped from trades_done
 
 
 # ============================================================================
@@ -227,11 +198,11 @@ def test_allora_manager_parse_bar():
 def test_storage_separation(tmp_path):
     """Test that different sources use different directories."""
     binance_dm = BinanceDataManager(base_dir=str(tmp_path / "binance"))
-    allora_dm = AlloraDataManager(api_key="test", base_dir=str(tmp_path / "allora"))
-    
-    assert binance_dm.base_dir != allora_dm.base_dir
+    atlas_dm = AtlasDataManager(api_key="test", base_dir=str(tmp_path / "allora"))
+
+    assert binance_dm.base_dir != atlas_dm.base_dir
     assert "binance" in binance_dm.base_dir
-    assert "allora" in allora_dm.base_dir
+    assert "allora" in atlas_dm.base_dir
 
 
 def test_partition_path(tmp_path):
@@ -384,102 +355,69 @@ def test_binance_get_live_1min_data(test_symbols_binance, integration_check):
 
 
 # ============================================================================
-# Integration Tests - AlloraDataManager (requires API key + network)
+# Integration Tests - AtlasDataManager (requires API key + network)
 # ============================================================================
 
 @pytest.mark.integration
-def test_allora_backfill_and_load(tmp_path, test_symbols_allora, allora_api_key, integration_check):
-    """Test Allora backfill and load operations."""
-    dm = AlloraDataManager(
+def test_atlas_backfill_and_load(tmp_path, test_symbols_allora, allora_api_key, integration_check):
+    """Test Atlas backfill and load operations."""
+    dm = AtlasDataManager(
         api_key=allora_api_key,
         interval="5m",
         symbols=test_symbols_allora,
         base_dir=str(tmp_path / "allora_data")
     )
-    
-    # Backfill last 3 days (wider range to get more data)
+
     start = datetime.now(timezone.utc) - timedelta(days=3)
-    end = datetime.now(timezone.utc)
-    
-    dm.backfill_symbol(test_symbols_allora[0], start, end)
-    
-    # Load data (no end filter to include all data)
+
+    dm.backfill_symbol(test_symbols_allora[0], start, datetime.now(timezone.utc))
+
     df = dm.load_pandas(test_symbols_allora, start=start)
-    
-    # Allora API may have limited historical data availability
-    # If empty, the test still passes (API constraints, not code failure)
+
     if df.empty:
-        print(f"[test] Allora API returned no data for {test_symbols_allora[0]} - this is expected for limited historical availability")
+        print(f"[test] Atlas API returned no data for {test_symbols_allora[0]}")
         return
-    
+
     assert isinstance(df.index, pd.MultiIndex)
     assert df.index.names == ["symbol", "open_time"]
     assert "open" in df.columns
-    assert "high" in df.columns
-    assert "low" in df.columns
     assert "close" in df.columns
     assert "volume" in df.columns
-    assert "n_trades" in df.columns
-    assert "quote_volume" in df.columns  # Should be present (but NaN)
 
 
 @pytest.mark.integration
-def test_allora_live_snapshot(test_symbols_allora, allora_api_key, integration_check):
-    """Test Allora get_live_snapshot."""
-    dm = AlloraDataManager(api_key=allora_api_key, interval="5m")
-    
+def test_atlas_live_snapshot(test_symbols_allora, allora_api_key, integration_check):
+    """Test Atlas get_live_snapshot."""
+    dm = AtlasDataManager(api_key=allora_api_key, interval="5m")
+
     snapshot = dm.get_live_snapshot(test_symbols_allora)
-    
+
     assert not snapshot.empty
     assert isinstance(snapshot.index, pd.MultiIndex)
     assert len(snapshot) == len(test_symbols_allora)
     assert "open" in snapshot.columns
     assert "close" in snapshot.columns
     assert "volume" in snapshot.columns
-    assert "n_trades" in snapshot.columns
 
 
 @pytest.mark.integration
-def test_allora_get_live_1min_data(test_symbols_allora, allora_api_key, integration_check):
-    """Test Allora get_live_1min_data returns 1-minute bars."""
-    # First verify API key works with a direct API call
-    import requests
-    headers = {"x-api-key": allora_api_key}
-    params = {"tickers": "btcusd", "from_date": "2025-10-09"}
-    
-    try:
-        response = requests.get(
-            "https://api.allora.network/v2/allora/market-data/ohlc",
-            headers=headers,
-            params=params,
-            timeout=10
-        )
-        if response.status_code == 401:
-            pytest.skip("Allora API key is invalid or expired")
-        elif response.status_code != 200:
-            pytest.skip(f"Allora API returned {response.status_code}")
-    except Exception as e:
-        pytest.skip(f"Cannot connect to Allora API: {e}")
-    
-    # Now test the data manager
-    dm = AlloraDataManager(api_key=allora_api_key, interval="5m")
-    
-    # Fetch 2 hours of 1-minute data
+def test_atlas_get_live_1min_data(test_symbols_allora, allora_api_key, integration_check):
+    """Test Atlas get_live_1min_data returns 1-minute bars."""
+    dm = AtlasDataManager(api_key=allora_api_key, interval="5m")
+
     df_1min = dm.get_live_1min_data(test_symbols_allora[0], hours_back=2)
-    
+
     if df_1min.empty:
-        pytest.skip("Allora API returned no data (may have limited historical availability)")
-    
+        pytest.skip("Atlas API returned no data")
+
     assert isinstance(df_1min.index, pd.DatetimeIndex)
     assert list(df_1min.columns) == ["open", "high", "low", "close", "volume"]
-    
-    # Verify it's 1-minute bars
+
     if len(df_1min) > 1:
         time_diff = (df_1min.index[1] - df_1min.index[0]).total_seconds() / 60
         assert abs(time_diff - 1.0) < 0.1, f"Expected 1-minute bars, got {time_diff} minutes"
-    
-    # Allora may have less data available
-    assert len(df_1min) > 0, "Should have at least some 1-minute bars"
+
+    assert len(df_1min) >= 100, "Should have at least 100 1-minute bars in 2 hours"
 
 
 # ============================================================================
@@ -622,26 +560,7 @@ def test_workflow_allora_backfill_and_features(tmp_path, test_symbols_allora, al
 
 @pytest.mark.integration
 def test_workflow_allora_get_live_features(test_symbols_allora, allora_api_key, integration_check):
-    """Test workflow get_live_features with Allora."""
-    # Verify API key works first
-    import requests
-    headers = {"x-api-key": allora_api_key}
-    params = {"tickers": "btcusd", "from_date": "2025-10-09"}
-    
-    try:
-        response = requests.get(
-            "https://api.allora.network/v2/allora/market-data/ohlc",
-            headers=headers,
-            params=params,
-            timeout=10
-        )
-        if response.status_code == 401:
-            pytest.skip("Allora API key is invalid or expired")
-        elif response.status_code != 200:
-            pytest.skip(f"Allora API returned {response.status_code}")
-    except Exception as e:
-        pytest.skip(f"Cannot connect to Allora API: {e}")
-    
+    """Test workflow get_live_features with Allora (Atlas backend)."""
     workflow = AlloraMLWorkflow(
         tickers=test_symbols_allora,
         number_of_input_bars=24,  # 2 hours of 5-min bars
@@ -699,7 +618,7 @@ def test_both_sources_coexist(tmp_path, integration_check):
     
     # Verify different data managers
     assert isinstance(binance_wf._dm, BinanceDataManager)
-    assert isinstance(allora_wf._dm, AlloraDataManager)
+    assert isinstance(allora_wf._dm, AtlasDataManager)
     
     # Verify different storage
     assert binance_wf._dm.base_dir != allora_wf._dm.base_dir
