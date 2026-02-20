@@ -171,7 +171,6 @@ class AtlasDataManager(BaseDataManager):
                 headers=self.headers,
                 params=params,
                 timeout=300,
-                stream=True,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -197,10 +196,10 @@ class AtlasDataManager(BaseDataManager):
             records.append(
                 {
                     "date": row["timestamp"],
-                    "open": float(vals.get("open", 0)),
-                    "high": float(vals.get("high", 0)),
-                    "low": float(vals.get("low", 0)),
-                    "close": float(vals.get("close", 0)),
+                    "open": float(vals["open"]) if "open" in vals else float("nan"),
+                    "high": float(vals["high"]) if "high" in vals else float("nan"),
+                    "low": float(vals["low"]) if "low" in vals else float("nan"),
+                    "close": float(vals["close"]) if "close" in vals else float("nan"),
                     "volume": float(vals.get("volume", 0)),
                     "trades_done": int(vals.get("trades_done", 0)),
                     "volume_notional": float(vals.get("volume_notional", 0)),

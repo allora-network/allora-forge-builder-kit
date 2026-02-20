@@ -127,7 +127,7 @@ class PerformanceEvaluator:
         
         # Z-test with continuity correction (RES-1257 / RES-1375)
         # H0: p = 0.5, H1: p > 0.5
-        z_stat = (abs(da - 0.5) - 0.5 / n_eff) / np.sqrt(0.25 / n_eff)
+        z_stat = (da - 0.5 - 0.5 / n_eff) / np.sqrt(0.25 / n_eff)
         z_stat = max(z_stat, 0.0)
         da_pvalue = 1.0 - stats.norm.cdf(z_stat)
         

@@ -64,13 +64,14 @@ class AlloraTopicDiscovery:
 
     def __init__(self, api_key: Optional[str] = None, network: str = "testnet"):
         try:
-            from allora_sdk.api_client import AlloraAPIClient
+            from allora_sdk.api_client import AlloraAPIClient, ChainID
         except ImportError:
             raise ImportError(
                 "allora_sdk is required for topic discovery.  "
                 "Install it with:  pip install allora_sdk"
             )
-        self._client = AlloraAPIClient(api_key=api_key)
+        chain_id = ChainID.MAINNET if network.lower() == "mainnet" else ChainID.TESTNET
+        self._client = AlloraAPIClient(chain_id=chain_id, api_key=api_key)
 
     # ------------------------------------------------------------------
     # Public API
@@ -104,7 +105,7 @@ class AlloraTopicDiscovery:
         return [
             t
             for t in self.get_all_topics()
-            if "log" in t.metadata.lower() or "return" in t.metadata.lower()
+            if "log" in t.metadata.lower() and "return" in t.metadata.lower()
         ]
 
     # ------------------------------------------------------------------

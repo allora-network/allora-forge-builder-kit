@@ -70,7 +70,7 @@ Model predictions are scored using the **Research team's latest evaluation frame
 
 - **Standalone feature conversion**: Convert 1-minute candles into features at any interval
 - **Feature engineering guidance**: Examples for SMAs, MACD, RSI, and more
-- **28 tests**: 16 unit + 12 integration tests covering all data sources
+- **27 tests**: 15 unit + 12 integration tests covering all data sources
 - **Improved live feature extraction** with production-ready error handling
 
 ---
@@ -518,7 +518,7 @@ See [tests/README.md](tests/README.md) for detailed documentation.
 
 ### For Developers
 - **Modular architecture**: Easy to extend with new data sources
-- **Well-tested**: 23 tests covering all functionality
+- **Well-tested**: 27 tests covering all functionality
 - **Type-safe**: Clear interfaces and error messages
 - **Open source**: Apache 2.0 license
 

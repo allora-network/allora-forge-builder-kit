@@ -172,7 +172,7 @@ pytest tests/test_data_managers.py -v
 ## Dependencies
 
 Runtime: `pandas`, `numpy`, `lightgbm`, `requests`, `dill`, `polars`,
-`numba`, `scipy`, `allora-sdk>=1.0.6`.
+`pyarrow`, `pytz`, `numba`, `scipy`, `allora-sdk>=1.0.6`.
 
 Optional: `websocket-client` (for Binance streaming), `cloudpickle`
-(for pickling prediction functions).
+(for pickling prediction functions in deployment).

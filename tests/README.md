@@ -71,18 +71,18 @@ tests/
 └── README.md                 # This file
 
 Test Structure:
-├── Unit Tests - Factory Pattern (5 tests)
+├── Unit Tests - Factory Pattern (4 tests)
 ├── Unit Tests - BinanceDataManager (3 tests)
 ├── Unit Tests - AtlasDataManager (2 tests)
 ├── Unit Tests - Storage Structure (2 tests)
 ├── Unit Tests - Workflow Integration (4 tests)
-├── Integration Tests - Binance (2 tests)
-├── Integration Tests - Allora (2 tests)
-├── Integration Tests - Workflow Binance (1 test)
-├── Integration Tests - Workflow Allora (1 test)
+├── Integration Tests - Binance (3 tests)
+├── Integration Tests - Atlas/Allora (3 tests)
+├── Integration Tests - Workflow Binance (3 tests)
+├── Integration Tests - Workflow Allora (2 tests)
 └── Integration Tests - Compare Sources (1 test)
 
-Total: 24 tests
+Total: 27 tests (15 unit + 12 integration)
 ```
 
 ## Requirements
@@ -115,7 +115,7 @@ tests/test_data_managers.py::test_factory_returns_binance_manager PASSED
 tests/test_data_managers.py::test_factory_returns_allora_manager PASSED
 tests/test_data_managers.py::test_factory_invalid_source PASSED
 ...
-======================== 17 passed in 2.5s ==========================
+======================== 15 passed in 2.5s ==========================
 ```
 
 ### Integration Tests (May be slow)
@@ -124,7 +124,7 @@ tests/test_data_managers.py::test_factory_invalid_source PASSED
 tests/test_data_managers.py::test_binance_backfill_and_load PASSED [10s]
 tests/test_data_managers.py::test_allora_backfill_and_load PASSED [15s]
 ...
-======================== 24 passed in 45s ==========================
+======================== 27 passed in 45s ==========================
 ```
 
 ## Troubleshooting

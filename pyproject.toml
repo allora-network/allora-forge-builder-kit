@@ -33,6 +33,9 @@ dev = [
 binance = [
     "websocket-client",
 ]
+deploy = [
+    "cloudpickle",
+]
 
 [project.urls]
 Homepage = "https://github.com/allora-network/allora-forge-builder-kit"
