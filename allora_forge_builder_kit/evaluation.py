@@ -30,16 +30,15 @@ class PerformanceEvaluator:
     Implements 7 primary metrics with pass/fail thresholds plus additional metrics
     for evaluating predictive model performance.
     
-    Updated per the Research team's latest framework (RES-1271, RES-1293,
-    RES-1257, RES-1375):
-      - DA CI lower bound *kept* (>= 0.50); not removed.
-      - DA threshold lowered to 0.52.
-      - DA p-value computed via z-test with continuity correction and
-        autocorrelation-aware effective sample size.
-      - WRMSE improvement threshold lowered to 5%.
-      - ZPTAE replaced by CZAR (Cumulative Z-scored Absolute Return)
-        improvement (>= 10%) as primary metric.
-      - Log Aspect Ratio moved to additional (non-scored) metrics.
+    v3.0 evaluation framework:
+      - DA CI lower bound >= 0.50
+      - DA threshold >= 0.52
+      - DA p-value via z-test with continuity correction and
+        autocorrelation-aware effective sample size
+      - WRMSE improvement threshold >= 5%
+      - CZAR (Cumulative Z-scored Absolute Return) improvement >= 10%
+        replaces ZPTAE as primary metric
+      - Log Aspect Ratio moved to additional (non-scored) metrics
     """
     
     THRESHOLDS = {
@@ -96,7 +95,7 @@ class PerformanceEvaluator:
         Calculate directional accuracy and related metrics.
         
         Uses a z-test with continuity correction and autocorrelation-aware
-        effective sample size (per RES-1257 / RES-1375).
+        effective sample size.
         
         Args:
             y_true: Ground truth log returns
@@ -111,8 +110,7 @@ class PerformanceEvaluator:
         da = np.mean(correct_direction)
         n_correct = int(np.sum(correct_direction))
         
-        # Effective sample size accounting for lag-1 autocorrelation
-        # in the correct/incorrect series (RES-1257).
+        # Effective sample size accounting for lag-1 autocorrelation.
         correct_float = correct_direction.astype(float)
         if n > 2:
             rho = np.corrcoef(correct_float[:-1], correct_float[1:])[0, 1]
@@ -125,7 +123,7 @@ class PerformanceEvaluator:
             rho = 0.0
             n_eff = float(n)
         
-        # Z-test with continuity correction (RES-1257 / RES-1375)
+        # Z-test with continuity correction
         # H0: p = 0.5, H1: p > 0.5
         z_stat = (da - 0.5 - 0.5 / n_eff) / np.sqrt(0.25 / n_eff)
         z_stat = max(z_stat, 0.0)
@@ -244,8 +242,7 @@ class PerformanceEvaluator:
         """
         Calculate Cumulative Z-scored Absolute Return (CZAR) improvement.
 
-        Replaces ZPTAE as a primary metric (RES-1293, research#285).
-        Measures the fraction of z-scored directional returns captured by
+        Replaces ZPTAE as a primary metric. Measures the fraction of z-scored directional returns captured by
         the model relative to a perfect-direction oracle.
 
         A value of 0 corresponds to random guessing (50% DA); 1.0 means

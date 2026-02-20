@@ -12,9 +12,9 @@ evaluating, and deploying machine-learning models to the
   Atlas (Tiingo), Binance, or the legacy Allora API.
 - **Feature engineering** — Resample bars to any interval and extract
   normalised OHLCV feature vectors with Numba-accelerated extraction.
-- **Evaluation** — 7 primary metrics aligned with the Research team's
-  framework, plus regression, classification, and trading-simulation
-  metrics.
+- **Evaluation** — 7 primary metrics aligned with the Allora Network
+  evaluation framework, plus regression, classification, and
+  trading-simulation metrics.
 - **Topic discovery** — Query all active Allora Network topics and their
   configuration via the `allora_sdk` API client.
 - **Deployment** — Pickle a prediction function and deploy it as an
@@ -100,8 +100,7 @@ that worked with the legacy Allora data service works with Atlas.
 
 ### 7 Primary Metrics (pass/fail thresholds)
 
-Updated per the Research team's framework (RES-1271, RES-1293, RES-1257,
-RES-1375).
+Updated for the v3.0 evaluation framework.
 
 | # | Metric | Threshold | Direction |
 |---|--------|-----------|-----------|

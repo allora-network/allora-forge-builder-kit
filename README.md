@@ -35,7 +35,7 @@ The default `"allora"` data source now connects to the **Atlas API** (`forge-dat
 
 ### 2. **Updated Performance Metrics with A+ to F Grading**
 
-Model predictions are scored using the **Research team's latest evaluation framework** (RES-1271, RES-1293, RES-1257, RES-1375) with clear, actionable feedback.
+Model predictions are scored using the **latest evaluation framework** with clear, actionable feedback.
 
 **The Grading System:**
 - **7 primary metrics** with pass/fail thresholds:
