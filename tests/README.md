@@ -67,12 +67,15 @@ pytest tests/test_data_managers.py::test_factory_returns_binance_manager -v
 
 ```
 tests/
-├── test_data_managers.py    # Data manager and workflow tests
-├── test_evaluation.py       # Evaluation metrics tests
-└── README.md                 # This file
+├── test_data_managers.py           # Data manager and workflow tests (30)
+├── test_evaluation.py              # Evaluation metrics tests (18)
+├── test_feature_integrity.py       # Feature normalization checks (3)
+├── test_target_integrity.py        # Log-return target checks (3)
+├── test_live_features_consistency.py  # Live vs historical (3, skipped)
+└── README.md
 
 Test Structure:
-├── test_data_managers.py
+├── test_data_managers.py (30 tests)
 │   ├── Unit Tests - Factory Pattern (4 tests)
 │   ├── Unit Tests - BinanceDataManager (3 tests)
 │   ├── Unit Tests - AtlasDataManager (2 tests)
@@ -81,15 +84,27 @@ Test Structure:
 │   ├── Integration Tests - Binance (3 tests)
 │   ├── Integration Tests - Atlas/Allora (3 tests)
 │   ├── Integration Tests - Workflow Binance (3 tests)
-│   ├── Integration Tests - Workflow Allora (2 tests)
+│   ├── Integration Tests - Workflow Allora (3 tests)
 │   └── Integration Tests - Compare Sources (1 test)
-├── test_evaluation.py
+│   └── Integration Tests - End-to-End Atlas (1 test)
+│   └── Integration Tests - End-to-End Binance (1 test)
+├── test_evaluation.py (18 tests)
 │   ├── Directional Accuracy (5 tests)
 │   ├── Pearson Correlation (2 tests)
 │   ├── WRMSE Improvement (2 tests)
 │   ├── CZAR Improvement (3 tests)
 │   ├── Threshold pass/fail (2 tests)
 │   └── Full evaluate pipeline (4 tests)
+├── test_feature_integrity.py (3 tests)
+│   ├── 5-min bars feature integrity
+│   ├── 1-hour bars feature integrity
+│   └── Multi-asset feature integrity
+├── test_target_integrity.py (3 tests)
+│   ├── 5-min bars target integrity
+│   ├── 1-hour bars target integrity
+│   └── Multi-asset target integrity
+├── test_live_features_consistency.py (3 tests, skipped)
+│   └── Needs rewrite against current workflow API
 └── README.md
 
 Total: 57 tests (35 unit + 19 integration + 3 skipped)
