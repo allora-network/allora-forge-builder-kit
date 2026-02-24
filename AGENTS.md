@@ -86,8 +86,11 @@ notebooks/
   Allora Forge Builder Kit.ipynb
 
 tests/
-  test_data_managers.py     # 27 tests (15 unit + 12 integration)
+  test_data_managers.py     # 30 tests (17 unit + 13 integration)
   test_evaluation.py        # 18 unit tests for PerformanceEvaluator
+  test_feature_integrity.py # 3 integration tests (feature normalization)
+  test_target_integrity.py  # 3 integration tests (log-return targets)
+  test_live_features_consistency.py  # 3 tests (skipped, needs API rewrite)
 ```
 
 ## Data Sources

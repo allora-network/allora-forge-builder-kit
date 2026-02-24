@@ -70,7 +70,7 @@ Model predictions are scored using the **latest evaluation framework** with clea
 
 - **Standalone feature conversion**: Convert 1-minute candles into features at any interval
 - **Feature engineering guidance**: Examples for SMAs, MACD, RSI, and more
-- **45 tests**: 33 unit + 12 integration tests covering all data sources and evaluation metrics
+- **57 tests**: 35 unit + 19 integration + 3 skipped, covering all data sources and evaluation metrics
 - **Improved live feature extraction** with production-ready error handling
 
 ---
@@ -481,8 +481,8 @@ pytest tests/test_data_managers.py -v
 ```
 
 **Test Coverage:**
-- ✅ 33 Unit Tests (factory, initialization, storage, workflow, evaluation metrics)
-- ✅ 12 Integration Tests (Binance + Allora live APIs, full pipelines)
+- ✅ 35 Unit Tests (factory, initialization, storage, workflow, evaluation metrics)
+- ✅ 19 Integration Tests (Binance + Allora live APIs, full pipelines, feature/target integrity)
 
 **Integration Tests:**
 - `test_binance_get_live_1min_data` - Verify 1-minute data fetching
@@ -518,7 +518,7 @@ See [tests/README.md](tests/README.md) for detailed documentation.
 
 ### For Developers
 - **Modular architecture**: Easy to extend with new data sources
-- **Well-tested**: 45 tests covering all functionality
+- **Well-tested**: 57 tests covering all functionality
 - **Type-safe**: Clear interfaces and error messages
 - **Open source**: Apache 2.0 license
 

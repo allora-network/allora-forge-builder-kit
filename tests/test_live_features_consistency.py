@@ -21,7 +21,9 @@ def _load_api_key():
         return key
     for p in [Path("notebooks/.allora_api_key"), Path(".allora_api_key")]:
         if p.exists():
-            return p.read_text().strip()
+            content = p.read_text().strip()
+            if content:
+                return content
     return None
 
 

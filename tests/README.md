@@ -92,7 +92,7 @@ Test Structure:
 │   └── Full evaluate pipeline (4 tests)
 └── README.md
 
-Total: 45 tests (33 unit + 12 integration)
+Total: 57 tests (35 unit + 19 integration + 3 skipped)
 ```
 
 ## Requirements
@@ -125,7 +125,7 @@ tests/test_data_managers.py::test_factory_returns_binance_manager PASSED
 tests/test_data_managers.py::test_factory_returns_allora_manager PASSED
 tests/test_data_managers.py::test_factory_invalid_source PASSED
 ...
-======================== 33 passed in 1.5s ==========================
+======================== 35 passed in 1.5s ==========================
 ```
 
 ### Integration Tests (May be slow)
@@ -134,7 +134,7 @@ tests/test_data_managers.py::test_factory_invalid_source PASSED
 tests/test_data_managers.py::test_binance_backfill_and_load PASSED [10s]
 tests/test_data_managers.py::test_allora_backfill_and_load PASSED [15s]
 ...
-======================== 45 passed in 45s ==========================
+======================== 54 passed, 3 skipped in 45s ==========================
 ```
 
 ## Troubleshooting
