@@ -212,6 +212,31 @@ class AtlasDataManager(BaseDataManager):
             return self._rows_to_dataframe(data["results"])
         return pd.DataFrame()
 
+    def _bulk_download_chunked(
+        self,
+        dataset_id: int,
+        start: datetime,
+        end: datetime,
+        chunk_days: int = 30,
+    ) -> pd.DataFrame:
+        """Download large date ranges in monthly chunks to avoid 502 errors.
+
+        Atlas cannot serialize millions of rows in a single response.
+        This splits the range into chunks and concatenates the results.
+        """
+        chunks: list[pd.DataFrame] = []
+        chunk_start = start
+        while chunk_start < end:
+            chunk_end = min(chunk_start + timedelta(days=chunk_days), end)
+            df = self._bulk_download(dataset_id, start=chunk_start, end=chunk_end)
+            if not df.empty:
+                chunks.append(df)
+            chunk_start = chunk_end + timedelta(microseconds=1)
+
+        if not chunks:
+            return pd.DataFrame()
+        return pd.concat(chunks, ignore_index=True).sort_values("date").reset_index(drop=True)
+
     @staticmethod
     def _rows_to_dataframe(rows: list) -> pd.DataFrame:
         """Convert Atlas row objects into a flat DataFrame."""
@@ -343,8 +368,8 @@ class AtlasDataManager(BaseDataManager):
 
         days_span = (end - start).days
         if days_span > 30:
-            print(f"[Atlas backfill] {symbol}: using bulk download ({days_span} days)")
-            combined_df = self._bulk_download(dataset_id, start=start, end=end)
+            print(f"[Atlas backfill] {symbol}: bulk download in monthly chunks ({days_span} days)")
+            combined_df = self._bulk_download_chunked(dataset_id, start=start, end=end)
         else:
             combined_df = self._fetch_rows_paginated(dataset_id, start=start, end=end)
 
