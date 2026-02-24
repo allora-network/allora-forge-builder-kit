@@ -72,18 +72,20 @@ class AlloraTopicDiscovery:
             )
         chain_id = ChainID.MAINNET if network.lower() == "mainnet" else ChainID.TESTNET
         self._client = AlloraAPIClient(chain_id=chain_id, api_key=api_key)
+        self._topics_cache: Optional[List[TopicInfo]] = None
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def get_all_topics(self) -> List[TopicInfo]:
-        """Return every active topic on the network."""
-        return _run(self._async_get_all_topics())
+    def get_all_topics(self, refresh: bool = False) -> List[TopicInfo]:
+        """Return every active topic on the network (cached after first call)."""
+        if self._topics_cache is None or refresh:
+            self._topics_cache = _run(self._async_get_all_topics())
+        return self._topics_cache
 
     def get_topic(self, topic_id: int) -> Optional[TopicInfo]:
         """Fetch a single topic by ID, or ``None`` if not found."""
-        topics = self.get_all_topics()
-        for t in topics:
+        for t in self.get_all_topics():
             if t.topic_id == topic_id:
                 return t
         return None
@@ -150,15 +152,25 @@ class AlloraTopicDiscovery:
 # Utility: run async in sync context
 # ------------------------------------------------------------------
 def _run(coro):
-    """Execute an async coroutine from synchronous code."""
+    """Execute an async coroutine from synchronous code.
+
+    Handles Jupyter/IPython environments where an event loop is already
+    running by patching it with nest_asyncio (preferred) or falling back
+    to a thread-based approach.
+    """
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = None
 
-    if loop and loop.is_running():
-        import concurrent.futures
+    if loop is None or not loop.is_running():
+        return asyncio.run(coro)
 
-        with concurrent.futures.ThreadPoolExecutor() as pool:
+    try:
+        import nest_asyncio
+        nest_asyncio.apply()
+        return loop.run_until_complete(coro)
+    except ImportError:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(asyncio.run, coro).result()
-    return asyncio.run(coro)

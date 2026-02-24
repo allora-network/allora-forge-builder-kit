@@ -16,6 +16,7 @@ from .base_data_manager import BaseDataManager, day_str
 
 
 ATLAS_BASE_URL = "https://forge-data.allora.run/api"
+_ALLOWED_HOSTS = {"forge-data.allora.run"}
 
 
 class AtlasDataManager(BaseDataManager):
@@ -49,6 +50,15 @@ class AtlasDataManager(BaseDataManager):
         super().__init__(
             base_dir=base_dir, interval=interval, symbols=symbols, cache_len=cache_len
         )
+        from urllib.parse import urlparse
+
+        parsed = urlparse(base_url)
+        if parsed.hostname not in _ALLOWED_HOSTS:
+            raise ValueError(
+                f"base_url host '{parsed.hostname}' is not in the allowed list "
+                f"{_ALLOWED_HOSTS}. This protects against API key leakage."
+            )
+
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.headers = {"X-API-Key": api_key}
@@ -146,9 +156,16 @@ class AtlasDataManager(BaseDataManager):
                 )
                 resp.raise_for_status()
                 payload = resp.json()
-            except Exception as e:
-                print(f"[Atlas API error] dataset={dataset_id} offset={offset}: {e}")
-                break
+            except requests.exceptions.RequestException as e:
+                if all_rows:
+                    import warnings
+                    warnings.warn(
+                        f"[Atlas API] Partial data: got {len(all_rows)} rows before "
+                        f"error at offset {offset}: {e}",
+                        stacklevel=2,
+                    )
+                    break
+                raise
 
             results = payload.get("results", [])
             if not results:

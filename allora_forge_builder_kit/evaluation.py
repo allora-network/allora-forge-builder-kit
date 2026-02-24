@@ -104,9 +104,24 @@ class PerformanceEvaluator:
         Returns:
             Dictionary with DA, confidence interval, and p-value
         """
-        n = len(y_true)
-        
-        correct_direction = np.sign(y_true) == np.sign(y_pred)
+        # Exclude zero true returns where direction is undefined
+        nonzero = y_true != 0
+        y_true_nz = y_true[nonzero]
+        y_pred_nz = y_pred[nonzero]
+        n = len(y_true_nz)
+
+        if n == 0:
+            return {
+                'directional_accuracy': 0.5,
+                'da_ci_lower': 0.0,
+                'da_ci_upper': 1.0,
+                'da_pvalue': 1.0,
+                'da_n_effective': 0.0,
+                'da_n_samples': 0,
+                'da_n_correct': 0,
+            }
+
+        correct_direction = np.sign(y_true_nz) == np.sign(y_pred_nz)
         da = np.mean(correct_direction)
         n_correct = int(np.sum(correct_direction))
         
@@ -268,11 +283,7 @@ class PerformanceEvaluator:
 
         czar_model = np.sum(np.where(correct, np.abs(z_true), -np.abs(z_true)))
         czar_oracle = np.sum(np.abs(z_true))
-
-        if czar_oracle > 0:
-            czar_improvement = czar_model / czar_oracle
-        else:
-            czar_improvement = 0.0
+        czar_improvement = czar_model / czar_oracle
 
         return {
             'czar_model': czar_model,
@@ -557,7 +568,8 @@ class PerformanceEvaluator:
         self,
         y_true: np.ndarray,
         y_pred: np.ndarray,
-        epoch_length_minutes: int = 60
+        epoch_length_minutes: int = 60,
+        n_expected_epochs: Optional[int] = None,
     ) -> Dict:
         """
         Calculate all performance metrics for log return predictions.
@@ -597,8 +609,12 @@ class PerformanceEvaluator:
         # Check pass/fail for the 7 primary metrics
         passed = self.check_primary_metrics_pass(metrics)
 
-        # Temporal coverage defaults to True when evaluated offline
-        score, grade, num_passed = self.calculate_performance_score(passed)
+        temporal_pass = True
+        if n_expected_epochs is not None:
+            temporal_pass = self.check_temporal_coverage(len(y_true), n_expected_epochs)
+        score, grade, num_passed = self.calculate_performance_score(
+            passed, temporal_coverage_pass=temporal_pass
+        )
 
         report = {
             'metrics': metrics,
