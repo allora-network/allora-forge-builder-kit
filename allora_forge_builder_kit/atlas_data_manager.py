@@ -231,11 +231,12 @@ class AtlasDataManager(BaseDataManager):
             df = self._bulk_download(dataset_id, start=chunk_start, end=chunk_end)
             if not df.empty:
                 chunks.append(df)
-            chunk_start = chunk_end + timedelta(microseconds=1)
+            chunk_start = chunk_end + timedelta(seconds=1)
 
         if not chunks:
             return pd.DataFrame()
-        return pd.concat(chunks, ignore_index=True).sort_values("date").reset_index(drop=True)
+        combined = pd.concat(chunks, ignore_index=True)
+        return combined.drop_duplicates(subset=["date"]).sort_values("date").reset_index(drop=True)
 
     @staticmethod
     def _rows_to_dataframe(rows: list) -> pd.DataFrame:
