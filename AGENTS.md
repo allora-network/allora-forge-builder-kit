@@ -75,6 +75,10 @@ allora_forge_builder_kit/
   topic_discovery.py        # AlloraTopicDiscovery via allora_sdk
   utils.py                  # Helpers (get_api_key)
 
+skills/
+  allora-data-exploration/SKILL.md   # Data exploration guide
+  allora-model-builder/SKILL.md      # Model building guide
+
 notebooks/
   example_topic_69_bitcoin_walkthrough.py
   deploy_worker.py
@@ -82,7 +86,8 @@ notebooks/
   Allora Forge Builder Kit.ipynb
 
 tests/
-  test_data_managers.py     # 28 tests (16 unit + 12 integration)
+  test_data_managers.py     # 27 tests (15 unit + 12 integration)
+  test_evaluation.py        # 18 unit tests for PerformanceEvaluator
 ```
 
 ## Data Sources

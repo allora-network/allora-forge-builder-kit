@@ -63,14 +63,14 @@ Model predictions are scored using the **latest evaluation framework** with clea
 
 - **`AlloraTopicDiscovery`**: Query all active Allora Network topics and their configuration via `allora_sdk`
 - **`AGENTS.md`**: Structured instructions for AI agents working with this repository
-- **`.cursor/skills/`**: Focused skill packages for model building and data exploration
+- **`skills/`**: Focused skill packages for model building and data exploration
 - **SDK compatibility**: Updated for `allora_sdk >= 1.0.6`
 
 ### 4. **Enhanced Workflow & Feature Engineering**
 
 - **Standalone feature conversion**: Convert 1-minute candles into features at any interval
 - **Feature engineering guidance**: Examples for SMAs, MACD, RSI, and more
-- **27 tests**: 15 unit + 12 integration tests covering all data sources
+- **45 tests**: 33 unit + 12 integration tests covering all data sources and evaluation metrics
 - **Improved live feature extraction** with production-ready error handling
 
 ---
@@ -481,8 +481,8 @@ pytest tests/test_data_managers.py -v
 ```
 
 **Test Coverage:**
-- ✅ 17 Unit Tests (factory, initialization, storage)
-- ✅ 6 Integration Tests (Binance + Allora live APIs)
+- ✅ 33 Unit Tests (factory, initialization, storage, workflow, evaluation metrics)
+- ✅ 12 Integration Tests (Binance + Allora live APIs, full pipelines)
 
 **Integration Tests:**
 - `test_binance_get_live_1min_data` - Verify 1-minute data fetching
@@ -518,7 +518,7 @@ See [tests/README.md](tests/README.md) for detailed documentation.
 
 ### For Developers
 - **Modular architecture**: Easy to extend with new data sources
-- **Well-tested**: 27 tests covering all functionality
+- **Well-tested**: 45 tests covering all functionality
 - **Type-safe**: Clear interfaces and error messages
 - **Open source**: Apache 2.0 license
 

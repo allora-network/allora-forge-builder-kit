@@ -22,3 +22,15 @@ __all__ = [
     "AlloraTopicDiscovery",
     "TopicInfo",
 ]
+
+
+def __getattr__(name):
+    if name == "AlloraDataManager":
+        import warnings
+        warnings.warn(
+            "AlloraDataManager was removed in v3.0. Use AtlasDataManager instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return AtlasDataManager
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

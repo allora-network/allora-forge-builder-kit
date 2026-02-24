@@ -43,8 +43,8 @@ class AtlasDataManager(BaseDataManager):
         interval: str = "5m",
         symbols: Optional[List[str]] = None,
         cache_len: int = 1000,
-        page_size: int = 250,
-        sleep_sec: float = 0.05,
+        page_size: int = 1000,
+        sleep_sec: float = 0.0,
     ):
         super().__init__(
             base_dir=base_dir, interval=interval, symbols=symbols, cache_len=cache_len
@@ -63,6 +63,17 @@ class AtlasDataManager(BaseDataManager):
     @staticmethod
     def _normalize_ticker(ticker: str) -> str:
         return ticker.replace("/", "").replace("-", "").lower()
+
+    def _interval_minutes(self) -> int:
+        """Convert interval string (e.g. '5m', '1h', '1d') to minutes."""
+        iv = self.interval
+        if iv.endswith("h"):
+            return int(iv[:-1]) * 60
+        elif iv.endswith("d"):
+            return int(iv[:-1]) * 1440
+        elif iv.endswith("min"):
+            return int(iv[:-3])
+        return int(iv[:-1])
 
     def _interval_to_pandas_freq(self) -> str:
         interval = self.interval
@@ -239,7 +250,7 @@ class AtlasDataManager(BaseDataManager):
 
             last_ts = df.index[-1]
             minute = last_ts.minute
-            offset_minutes = (minute + 1) % int(self.interval[:-1])
+            offset_minutes = (minute + 1) % self._interval_minutes()
             offset = f"{offset_minutes}min" if offset_minutes != 0 else "0min"
 
             agg_dict = {
@@ -290,7 +301,18 @@ class AtlasDataManager(BaseDataManager):
         only_days: Optional[set] = None,
     ):
         self._in_backfill = True
+        try:
+            self._backfill_symbol_impl(symbol, start, end, only_days)
+        finally:
+            self._in_backfill = False
 
+    def _backfill_symbol_impl(
+        self,
+        symbol: str,
+        start: datetime,
+        end: Optional[datetime],
+        only_days: Optional[set],
+    ):
         if start.tzinfo is None:
             start = start.replace(tzinfo=timezone.utc)
         if end is None:
@@ -311,7 +333,6 @@ class AtlasDataManager(BaseDataManager):
 
         if combined_df.empty:
             print(f"[Atlas backfill] {symbol}: no data returned")
-            self._in_backfill = False
             return
 
         combined_df = combined_df.rename(columns={"date": "open_time"})
@@ -327,30 +348,17 @@ class AtlasDataManager(BaseDataManager):
         else:
             print(f"[Atlas backfill] {symbol}: writing {len(combined_df)} bars")
 
-        bars_list = []
-        for _, row in combined_df.iterrows():
-            bars_list.append(
-                {
-                    "open_time": row["open_time"],
-                    "open": float(row["open"]),
-                    "high": float(row["high"]),
-                    "low": float(row["low"]),
-                    "close": float(row["close"]),
-                    "volume": float(row.get("volume", 0)),
-                    "symbol": symbol,
-                }
-            )
+        combined_df["volume"] = combined_df["volume"].fillna(0)
+        combined_df["symbol"] = symbol
+        combined_df["_day"] = combined_df["open_time"].dt.strftime("%Y-%m-%d")
 
-        by_day: Dict[str, list] = defaultdict(list)
-        for bar in bars_list:
-            d = day_str(bar["open_time"])
-            by_day[d].append(bar)
-
-        for day, day_bars in by_day.items():
-            path = self._partition_path(symbol, day)
+        for day_val, group in combined_df.groupby("_day"):
+            path = self._partition_path(symbol, day_val)
             os.makedirs(os.path.dirname(path), exist_ok=True)
 
-            new_df = pl.DataFrame(day_bars)
+            new_df = pl.from_pandas(
+                group[["open_time", "open", "high", "low", "close", "volume", "symbol"]]
+            )
             if os.path.exists(path):
                 old_df = pl.read_parquet(path)
                 df = (
@@ -362,8 +370,8 @@ class AtlasDataManager(BaseDataManager):
                 df = new_df.sort("open_time")
             df.write_parquet(path)
 
-        print(f"[Atlas backfill] {symbol}: wrote {len(by_day)} daily parquet files")
-        self._in_backfill = False
+        n_days = combined_df["_day"].nunique()
+        print(f"[Atlas backfill] {symbol}: wrote {n_days} daily parquet files")
 
     def backfill_realtime(self, symbols: List[str]):
         self._clean_corrupt_files()
@@ -375,7 +383,7 @@ class AtlasDataManager(BaseDataManager):
                 start = datetime(2020, 1, 1, tzinfo=timezone.utc)
                 print(f"[Atlas backfill-realtime] {sym}: no history, full backfill")
             else:
-                start = last - timedelta(minutes=int(self.interval[:-1]))
+                start = last - timedelta(minutes=self._interval_minutes())
                 print(f"[Atlas backfill-realtime] {sym}: resuming from {start}")
             self.backfill_symbol(sym, start, end=now)
 
@@ -432,18 +440,24 @@ class AtlasDataManager(BaseDataManager):
                 )
 
                 for (year, month), days_in_month in months_needed.items():
-                    month_start = datetime(year, month, 1, tzinfo=timezone.utc)
-                    if month == 12:
-                        month_end = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - timedelta(
-                            microseconds=1
-                        )
+                    if len(days_in_month) <= 7:
+                        for day in days_in_month:
+                            day_start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+                            day_end = day_start + timedelta(days=1) - timedelta(microseconds=1)
+                            self.backfill_symbol(sym, day_start, end=day_end)
                     else:
-                        month_end = datetime(year, month + 1, 1, tzinfo=timezone.utc) - timedelta(
-                            microseconds=1
+                        month_start = datetime(year, month, 1, tzinfo=timezone.utc)
+                        if month == 12:
+                            month_end = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - timedelta(
+                                microseconds=1
+                            )
+                        else:
+                            month_end = datetime(year, month + 1, 1, tzinfo=timezone.utc) - timedelta(
+                                microseconds=1
+                            )
+                        self.backfill_symbol(
+                            sym, month_start, end=month_end, only_days=set(days_in_month)
                         )
-                    self.backfill_symbol(
-                        sym, month_start, end=month_end, only_days=set(days_in_month)
-                    )
 
             if last:
                 latest_start = last + timedelta(milliseconds=1)

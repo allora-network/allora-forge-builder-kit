@@ -5,6 +5,7 @@ This ensures that the target (log return) corresponds exactly to the actual
 future price movement by finding the correct future bar and recalculating.
 """
 
+import os
 import pytest
 import pandas as pd
 import numpy as np
@@ -14,12 +15,20 @@ from pathlib import Path
 from allora_forge_builder_kit import AlloraMLWorkflow
 
 
-# Load API key
-api_key_file = Path(".allora_api_key")
-if api_key_file.exists():
-    ALLORA_API_KEY = api_key_file.read_text().strip()
-else:
-    raise FileNotFoundError(f"API key file not found: {api_key_file}")
+def _load_api_key():
+    key = os.environ.get("ALLORA_API_KEY")
+    if key:
+        return key
+    for p in [Path("notebooks/.allora_api_key"), Path(".allora_api_key")]:
+        if p.exists():
+            return p.read_text().strip()
+    return None
+
+
+ALLORA_API_KEY = _load_api_key()
+pytestmark = pytest.mark.skipif(
+    ALLORA_API_KEY is None, reason="ALLORA_API_KEY not available"
+)
 
 
 def test_target_integrity_5min():
