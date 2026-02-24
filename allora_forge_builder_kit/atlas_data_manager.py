@@ -245,7 +245,7 @@ class AtlasDataManager(BaseDataManager):
 
         records = []
         for row in rows:
-            vals = row.get("values", {})
+            vals = row.get("values", None) or row
             records.append(
                 {
                     "date": row["timestamp"],

@@ -216,6 +216,36 @@ def test_partition_path(tmp_path):
     assert "dt=2025-10-06.parquet" in path
 
 
+def test_rows_to_dataframe_nested_format():
+    """Test _rows_to_dataframe with nested /api/rows/ format."""
+    from allora_forge_builder_kit.atlas_data_manager import AtlasDataManager
+
+    rows = [
+        {"timestamp": "2024-06-01T00:00:00Z", "values": {"open": 100.0, "high": 110.0, "low": 90.0, "close": 105.0, "volume": 50}},
+        {"timestamp": "2024-06-01T00:01:00Z", "values": {"open": 105.0, "high": 115.0, "low": 95.0, "close": 108.0, "volume": 60}},
+    ]
+    df = AtlasDataManager._rows_to_dataframe(rows)
+    assert len(df) == 2
+    assert df["open"].iloc[0] == 100.0
+    assert df["close"].iloc[1] == 108.0
+    assert not df[["open", "high", "low", "close"]].isna().any().any()
+
+
+def test_rows_to_dataframe_flat_format():
+    """Test _rows_to_dataframe with flat bulk_download format."""
+    from allora_forge_builder_kit.atlas_data_manager import AtlasDataManager
+
+    rows = [
+        {"timestamp": "2024-06-01T00:00:00Z", "open": 67475.15, "high": 67515.47, "low": 67400.0, "close": 67506.88, "volume": 123.4},
+        {"timestamp": "2024-06-01T00:01:00Z", "open": 67506.88, "high": 67550.0, "low": 67490.0, "close": 67530.0, "volume": 456.7},
+    ]
+    df = AtlasDataManager._rows_to_dataframe(rows)
+    assert len(df) == 2
+    assert df["open"].iloc[0] == 67475.15
+    assert df["close"].iloc[1] == 67530.0
+    assert not df[["open", "high", "low", "close"]].isna().any().any()
+
+
 # ============================================================================
 # Unit Tests - Workflow Integration
 # ============================================================================
