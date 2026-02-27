@@ -185,6 +185,7 @@ class AtlasDataManager(BaseDataManager):
         dataset_id: int,
         start: Optional[datetime] = None,
         end: Optional[datetime] = None,
+        raise_on_error: bool = False,
     ) -> pd.DataFrame:
         """Efficient bulk download using Atlas streaming endpoint."""
         params: dict = {"dataset": dataset_id, "output": "json"}
@@ -203,6 +204,8 @@ class AtlasDataManager(BaseDataManager):
             resp.raise_for_status()
             data = resp.json()
         except Exception as e:
+            if raise_on_error:
+                raise
             print(f"[Atlas bulk download error] dataset={dataset_id}: {e}")
             return pd.DataFrame()
 
@@ -218,19 +221,55 @@ class AtlasDataManager(BaseDataManager):
         start: datetime,
         end: datetime,
         chunk_days: int = 30,
+        min_chunk_days: int = 1,
+        retries: int = 3,
     ) -> pd.DataFrame:
-        """Download large date ranges in monthly chunks to avoid 502 errors.
+        """Download large ranges in resilient chunks with retry + split-on-failure.
 
-        Atlas cannot serialize millions of rows in a single response.
-        This splits the range into chunks and concatenates the results.
+        If a chunk fails repeatedly (timeouts/network), it is recursively split
+        into smaller chunks until `min_chunk_days` is reached.
         """
+
+        def _download_resilient(chunk_start: datetime, chunk_end: datetime, days_hint: int) -> list[pd.DataFrame]:
+            last_error = None
+            for attempt in range(1, retries + 1):
+                try:
+                    df = self._bulk_download(
+                        dataset_id,
+                        start=chunk_start,
+                        end=chunk_end,
+                        raise_on_error=True,
+                    )
+                    return [df] if not df.empty else []
+                except Exception as e:
+                    last_error = e
+                    if attempt < retries:
+                        time.sleep(min(5.0, attempt * 1.5))
+
+            span_days = max((chunk_end - chunk_start).total_seconds() / 86400.0, 0.0)
+            if span_days <= float(min_chunk_days):
+                print(
+                    f"[Atlas backfill] giving up chunk {chunk_start.date()} -> {chunk_end.date()} "
+                    f"after {retries} retries: {last_error}"
+                )
+                return []
+
+            midpoint = chunk_start + (chunk_end - chunk_start) / 2
+            left_end = midpoint
+            right_start = midpoint + timedelta(seconds=1)
+            next_hint = max(min_chunk_days, int(days_hint / 2) or min_chunk_days)
+
+            print(
+                f"[Atlas backfill] splitting failed chunk {chunk_start.date()} -> {chunk_end.date()} "
+                f"into {chunk_start.date()} -> {left_end.date()} and {right_start.date()} -> {chunk_end.date()}"
+            )
+            return _download_resilient(chunk_start, left_end, next_hint) + _download_resilient(right_start, chunk_end, next_hint)
+
         chunks: list[pd.DataFrame] = []
         chunk_start = start
         while chunk_start < end:
             chunk_end = min(chunk_start + timedelta(days=chunk_days), end)
-            df = self._bulk_download(dataset_id, start=chunk_start, end=chunk_end)
-            if not df.empty:
-                chunks.append(df)
+            chunks.extend(_download_resilient(chunk_start, chunk_end, chunk_days))
             chunk_start = chunk_end + timedelta(seconds=1)
 
         if not chunks:
@@ -368,9 +407,16 @@ class AtlasDataManager(BaseDataManager):
         dataset_id = self._resolve_dataset_id(symbol)
 
         days_span = (end - start).days
-        if days_span > 30:
-            print(f"[Atlas backfill] {symbol}: bulk download in monthly chunks ({days_span} days)")
-            combined_df = self._bulk_download_chunked(dataset_id, start=start, end=end)
+        if days_span > 14:
+            print(f"[Atlas backfill] {symbol}: resilient bulk download in 14-day chunks ({days_span} days)")
+            combined_df = self._bulk_download_chunked(
+                dataset_id,
+                start=start,
+                end=end,
+                chunk_days=14,
+                min_chunk_days=1,
+                retries=3,
+            )
         else:
             combined_df = self._fetch_rows_paginated(dataset_id, start=start, end=end)
 
