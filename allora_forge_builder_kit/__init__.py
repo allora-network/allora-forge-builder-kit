@@ -8,6 +8,8 @@ from .data_manager_factory import DataManager, list_data_sources
 from .utils import get_api_key
 from .evaluation import PerformanceEvaluator
 from .topic_discovery import AlloraTopicDiscovery, TopicInfo
+from .worker_manager import WorkerManager, WorkerSpec, DeployResult, Identity, build_topic_desc_resolver
+from .worker_monitor import WorkerMonitor, MonitorTarget, AlloraSDKEventFetcher
 
 __all__ = [
     "__version__",
@@ -21,6 +23,14 @@ __all__ = [
     "PerformanceEvaluator",
     "AlloraTopicDiscovery",
     "TopicInfo",
+    "WorkerManager",
+    "WorkerSpec",
+    "DeployResult",
+    "Identity",
+    "build_topic_desc_resolver",
+    "WorkerMonitor",
+    "MonitorTarget",
+    "AlloraSDKEventFetcher",
 ]
 
 

@@ -189,6 +189,34 @@ print(f"Predicted BTC price (24h): ${predict():,.2f}")
 - [`notebooks/feature_engineering_example.py`](notebooks/feature_engineering_example.py) - Feature engineering with technical indicators
 - [`notebooks/Allora Wallet Creator.ipynb`](notebooks/Allora%20Wallet%20Creator.ipynb) - Create and fund Allora wallets for deployment
 - [`notebooks/deploy_worker.py`](notebooks/deploy_worker.py) - Deploy your trained model to Allora Network
+- [`notebooks/deploy_worker_grid.py`](notebooks/deploy_worker_grid.py) - Manage/deploy multiple topic workers with smart address assignment
+
+---
+
+## 🧰 Multi-Topic Worker Manager (Lightweight)
+
+Use `WorkerManager` for local 24/7 operation across many topics while enforcing one worker per `(topic_id, address)`.
+
+```python
+from pathlib import Path
+from allora_forge_builder_kit import WorkerManager
+
+wm = WorkerManager(db_path="worker_state.db", secrets_path="worker_secrets.json")
+
+# If no address is supplied, manager reuses an available managed address;
+# otherwise it creates a new one.
+result = wm.deploy_worker(topic_id=69, artifact_path=Path("predict.pkl"))
+print(result.action, result.message)
+
+wm.start_all()
+print(wm.health_all())
+```
+
+Behavior highlights:
+- Unique constraint on `(topic_id, address)`
+- `replace=True` updates an existing worker in place
+- Smart auto assignment if user omits address
+- Simple local persistence via SQLite + JSON secret store
 
 ---
 
