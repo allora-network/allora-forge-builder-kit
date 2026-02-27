@@ -192,6 +192,57 @@ def test_atlas_manager_default_directory():
     assert dm.base_dir == "parquet_data_allora"
 
 
+def test_atlas_bulk_download_chunked_splits_on_failure(tmp_path):
+    dm = AtlasDataManager(api_key="test-key", interval="5m", base_dir=str(tmp_path / "allora_data"))
+
+    calls = []
+
+    def fake_bulk(dataset_id, start=None, end=None, raise_on_error=False):
+        span_days = (end - start).total_seconds() / 86400.0
+        calls.append(span_days)
+        if span_days > 15:
+            raise requests.exceptions.ReadTimeout("simulated timeout")
+        # return a tiny valid frame
+        return pd.DataFrame(
+            {
+                "date": pd.to_datetime([start], utc=True),
+                "open": [1.0],
+                "high": [1.0],
+                "low": [1.0],
+                "close": [1.0],
+                "volume": [1.0],
+                "trades_done": [1],
+                "volume_notional": [1.0],
+            }
+        )
+
+    dm._bulk_download = fake_bulk
+
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2026, 2, 10, tzinfo=timezone.utc)
+    out = dm._bulk_download_chunked(dataset_id=1, start=start, end=end, chunk_days=30, min_chunk_days=1, retries=1)
+
+    assert not out.empty
+    # prove splitting happened at least once
+    assert any(span > 15 for span in calls)
+    assert any(span <= 15 for span in calls)
+
+
+def test_atlas_bulk_download_chunked_gives_up_at_min_chunk(tmp_path):
+    dm = AtlasDataManager(api_key="test-key", interval="5m", base_dir=str(tmp_path / "allora_data"))
+
+    def always_fail(dataset_id, start=None, end=None, raise_on_error=False):
+        raise requests.exceptions.ReadTimeout("always fail")
+
+    dm._bulk_download = always_fail
+
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2026, 1, 3, tzinfo=timezone.utc)
+    out = dm._bulk_download_chunked(dataset_id=1, start=start, end=end, chunk_days=2, min_chunk_days=1, retries=1)
+
+    assert out.empty
+
+
 # ============================================================================
 # Unit Tests - Storage Structure
 # ============================================================================
