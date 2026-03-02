@@ -199,6 +199,25 @@ class WorkerManager:
             out.append(item)
         return out
 
+    def get_worker_log_tail(self, topic_id: int, address: str, lines: int = 20) -> list[str]:
+        """Return last N stdout log lines for a worker slot."""
+        lines = max(1, min(int(lines), 500))
+        log_path = self.runtime_log_dir / f"worker_{topic_id}_{address}.log"
+        if not log_path.exists():
+            return []
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                data = f.readlines()
+            return [ln.rstrip("\n") for ln in data[-lines:]]
+        except Exception:
+            return []
+
+    def status_all_with_logs(self, include_desc: bool = True, tail_lines: int = 20) -> list[dict]:
+        rows = self.status_all(include_desc=include_desc)
+        for r in rows:
+            r["log_tail"] = self.get_worker_log_tail(r["topic_id"], r["address"], lines=tail_lines)
+        return rows
+
     # ----------------------------
     # Deploy logic (smart assignment)
     # ----------------------------
@@ -657,6 +676,10 @@ class WorkerManager:
                 (deployment_id, topic_id, address, str(artifact_path)),
             )
             conn.commit()
+
+        # API-first safety: always advance monitor target deployment pointer at redeploy,
+        # even when WorkerManager is instantiated without a monitor object.
+        self._set_monitor_target_deployment_db(topic_id=topic_id, address=address, deployment_id=deployment_id)
         return deployment_id
 
     def _get_active_deployment_id(self, topic_id: int, address: str) -> Optional[str]:
@@ -701,6 +724,44 @@ class WorkerManager:
             self._monitor.set_target_enabled(topic_id=topic_id, address=address, enabled=False)
         except Exception:
             pass
+
+    def _set_monitor_target_deployment_db(self, topic_id: int, address: str, deployment_id: str) -> None:
+        """Advance monitor target pointer directly in DB for deployment-scoped stats.
+
+        This keeps monitoring history segmented per deployed artifact even when no
+        WorkerMonitor instance is attached to the active WorkerManager process.
+        """
+        deployed_at = self._get_worker_deployed_at(topic_id, address)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS monitor_targets (
+                    topic_id INTEGER NOT NULL,
+                    address TEXT NOT NULL,
+                    deployed_at TEXT NOT NULL,
+                    deployment_id TEXT,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    last_sync_at TEXT,
+                    PRIMARY KEY(topic_id, address)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO monitor_targets(topic_id, address, deployed_at, deployment_id, enabled, last_sync_at)
+                VALUES(?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?, 1, NULL)
+                """,
+                (topic_id, address, deployed_at, deployment_id),
+            )
+            conn.execute(
+                """
+                UPDATE monitor_targets
+                SET deployment_id=?, deployed_at=COALESCE(?, deployed_at), last_sync_at=NULL
+                WHERE topic_id=? AND address=?
+                """,
+                (deployment_id, deployed_at, topic_id, address),
+            )
+            conn.commit()
 
 
 def build_topic_desc_resolver(api_key: Optional[str] = None, network: str = "testnet") -> Callable[[int], Optional[str]]:

@@ -1,4 +1,5 @@
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -144,3 +145,51 @@ def test_attach_monitor_bootstraps_existing_workers(tmp_path: Path):
     assert mon.targets[0][0] == 69
     assert mon.targets[0][1] == ident.address
     assert mon.synced >= 1
+
+
+def test_redeploy_advances_monitor_target_deployment_without_attached_monitor(tmp_path: Path):
+    manager = _new_manager(tmp_path)
+    ident = manager.ensure_identity(alias="alpha")
+
+    p1 = tmp_path / "v1.pkl"
+    p2 = tmp_path / "v2.pkl"
+    p1.write_text("v1")
+    p2.write_text("v2")
+
+    manager.deploy_worker(topic_id=69, artifact_path=p1, address=ident.address)
+
+    with sqlite3.connect(tmp_path / "state.db") as conn:
+        dep1 = conn.execute(
+            "SELECT deployment_id FROM monitor_targets WHERE topic_id=? AND address=?",
+            (69, ident.address),
+        ).fetchone()[0]
+
+    manager.deploy_worker(topic_id=69, artifact_path=p2, address=ident.address, replace=True, mode="strict")
+
+    with sqlite3.connect(tmp_path / "state.db") as conn:
+        dep2 = conn.execute(
+            "SELECT deployment_id FROM monitor_targets WHERE topic_id=? AND address=?",
+            (69, ident.address),
+        ).fetchone()[0]
+
+    assert dep1
+    assert dep2
+    assert dep1 != dep2
+
+
+def test_status_all_with_logs_returns_tail_and_artifact_path(tmp_path: Path):
+    manager = _new_manager(tmp_path)
+    ident = manager.ensure_identity(alias="alpha")
+    p1 = tmp_path / "1.pkl"
+    p1.write_text("1")
+    manager.deploy_worker(topic_id=77, artifact_path=p1, address=ident.address)
+
+    log_path = manager.runtime_log_dir / f"worker_77_{ident.address}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("l1\nl2\nl3\nl4\n")
+
+    rows = manager.status_all_with_logs(tail_lines=2)
+    row = [r for r in rows if r["topic_id"] == 77 and r["address"] == ident.address][0]
+
+    assert row["artifact_path"].endswith(".pkl")
+    assert row["log_tail"] == ["l3", "l4"]

@@ -6,6 +6,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 from .worker_manager import WorkerManager
 from .worker_monitor import WorkerMonitor, AlloraSDKEventFetcher
@@ -21,8 +22,12 @@ HTML = """<!doctype html>
     .muted { color: #666; }
     .card { border: 1px solid #ddd; border-radius: 10px; padding: 12px; margin: 10px 0; }
     .addr { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+    .path-short { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #444; }
+    .logbox { margin-top: 6px; background: #fafafa; border: 1px solid #eee; border-radius: 8px; padding: 6px; }
+    .logbox summary { cursor: pointer; font-size: 12px; color: #444; }
+    .logpre { margin: 6px 0 0 0; max-height: 220px; overflow: auto; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
     table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-    th, td { text-align: left; border-bottom: 1px solid #eee; padding: 6px; font-size: 14px; }
+    th, td { text-align: left; border-bottom: 1px solid #eee; padding: 6px; font-size: 14px; vertical-align: top; }
     .ok { color: #0a7; }
     .warn { color: #c75; }
   </style>
@@ -32,8 +37,20 @@ HTML = """<!doctype html>
   <div id='meta' class='muted'>Loading...</div>
   <div id='root'></div>
   <script>
+    function esc(s) {
+      const v = (s === null || s === undefined) ? '' : String(s);
+      return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function shortPath(p) {
+      if (!p) return '';
+      const parts = p.split('/');
+      if (parts.length <= 3) return p;
+      return '.../' + parts.slice(-3).join('/');
+    }
+
     async function load() {
-      const r = await fetch('/api/dashboard');
+      const r = await fetch('/api/dashboard?tail=30');
       const d = await r.json();
       document.getElementById('meta').textContent = `Updated: ${d.updated_at} | workers=${d.worker_count} | cadence=5s`;
       const root = document.getElementById('root');
@@ -48,13 +65,23 @@ HTML = """<!doctype html>
           </tr></thead>`;
         const tb = document.createElement('tbody');
         for (const w of grp.workers) {
+          const logs = (w.log_tail || []).join('\\\\n');
           const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${w.topic_id} — ${w.topic_desc || ''}</td>
-            <td>${w.status}</td>
-            <td class='ok'>${w.submission_success} ok</td>
-            <td>${w.inference_count}</td>
-            <td>${w.last_inference_value ?? '—'}</td>
-            <td>${w.last_inference_at ?? '—'}</td>`;
+          tr.innerHTML = `<td>
+              ${esc(w.topic_id)} — ${esc(w.topic_desc || '')}
+              <br><span class='path-short' title='${esc(w.artifact_path || '')}'>${esc(shortPath(w.artifact_path || ''))}</span>
+              <div class='logbox'>
+                <details>
+                  <summary>stdout tail (${(w.log_tail || []).length} lines)</summary>
+                  <pre class='logpre'>${esc(logs || '— no log output yet —')}</pre>
+                </details>
+              </div>
+            </td>
+            <td>${esc(w.status)}</td>
+            <td class='ok'>${esc(w.submission_success)} ok</td>
+            <td>${esc(w.inference_count)}</td>
+            <td>${esc((w.last_inference_value === null || w.last_inference_value === undefined) ? '—' : w.last_inference_value)}</td>
+            <td>${esc((w.last_inference_at === null || w.last_inference_at === undefined) ? '—' : w.last_inference_at)}</td>`;
           tb.appendChild(tr);
         }
         tbl.appendChild(tb);
@@ -97,8 +124,8 @@ class DashboardApp:
     def stop(self):
         self._stop.set()
 
-    def snapshot(self) -> dict:
-        rows = self.wm.status_all()
+    def snapshot(self, tail_lines: int = 20) -> dict:
+        rows = self.wm.status_all_with_logs(tail_lines=tail_lines)
         grouped: dict[str, list[dict]] = {}
         for r in rows:
             s = self.monitor.get_summary(r["topic_id"], r["address"])
@@ -107,6 +134,9 @@ class DashboardApp:
                 "topic_id": r["topic_id"],
                 "topic_desc": r.get("topic_desc"),
                 "status": r.get("status"),
+                "artifact_path": r.get("artifact_path"),
+                "deployed_at": r.get("deployed_at"),
+                "log_tail": r.get("log_tail", []),
                 "submission_success": s.get("submission_success", 0),
                 "submission_error": s.get("submission_error", 0),
                 "inference_count": s.get("inference_count", 0),
@@ -132,14 +162,20 @@ class DashboardApp:
 def make_handler(app: DashboardApp):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            if self.path == "/":
+            parsed = urlparse(self.path)
+            route = parsed.path
+            qs = parse_qs(parsed.query)
+            tail = int(qs.get("tail", ["20"])[0])
+
+            if route == "/":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.end_headers()
                 self.wfile.write(HTML.encode("utf-8"))
                 return
-            if self.path.startswith("/api/dashboard"):
-                data = app.snapshot()
+
+            if route == "/api/dashboard":
+                data = app.snapshot(tail_lines=tail)
                 payload = json.dumps(data).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -147,6 +183,20 @@ def make_handler(app: DashboardApp):
                 self.end_headers()
                 self.wfile.write(payload)
                 return
+
+            if route == "/api/workers":
+                data = {
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "workers": app.wm.status_all_with_logs(include_desc=True, tail_lines=tail),
+                }
+                payload = json.dumps(data).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+
             self.send_response(404)
             self.end_headers()
 

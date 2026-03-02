@@ -537,13 +537,14 @@ def predict(nonce: int = None) -> float:
     # Combine base features + engineered returns
     live_features = pd.concat([live_row[base_feature_cols].iloc[0], live_returns])
     
-    # Get current price
-    now = datetime.now(timezone.utc)
-    recent_start = now - timedelta(hours=1)
-    raw_data = workflow.load_raw(start=recent_start, end=now)
-    if raw_data is None or len(raw_data) == 0:
-        raise ValueError("Could not get current price from raw data; aborting inference")
-    current_price = float(raw_data["close"].iloc[-1])
+    # Get current price from live feature context (remote-only path)
+    current_price = float(live_row.attrs.get("current_price", np.nan))
+    if not np.isfinite(current_price) or current_price <= 0:
+        # Fallback to live snapshot (still remote API; no local parquet)
+        snap = workflow._dm.get_live_snapshot(TICKERS)
+        if snap is not None and len(snap) > 0 and "close" in snap.columns:
+            current_price = float(snap["close"].iloc[-1])
+
     if not np.isfinite(current_price) or current_price <= 0:
         raise ValueError(f"Invalid current price for inference: {current_price}")
     
