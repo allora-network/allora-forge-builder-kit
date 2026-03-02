@@ -507,6 +507,46 @@ def test_atlas_get_live_1min_data(test_symbols_allora, allora_api_key, integrati
     )
 
 
+@pytest.mark.integration
+def test_atlas_live_window_coverage_btcusd(allora_api_key, integration_check):
+    """Integration check: Atlas BTC/USD live window has expected recency and row coverage."""
+    dm = AtlasDataManager(api_key=allora_api_key, interval="1m")
+
+    hours_back = 6
+    df_1min = dm.get_live_1min_data("btcusd", hours_back=hours_back)
+
+    if df_1min.empty:
+        pytest.skip("Atlas API returned no data for btcusd")
+
+    # Structure checks
+    assert isinstance(df_1min.index, pd.DatetimeIndex)
+    assert df_1min.index.tz is not None, "Expected timezone-aware UTC index"
+    assert list(df_1min.columns) == ["open", "high", "low", "close", "volume"]
+
+    # Monotonic + roughly 1-minute spacing
+    assert df_1min.index.is_monotonic_increasing
+    if len(df_1min) > 1:
+        minute_diffs = pd.Series(df_1min.index).diff().dropna().dt.total_seconds() / 60.0
+        assert (minute_diffs >= 0.9).all() and (minute_diffs <= 1.1).all(), (
+            f"Expected ~1-minute spacing, saw min={minute_diffs.min()} max={minute_diffs.max()}"
+        )
+
+    # Coverage checks (allowing provider lag / occasional missing minute)
+    expected_rows = hours_back * 60
+    assert len(df_1min) >= int(expected_rows * 0.85), (
+        f"Expected at least 85% of {expected_rows} rows, got {len(df_1min)}"
+    )
+    assert len(df_1min) <= expected_rows + 5, (
+        f"Expected at most {expected_rows + 5} rows, got {len(df_1min)}"
+    )
+
+    # Recency: latest row should be close to current UTC minute
+    now_utc = datetime.now(timezone.utc)
+    latest_ts = df_1min.index[-1].to_pydatetime()
+    lag_minutes = (now_utc - latest_ts).total_seconds() / 60.0
+    assert lag_minutes <= 15, f"Latest Atlas bar is too old: lag={lag_minutes:.1f} min"
+
+
 # ============================================================================
 # Integration Tests - Workflow with Binance
 # ============================================================================
