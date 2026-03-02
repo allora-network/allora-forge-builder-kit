@@ -7,6 +7,7 @@ Compatible with allora_sdk >= 1.0.6.
 
 import os
 import asyncio
+import traceback
 import cloudpickle
 from allora_sdk.worker import AlloraWorker
 
@@ -14,7 +15,7 @@ from allora_sdk.worker import AlloraWorker
 TOPIC_ID = 69
 PREDICT_PKL = "predict.pkl"
 API_KEY_FILE = ".allora_api_key"
-DEBUG_MODE = False
+DEBUG_MODE = True
 
 # SECURITY NOTE: cloudpickle.load executes arbitrary code. Only load pickle
 # files that you created yourself. Never load untrusted pickle files.
@@ -46,7 +47,11 @@ async def main():
 
     async for result in worker.run():
         if isinstance(result, Exception):
-            print(f"Error: {result}")
+            print(f"Error: {result!r} ({type(result).__name__})")
+            tb = "".join(traceback.format_exception(type(result), result, result.__traceback__))
+            print("--- exception traceback start ---")
+            print(tb)
+            print("--- exception traceback end ---")
         else:
             print(f"Prediction submitted: {result.prediction}")
 
