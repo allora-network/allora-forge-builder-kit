@@ -22,8 +22,10 @@ HTML = """<!doctype html>
     .muted { color: #666; }
     .card { border: 1px solid #ddd; border-radius: 10px; padding: 12px; margin: 10px 0; }
     .addr { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+    .path-row td, .logs-row td { background: #fcfcfd; }
+    .path-label { font-size: 12px; font-weight: 600; color: #666; margin-right: 6px; }
     .path-short { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #444; }
-    .logbox { margin-top: 6px; background: #fafafa; border: 1px solid #eee; border-radius: 8px; padding: 6px; }
+    .logbox { margin-top: 2px; background: #fafafa; border: 1px solid #eee; border-radius: 8px; padding: 6px; }
     .logbox summary { cursor: pointer; font-size: 12px; color: #444; }
     .logpre { margin: 6px 0 0 0; max-height: 220px; overflow: auto; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
     table { width: 100%; border-collapse: collapse; margin-top: 8px; }
@@ -37,6 +39,12 @@ HTML = """<!doctype html>
   <div id='meta' class='muted'>Loading...</div>
   <div id='root'></div>
   <script>
+    const openLogPanels = new Set();
+
+    function workerKey(grp, w) {
+      return `${grp.address}::${w.topic_id}`;
+    }
+
     function esc(s) {
       const v = (s === null || s === undefined) ? '' : String(s);
       return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -66,23 +74,40 @@ HTML = """<!doctype html>
         const tb = document.createElement('tbody');
         for (const w of grp.workers) {
           const logs = (w.log_tail || []).join('\\\\n');
-          const tr = document.createElement('tr');
-          tr.innerHTML = `<td>
-              ${esc(w.topic_id)} — ${esc(w.topic_desc || '')}
-              <br><span class='path-short' title='${esc(w.artifact_path || '')}'>${esc(shortPath(w.artifact_path || ''))}</span>
-              <div class='logbox'>
-                <details>
-                  <summary>stdout tail (${(w.log_tail || []).length} lines)</summary>
-                  <pre class='logpre'>${esc(logs || '— no log output yet —')}</pre>
-                </details>
-              </div>
-            </td>
+          const key = workerKey(grp, w);
+
+          const trMain = document.createElement('tr');
+          trMain.innerHTML = `<td>${esc(w.topic_id)} — ${esc(w.topic_desc || '')}</td>
             <td>${esc(w.status)}</td>
             <td class='ok'>${esc(w.submission_success)} ok</td>
             <td>${esc(w.inference_count)}</td>
             <td>${esc((w.last_inference_value === null || w.last_inference_value === undefined) ? '—' : w.last_inference_value)}</td>
             <td>${esc((w.last_inference_at === null || w.last_inference_at === undefined) ? '—' : w.last_inference_at)}</td>`;
-          tb.appendChild(tr);
+          tb.appendChild(trMain);
+
+          const trPath = document.createElement('tr');
+          trPath.className = 'path-row';
+          trPath.innerHTML = `<td colspan='6'><span class='path-label'>Artifact:</span><span class='path-short' title='${esc(w.artifact_path || '')}'>${esc(shortPath(w.artifact_path || ''))}</span></td>`;
+          tb.appendChild(trPath);
+
+          const trLogs = document.createElement('tr');
+          trLogs.className = 'logs-row';
+          trLogs.innerHTML = `<td colspan='6'>
+              <div class='logbox'>
+                <details data-worker-key='${esc(key)}'>
+                  <summary>stdout tail (${(w.log_tail || []).length} lines)</summary>
+                  <pre class='logpre'>${esc(logs || '— no log output yet —')}</pre>
+                </details>
+              </div>
+            </td>`;
+          tb.appendChild(trLogs);
+
+          const details = trLogs.querySelector('details');
+          if (openLogPanels.has(key)) details.open = true;
+          details.addEventListener('toggle', () => {
+            if (details.open) openLogPanels.add(key);
+            else openLogPanels.delete(key);
+          });
         }
         tbl.appendChild(tb);
         card.appendChild(tbl);
