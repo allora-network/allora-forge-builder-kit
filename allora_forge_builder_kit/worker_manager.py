@@ -235,6 +235,7 @@ class WorkerManager:
         artifact = Path(artifact_path)
         if not artifact.exists():
             raise FileNotFoundError(f"Artifact not found: {artifact}")
+        self._validate_artifact_for_deploy(artifact)
 
         if mode not in {"auto", "strict"}:
             raise ValueError("mode must be 'auto' or 'strict'")
@@ -605,6 +606,23 @@ class WorkerManager:
                 (str(managed_artifact), resolved_desc, topic_id, address),
             )
             conn.commit()
+
+    def _validate_artifact_for_deploy(self, artifact_path: Path) -> None:
+        """Block known-bad artifact variants from deployment.
+
+        Guardrail: old pickles that embed `load_raw` for live price lookup are
+        not deploy-safe in managed worker runtime.
+        """
+        try:
+            blob = artifact_path.read_bytes()
+        except Exception:
+            return
+
+        if b"load_raw" in blob and b"Could not get current price from raw data" in blob:
+            raise ValueError(
+                f"Refusing to deploy artifact with raw-data inference path: {artifact_path}. "
+                "Use export_predict_self_contained.py."
+            )
 
     def _build_default_topic_desc_resolver(self) -> Optional[Callable[[int], Optional[str]]]:
         api_key = os.environ.get("ALLORA_API_KEY")

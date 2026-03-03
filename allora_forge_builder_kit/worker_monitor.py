@@ -141,16 +141,31 @@ class WorkerMonitor:
                 tuple(params),
             ).fetchone()
 
+            # Prefer confirmed inference events over snapshot-only rows (some chain
+            # snapshot endpoints can transiently return 0.0 and mask a recent success).
             last_inference = conn.execute(
                 f"""
                 SELECT observed_at, value_text, value_num, tx_hash
                 FROM monitor_events
-                WHERE {where} AND event_type='inference'
+                WHERE {where} AND event_type='inference' AND (
+                    status='success' OR tx_hash IS NOT NULL OR (value_num IS NOT NULL AND value_num != 0)
+                )
                 ORDER BY observed_at DESC
                 LIMIT 1
                 """,
                 tuple(params),
             ).fetchone()
+            if not last_inference:
+                last_inference = conn.execute(
+                    f"""
+                    SELECT observed_at, value_text, value_num, tx_hash
+                    FROM monitor_events
+                    WHERE {where} AND event_type='inference'
+                    ORDER BY observed_at DESC
+                    LIMIT 1
+                    """,
+                    tuple(params),
+                ).fetchone()
 
         return {
             "topic_id": target[0],
