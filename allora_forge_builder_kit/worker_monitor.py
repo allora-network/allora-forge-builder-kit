@@ -97,10 +97,18 @@ class WorkerMonitor:
     def sync_once(self) -> dict:
         targets = self.list_targets(enabled_only=True)
         inserted = 0
+        errors: list[dict] = []
         for t in targets:
-            out = self._sync_target(topic_id=t.topic_id, address=t.address, since=None)
-            inserted += out["inserted"]
-        return {"targets": len(targets), "inserted": inserted}
+            try:
+                out = self._sync_target(topic_id=t.topic_id, address=t.address, since=None)
+                inserted += out["inserted"]
+            except Exception as e:
+                errors.append({
+                    "topic_id": t.topic_id,
+                    "address": t.address,
+                    "error": str(e),
+                })
+        return {"targets": len(targets), "inserted": inserted, "errors": errors}
 
     # ----------------------------
     # Read APIs

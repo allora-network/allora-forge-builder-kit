@@ -60,7 +60,9 @@ HTML = """<!doctype html>
     async function load() {
       const r = await fetch('/api/dashboard?tail=30');
       const d = await r.json();
-      document.getElementById('meta').textContent = `Updated: ${d.updated_at} | workers=${d.worker_count} | cadence=5s`;
+      const sync = d.sync || {};
+      const syncErrs = (sync.errors || []).length;
+      document.getElementById('meta').textContent = `Updated: ${d.updated_at} | workers=${d.worker_count} | cadence=5s | sync_ok=${sync.ok} inserted=${sync.inserted || 0} errs=${syncErrs}`;
       const root = document.getElementById('root');
       root.innerHTML = '';
       for (const grp of d.by_address) {
@@ -134,6 +136,7 @@ class DashboardApp:
             monitor=self.monitor,
             reconcile_on_start=True,
         )
+        self._last_sync = {"ok": None, "inserted": 0, "targets": 0, "errors": [], "at": None}
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._sync_loop, daemon=True)
         self._thread.start()
@@ -141,9 +144,22 @@ class DashboardApp:
     def _sync_loop(self):
         while not self._stop.is_set():
             try:
-                self.monitor.sync_once()
-            except Exception:
-                pass
+                out = self.monitor.sync_once()
+                self._last_sync = {
+                    "ok": True,
+                    "inserted": out.get("inserted", 0),
+                    "targets": out.get("targets", 0),
+                    "errors": out.get("errors", []),
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+            except Exception as e:
+                self._last_sync = {
+                    "ok": False,
+                    "inserted": 0,
+                    "targets": 0,
+                    "errors": [{"error": str(e)}],
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
             time.sleep(5)
 
     def stop(self):
@@ -180,6 +196,7 @@ class DashboardApp:
         return {
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "worker_count": len(rows),
+            "sync": self._last_sync,
             "by_address": by_addr,
         }
 
