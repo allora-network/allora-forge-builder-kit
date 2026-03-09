@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -175,6 +175,10 @@ class WorkerMonitor:
                     tuple(params),
                 ).fetchone()
 
+        last_score = self._latest_event_value(topic_id, address, "score", dep)
+        last_reward_fraction = self._latest_event_value(topic_id, address, "reward", dep)
+        period_metrics = self._period_metrics(topic_id, address, dep)
+
         return {
             "topic_id": target[0],
             "address": target[1],
@@ -189,6 +193,9 @@ class WorkerMonitor:
             "submission_success": counts[4] or 0,
             "submission_error": counts[5] or 0,
             "rewards_total": float(counts[6] or 0.0),
+            "last_score": last_score,
+            "last_reward_fraction": last_reward_fraction,
+            "period_metrics": period_metrics,
             "last_inference": None
             if not last_inference
             else {
@@ -231,6 +238,96 @@ class WorkerMonitor:
             }
             for r in rows
         ]
+
+    def _latest_event_value(self, topic_id: int, address: str, event_type: str, deployment_id: Optional[str]) -> Optional[dict]:
+        q = """
+            SELECT observed_at, value_text, value_num, tx_hash
+            FROM monitor_events
+            WHERE topic_id=? AND address=? AND event_type=?
+        """
+        params: list = [topic_id, address, event_type]
+        if deployment_id:
+            q += " AND deployment_id=?"
+            params.append(deployment_id)
+        q += " ORDER BY observed_at DESC LIMIT 1"
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(q, tuple(params)).fetchone()
+        if not row:
+            return None
+        return {
+            "observed_at": row[0],
+            "value_text": row[1],
+            "value_num": row[2],
+            "tx_hash": row[3],
+        }
+
+    def _period_metrics(self, topic_id: int, address: str, deployment_id: Optional[str]) -> dict:
+        now = datetime.now(timezone.utc)
+        windows = {
+            "24h": now - timedelta(hours=24),
+            "7d": now - timedelta(days=7),
+            "30d": now - timedelta(days=30),
+        }
+        q = """
+            SELECT observed_at, event_type, status, value_num
+            FROM monitor_events
+            WHERE topic_id=? AND address=?
+        """
+        params: list = [topic_id, address]
+        if deployment_id:
+            q += " AND deployment_id=?"
+            params.append(deployment_id)
+        q += " ORDER BY observed_at DESC LIMIT 5000"
+
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(q, tuple(params)).fetchall()
+
+        out = {
+            k: {
+                "submission_success": 0,
+                "submission_error": 0,
+                "inference_count": 0,
+                "score_samples": 0,
+                "score_avg": None,
+                "reward_fraction_samples": 0,
+                "reward_fraction_sum": 0.0,
+                "reward_fraction_avg": None,
+                "allo_earned": None,
+            }
+            for k in windows
+        }
+        score_sums = {k: 0.0 for k in windows}
+
+        for observed_at, event_type, status, value_num in rows:
+            dt = _parse_dt(observed_at)
+            if not dt:
+                continue
+            for label, start in windows.items():
+                if dt < start:
+                    continue
+                w = out[label]
+                if event_type == "submission":
+                    if status == "success":
+                        w["submission_success"] += 1
+                    elif status == "error":
+                        w["submission_error"] += 1
+                elif event_type == "inference":
+                    w["inference_count"] += 1
+                elif event_type == "score" and value_num is not None:
+                    w["score_samples"] += 1
+                    score_sums[label] += float(value_num)
+                elif event_type == "reward" and value_num is not None:
+                    w["reward_fraction_samples"] += 1
+                    w["reward_fraction_sum"] += float(value_num)
+
+        for label in windows:
+            w = out[label]
+            if w["score_samples"]:
+                w["score_avg"] = score_sums[label] / w["score_samples"]
+            if w["reward_fraction_samples"]:
+                w["reward_fraction_avg"] = w["reward_fraction_sum"] / w["reward_fraction_samples"]
+
+        return out
 
     # ----------------------------
     # Internals

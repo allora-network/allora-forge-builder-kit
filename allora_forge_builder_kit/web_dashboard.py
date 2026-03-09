@@ -78,7 +78,7 @@ HTML = """<!doctype html>
         card.innerHTML = `<div><b>Address</b> <span class='addr'>${grp.address}</span> (${grp.running}/${grp.total} running)</div>`;
         const tbl = document.createElement('table');
         tbl.innerHTML = `<thead><tr>
-            <th>Topic</th><th>Status</th><th>Submissions</th><th>Inferences</th><th>Last Inference</th><th>At</th>
+            <th>Topic</th><th>Status</th><th>Submissions</th><th>Inferences</th><th>Score EMA</th><th>Reward Frac</th><th>24h</th><th>7d</th><th>Last Inference</th><th>At</th>
           </tr></thead>`;
         const tb = document.createElement('tbody');
         for (const w of grp.workers) {
@@ -86,22 +86,31 @@ HTML = """<!doctype html>
           const key = workerKey(grp, w);
 
           const trMain = document.createElement('tr');
+          const p24 = (w.period_metrics || {})['24h'] || {};
+          const p7 = (w.period_metrics || {})['7d'] || {};
+          const scoreEma = (w.last_score || {}).value_text;
+          const rewardFrac = (w.last_reward_fraction || {}).value_text;
+
           trMain.innerHTML = `<td>${esc(w.topic_id)} — ${esc(w.topic_desc || '')}</td>
             <td>${esc(w.status)}</td>
-            <td class='ok'>${esc(w.submission_success)} ok</td>
+            <td class='ok'>${esc(w.submission_success)} ok / ${esc(w.submission_error)} err</td>
             <td>${esc(w.inference_count)}</td>
+            <td>${esc((scoreEma === null || scoreEma === undefined) ? '—' : scoreEma)}</td>
+            <td>${esc((rewardFrac === null || rewardFrac === undefined) ? '—' : rewardFrac)}</td>
+            <td>${esc((p24.submission_success || 0))} ok · avgS ${esc((p24.score_avg === null || p24.score_avg === undefined) ? '—' : p24.score_avg.toFixed(4))}</td>
+            <td>${esc((p7.submission_success || 0))} ok · avgS ${esc((p7.score_avg === null || p7.score_avg === undefined) ? '—' : p7.score_avg.toFixed(4))}</td>
             <td>${esc((w.last_inference_value === null || w.last_inference_value === undefined) ? '—' : w.last_inference_value)}</td>
             <td>${esc((w.last_inference_at === null || w.last_inference_at === undefined) ? '—' : w.last_inference_at)}</td>`;
           tb.appendChild(trMain);
 
           const trPath = document.createElement('tr');
           trPath.className = 'path-row';
-          trPath.innerHTML = `<td colspan='6'><span class='path-label'>Artifact:</span><span class='path-short' title='${esc(w.artifact_path || '')}'>${esc(shortPath(w.artifact_path || ''))}</span></td>`;
+          trPath.innerHTML = `<td colspan='10'><span class='path-label'>Artifact:</span><span class='path-short' title='${esc(w.artifact_path || '')}'>${esc(shortPath(w.artifact_path || ''))}</span></td>`;
           tb.appendChild(trPath);
 
           const trLogs = document.createElement('tr');
           trLogs.className = 'logs-row';
-          trLogs.innerHTML = `<td colspan='6'>
+          trLogs.innerHTML = `<td colspan='10'>
               <div class='logbox'>
                 <details data-worker-key='${esc(key)}'>
                   <summary>stdout tail (${(w.log_tail || []).length} lines)</summary>
@@ -188,6 +197,9 @@ class DashboardApp:
                 "submission_success": s.get("submission_success", 0),
                 "submission_error": s.get("submission_error", 0),
                 "inference_count": s.get("inference_count", 0),
+                "period_metrics": s.get("period_metrics", {}),
+                "last_score": s.get("last_score"),
+                "last_reward_fraction": s.get("last_reward_fraction"),
                 "last_inference_value": li.get("value_text"),
                 "last_inference_at": li.get("observed_at"),
             }
