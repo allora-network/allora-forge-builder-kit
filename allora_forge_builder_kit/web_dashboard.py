@@ -58,7 +58,14 @@ HTML = """<!doctype html>
     }
 
     async function load() {
-      const r = await fetch('/api/dashboard?tail=30');
+      const bust = Date.now();
+      const r = await fetch(`/api/dashboard?tail=30&_=${bust}`, {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache'
+        }
+      });
       const d = await r.json();
       const sync = d.sync || {};
       const syncErrs = (sync.errors || []).length;
@@ -212,6 +219,9 @@ def make_handler(app: DashboardApp):
             if route == "/":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Expires", "0")
                 self.end_headers()
                 self.wfile.write(HTML.encode("utf-8"))
                 return
