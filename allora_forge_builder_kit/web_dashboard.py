@@ -57,6 +57,13 @@ HTML = """<!doctype html>
       return '.../' + parts.slice(-3).join('/');
     }
 
+    function fmtSig(v, sig = 5) {
+      if (v === null || v === undefined || v === '') return '—';
+      const n = Number(v);
+      if (!Number.isFinite(n)) return String(v);
+      return Number.parseFloat(n.toPrecision(sig)).toString();
+    }
+
     async function load() {
       const bust = Date.now();
       const r = await fetch(`/api/dashboard?tail=30&_=${bust}`, {
@@ -95,11 +102,11 @@ HTML = """<!doctype html>
             <td>${esc(w.status)}</td>
             <td class='ok'>${esc(w.submission_success)} ok / ${esc(w.submission_error)} err</td>
             <td>${esc(w.inference_count)}</td>
-            <td>${esc((scoreEma === null || scoreEma === undefined) ? '—' : scoreEma)}</td>
-            <td>${esc((rewardFrac === null || rewardFrac === undefined) ? '—' : rewardFrac)}</td>
-            <td>${esc((p24.submission_success || 0))} ok · avgS ${esc((p24.score_avg === null || p24.score_avg === undefined) ? '—' : p24.score_avg.toFixed(4))}</td>
-            <td>${esc((p7.submission_success || 0))} ok · avgS ${esc((p7.score_avg === null || p7.score_avg === undefined) ? '—' : p7.score_avg.toFixed(4))}</td>
-            <td>${esc((w.last_inference_value === null || w.last_inference_value === undefined) ? '—' : w.last_inference_value)}</td>
+            <td>${esc(fmtSig(scoreEma))}</td>
+            <td>${esc(fmtSig(rewardFrac))}</td>
+            <td>${esc((p24.submission_success || 0))} ok · avgS ${esc(fmtSig(p24.score_avg))}</td>
+            <td>${esc((p7.submission_success || 0))} ok · avgS ${esc(fmtSig(p7.score_avg))}</td>
+            <td>${esc(fmtSig(w.last_inference_value))}</td>
             <td>${esc((w.last_inference_at === null || w.last_inference_at === undefined) ? '—' : w.last_inference_at)}</td>`;
           tb.appendChild(trMain);
 

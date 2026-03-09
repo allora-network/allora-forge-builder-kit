@@ -176,8 +176,16 @@ class WorkerMonitor:
                 ).fetchone()
 
         last_score = self._latest_event_value(topic_id, address, "score", dep)
+        if last_score is None and dep:
+            last_score = self._latest_event_value(topic_id, address, "score", None)
+
         last_reward_fraction = self._latest_event_value(topic_id, address, "reward", dep)
+        if last_reward_fraction is None and dep:
+            last_reward_fraction = self._latest_event_value(topic_id, address, "reward", None)
+
         period_metrics = self._period_metrics(topic_id, address, dep)
+        if dep and all((period_metrics.get(k, {}).get("score_samples", 0) == 0 and period_metrics.get(k, {}).get("reward_fraction_samples", 0) == 0) for k in ("24h", "7d", "30d")):
+            period_metrics = self._period_metrics(topic_id, address, None)
 
         return {
             "topic_id": target[0],
@@ -568,14 +576,16 @@ class AlloraSDKEventFetcher:
             )
             score = getattr(getattr(s, "score", None), "score", None)
             if score is not None:
+                now_iso = datetime.now(timezone.utc).isoformat()
+                bucket = int(datetime.now(timezone.utc).timestamp() // 300)  # 5-min buckets
                 out.append(
                     {
-                        "event_id": f"score_ema:{topic_id}:{address}",
+                        "event_id": f"score_ema:{topic_id}:{address}:{bucket}",
                         "event_type": "score",
                         "status": "snapshot",
                         "value_text": str(score),
                         "value_num": _to_float(score),
-                        "observed_at": datetime.now(timezone.utc).isoformat(),
+                        "observed_at": now_iso,
                     }
                 )
         except Exception:
@@ -587,14 +597,16 @@ class AlloraSDKEventFetcher:
             )
             rf = getattr(r, "reward_fraction", None)
             if rf is not None:
+                now_iso = datetime.now(timezone.utc).isoformat()
+                bucket = int(datetime.now(timezone.utc).timestamp() // 300)  # 5-min buckets
                 out.append(
                     {
-                        "event_id": f"reward_fraction:{topic_id}:{address}",
+                        "event_id": f"reward_fraction:{topic_id}:{address}:{bucket}",
                         "event_type": "reward",
                         "status": "snapshot",
                         "value_text": str(rf),
                         "value_num": _to_float(rf),
-                        "observed_at": datetime.now(timezone.utc).isoformat(),
+                        "observed_at": now_iso,
                         "details_json": f'{{"not_found":{str(getattr(r, "not_found", False)).lower()}}}',
                     }
                 )
