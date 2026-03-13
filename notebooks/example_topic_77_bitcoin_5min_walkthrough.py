@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 ================================================================================
-Allora Forge Builder Kit v3.0 - Topic 69 Bitcoin Price Prediction Walkthrough
+Allora Forge Builder Kit v3.0 - Topic 77 Bitcoin 5-Minute Price Prediction Walkthrough
 ================================================================================
 
-This walkthrough demonstrates 24-hour Bitcoin price prediction using the 
+This walkthrough demonstrates 5-minute Bitcoin price prediction using the 
 Allora ML Workflow Kit with base features and LightGBM.
 
 Data is sourced from the Atlas data service (Tiingo 1-min candles).
@@ -29,12 +29,12 @@ from allora_forge_builder_kit import AlloraMLWorkflow, PerformanceEvaluator
 
 # Data Configuration
 TICKERS = ["btcusd"]
-DAYS_OF_HISTORY = 500
-INTERVAL = "1h"
+DAYS_OF_HISTORY = 120
+INTERVAL = "5m"
 
 # Feature Configuration
-NUMBER_OF_INPUT_BARS = 48  # Number of hourly bars for input features
-TARGET_BARS = 24           # Predict 24 bars (hours) ahead
+NUMBER_OF_INPUT_BARS = 48  # 4h of 5-minute bars for input features
+TARGET_BARS = 1            # Predict 1 bar (5 minutes) ahead
 
 # Cross-Validation Configuration
 N_SPLITS = 3               # Number of CV folds
@@ -58,7 +58,7 @@ MIDDLE_TRIM_QUANTILE = 0.40
 # =============================================================================
 
 print("="*80)
-print("Allora Forge Builder Kit v3.0 - Topic 69 Walkthrough")
+print("Allora Forge Builder Kit v3.0 - Topic 77 Walkthrough")
 print("="*80)
 
 
@@ -215,7 +215,7 @@ def save_run_artifacts(df_eval, best_result, best_params, run_dir, feature_cols,
 
     # 5) Human-readable report
     with open(os.path.join(run_dir, "report.txt"), "w") as f:
-        f.write("Allora Topic 69 Run Report\n")
+        f.write("Allora Topic 77 Run Report\n")
         f.write("=" * 40 + "\n")
         f.write(f"Score: {best_result['score']:.1%} ({best_result['num_passed']}/8)\n")
         f.write(f"Grade: {best_result['grade']}\n")
@@ -284,10 +284,10 @@ def engineer_returns(row):
     
     # Log returns over different time horizons
     returns = {}
-    returns['log_return_1h'] = np.log(closes[-1] + 1e-8) - np.log(closes[-2] + 1e-8) if NUMBER_OF_INPUT_BARS >= 2 else 0
-    returns['log_return_6h'] = np.log(closes[-1] + 1e-8) - np.log(closes[-7] + 1e-8) if NUMBER_OF_INPUT_BARS >= 7 else 0
-    returns['log_return_12h'] = np.log(closes[-1] + 1e-8) - np.log(closes[-13] + 1e-8) if NUMBER_OF_INPUT_BARS >= 13 else 0
-    returns['log_return_24h'] = np.log(closes[-1] + 1e-8) - np.log(closes[-25] + 1e-8) if NUMBER_OF_INPUT_BARS >= 25 else 0
+    returns['log_return_5m'] = np.log(closes[-1] + 1e-8) - np.log(closes[-2] + 1e-8) if NUMBER_OF_INPUT_BARS >= 2 else 0
+    returns['log_return_15m'] = np.log(closes[-1] + 1e-8) - np.log(closes[-4] + 1e-8) if NUMBER_OF_INPUT_BARS >= 4 else 0
+    returns['log_return_30m'] = np.log(closes[-1] + 1e-8) - np.log(closes[-7] + 1e-8) if NUMBER_OF_INPUT_BARS >= 7 else 0
+    returns['log_return_60m'] = np.log(closes[-1] + 1e-8) - np.log(closes[-13] + 1e-8) if NUMBER_OF_INPUT_BARS >= 13 else 0
     
     return pd.Series(returns)
 
@@ -517,7 +517,7 @@ print(f"✅ Final model trained on {len(df_all):,} samples")
 
 def predict(nonce: int = None) -> float:
     """
-    Predict Bitcoin price 24 hours into the future.
+    Predict Bitcoin price 5 minutes into the future.
     
     Args:
         nonce: Block nonce from Allora SDK (unused)
@@ -574,5 +574,5 @@ print(f"Run artifacts: {artifacts['run_dir']}")
 print(f"- Predictions: {artifacts['predictions_csv']}")
 print(f"- Scatter plot: {artifacts['scatter_png']}")
 print("="*80)
-print("\nDeploy: python deploy_worker.py")
+print("\nDeploy: python deploy_worker.py (set TOPIC_ID=77)")
 

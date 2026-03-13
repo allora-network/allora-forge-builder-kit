@@ -221,10 +221,12 @@ class AlloraMLWorkflow:
         Raises:
             ValueError: If not enough historical data or no features extracted
         """
-        # Calculate how much historical data we need
-        # We need enough bars to cover number_of_input_bars, plus buffer
+        # Calculate how much historical data we need (in hours)
+        # We need enough full interval bars for features plus a small buffer for
+        # live-bar alignment and incomplete-minute trimming.
         bars_per_hour = self._parse_interval_to_bars_per_hour(self.interval)
-        hours_back = int(self.number_of_input_bars / bars_per_hour) + 2  # Add 2 hours buffer
+        required_hours = self.number_of_input_bars / bars_per_hour
+        hours_back = int(np.ceil(required_hours)) + 2
         
         # Fetch 1-minute bars from data manager (works for both Allora and Binance)
         df_1min_pandas = self._dm.get_live_1min_data(ticker, hours_back=hours_back)
@@ -260,7 +262,11 @@ class AlloraMLWorkflow:
         # Convert to pandas and return just features with open_time as index
         features_pandas = last_row.select(["open_time"] + feature_cols).to_pandas()
         features_pandas = features_pandas.set_index("open_time")
-        
+
+        # Attach latest resampled close as context for inference callers
+        # (keeps API backward-compatible while avoiding separate local-data reads).
+        features_pandas.attrs["current_price"] = float(last_row["close"][0])
+
         return features_pandas
 
     def stand_alone_features_from_1min_bars(

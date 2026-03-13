@@ -1,0 +1,15 @@
+./allora-forge-builder-kit-local.tar.gz
+allora-sdk>=1.0.6
+cloudpickle
+numpy
+pandas
+scipy
+requests
+lightgbm
+numba
+polars
+pyarrow
+pytz
+websocket-client
+joblib
+scikit-learn

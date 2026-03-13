@@ -9,7 +9,7 @@ Comprehensive test suite for the data manager architecture and ML workflow.
 ### Unit Tests (No network required)
 - ✅ Factory pattern (DataManager routing)
 - ✅ BinanceDataManager initialization
-- ✅ AlloraDataManager initialization
+- ✅ AtlasDataManager initialization
 - ✅ Data format parsing
 - ✅ Storage separation
 - ✅ Workflow integration
@@ -67,22 +67,47 @@ pytest tests/test_data_managers.py::test_factory_returns_binance_manager -v
 
 ```
 tests/
-├── test_data_managers.py    # Main test suite
-└── README.md                 # This file
+├── test_data_managers.py           # Data manager and workflow tests (30)
+├── test_evaluation.py              # Evaluation metrics tests (18)
+├── test_feature_integrity.py       # Feature normalization checks (3)
+├── test_target_integrity.py        # Log-return target checks (3)
+├── test_live_features_consistency.py  # Live vs historical (3, skipped)
+└── README.md
 
 Test Structure:
-├── Unit Tests - Factory Pattern (5 tests)
-├── Unit Tests - BinanceDataManager (3 tests)
-├── Unit Tests - AlloraDataManager (3 tests)
-├── Unit Tests - Storage Structure (2 tests)
-├── Unit Tests - Workflow Integration (4 tests)
-├── Integration Tests - Binance (2 tests)
-├── Integration Tests - Allora (2 tests)
-├── Integration Tests - Workflow Binance (1 test)
-├── Integration Tests - Workflow Allora (1 test)
-└── Integration Tests - Compare Sources (1 test)
+├── test_data_managers.py (30 tests)
+│   ├── Unit Tests - Factory Pattern (4 tests)
+│   ├── Unit Tests - BinanceDataManager (3 tests)
+│   ├── Unit Tests - AtlasDataManager (2 tests)
+│   ├── Unit Tests - Storage Structure (2 tests)
+│   ├── Unit Tests - Workflow Integration (4 tests)
+│   ├── Integration Tests - Binance (3 tests)
+│   ├── Integration Tests - Atlas/Allora (3 tests)
+│   ├── Integration Tests - Workflow Binance (3 tests)
+│   ├── Integration Tests - Workflow Allora (3 tests)
+│   └── Integration Tests - Compare Sources (1 test)
+│   └── Integration Tests - End-to-End Atlas (1 test)
+│   └── Integration Tests - End-to-End Binance (1 test)
+├── test_evaluation.py (18 tests)
+│   ├── Directional Accuracy (5 tests)
+│   ├── Pearson Correlation (2 tests)
+│   ├── WRMSE Improvement (2 tests)
+│   ├── CZAR Improvement (3 tests)
+│   ├── Threshold pass/fail (2 tests)
+│   └── Full evaluate pipeline (4 tests)
+├── test_feature_integrity.py (3 tests)
+│   ├── 5-min bars feature integrity
+│   ├── 1-hour bars feature integrity
+│   └── Multi-asset feature integrity
+├── test_target_integrity.py (3 tests)
+│   ├── 5-min bars target integrity
+│   ├── 1-hour bars target integrity
+│   └── Multi-asset target integrity
+├── test_live_features_consistency.py (3 tests, skipped)
+│   └── Needs rewrite against current workflow API
+└── README.md
 
-Total: 24 tests
+Total: 57 tests (35 unit + 19 integration + 3 skipped)
 ```
 
 ## Requirements
@@ -115,7 +140,7 @@ tests/test_data_managers.py::test_factory_returns_binance_manager PASSED
 tests/test_data_managers.py::test_factory_returns_allora_manager PASSED
 tests/test_data_managers.py::test_factory_invalid_source PASSED
 ...
-======================== 17 passed in 2.5s ==========================
+======================== 35 passed in 1.5s ==========================
 ```
 
 ### Integration Tests (May be slow)
@@ -124,7 +149,7 @@ tests/test_data_managers.py::test_factory_invalid_source PASSED
 tests/test_data_managers.py::test_binance_backfill_and_load PASSED [10s]
 tests/test_data_managers.py::test_allora_backfill_and_load PASSED [15s]
 ...
-======================== 24 passed in 45s ==========================
+======================== 54 passed, 3 skipped in 45s ==========================
 ```
 
 ## Troubleshooting
