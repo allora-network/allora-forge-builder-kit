@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -247,6 +248,99 @@ class WorkerMonitor:
             for r in rows
         ]
 
+    def get_submission_timeline(self, topic_id: int, address: str, deployment_id: Optional[str] = None, hours: int = 24, max_slots: int = 25) -> dict:
+        # Prefer exact chain windows (nonce slots) when SDK fetcher supports it.
+        expected_nonces = self._expected_worker_nonces(topic_id, address, max_slots=max_slots)
+
+        q = """
+            SELECT observed_at, status, value_text, tx_hash, details_json
+            FROM monitor_events
+            WHERE topic_id=? AND address=? AND event_type='submission'
+        """
+        params: list = [topic_id, address]
+        if deployment_id:
+            q += " AND (deployment_id=? OR deployment_id IS NULL)"
+            params.append(deployment_id)
+        q += " ORDER BY observed_at DESC LIMIT 5000"
+
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(q, tuple(params)).fetchall()
+
+        by_nonce: dict[int, dict] = {}
+        for observed_at, status, value_text, tx_hash, details_json in rows:
+            nonce = _extract_nonce(details_json)
+            if nonce is None:
+                continue
+            details = _parse_json(details_json)
+            if nonce not in by_nonce:
+                by_nonce[nonce] = {
+                    "observed_at": observed_at,
+                    "status": status,
+                    "inference_value": value_text,
+                    "tx_hash": tx_hash,
+                    "code": details.get("code"),
+                    "extra_data": details.get("extra_data"),
+                }
+
+        slots = []
+        for w in expected_nonces:
+            nonce = w["nonce"]
+            sub = by_nonce.get(nonce)
+            slots.append(
+                {
+                    "ts": w.get("ts"),
+                    "nonce": nonce,
+                    "status": ("success" if sub and sub.get("status") == "success" else "error" if sub else "missed"),
+                    "submission": sub,
+                }
+            )
+
+        # oldest -> newest for left-to-right timeline
+        slots = list(reversed(slots))
+        return {
+            "hours": hours,
+            "cadence_sec": None,
+            "start": slots[0]["ts"] if slots else None,
+            "end": slots[-1]["ts"] if slots else None,
+            "slots": slots,
+            "source": "sdk_exact_nonce_windows",
+        }
+
+    def _expected_worker_nonces(self, topic_id: int, address: str, max_slots: int = 25) -> list[dict]:
+        # Try SDK-backed exact windows via fetcher internals.
+        fetcher = self._event_fetcher
+        client = getattr(fetcher, "client", None)
+        if client is None:
+            return []
+        try:
+            from allora_sdk.protos.emissions.v9 import GetTopicRequest, GetWorkerSubmissionWindowStatusRequest
+
+            topic = client.emissions.query.get_topic(GetTopicRequest(topic_id=topic_id))
+            t = getattr(topic, "topic", None)
+            epoch_len = int(getattr(t, "epoch_length", 0) or 0)
+            ws = client.emissions.query.get_worker_submission_window_status(
+                GetWorkerSubmissionWindowStatusRequest(topic_id=topic_id, address=address)
+            )
+            cur = int(getattr(ws, "current_nonce_block_height", 0) or 0)
+            if cur <= 0:
+                cur = int(getattr(ws, "window_start_block", 0) or 0)
+            if cur <= 0:
+                nxt = int(getattr(ws, "next_window_start_block", 0) or 0)
+                if nxt > 0 and epoch_len > 0:
+                    cur = nxt - epoch_len
+            if epoch_len <= 0 or cur <= 0:
+                return []
+
+            out = []
+            now = datetime.now(timezone.utc)
+            for i in range(max_slots):
+                nonce = cur - i * epoch_len
+                ts = (now - timedelta(seconds=i * epoch_len * 3)).isoformat()  # approximate wall time for rendering
+                out.append({"nonce": nonce, "ts": ts})
+            return out
+        except Exception:
+            return []
+
     def _latest_event_value(self, topic_id: int, address: str, event_type: str, deployment_id: Optional[str]) -> Optional[dict]:
         q = """
             SELECT observed_at, value_text, value_num, tx_hash
@@ -489,6 +583,10 @@ class AlloraSDKEventFetcher:
         )
 
         since_dt = _parse_dt(since)
+        if since_dt is not None:
+            # Chain tx timestamps are second-granular while sync cursor carries sub-second precision.
+            # Back up slightly to avoid dropping boundary events; dedupe is handled by event_id uniqueness.
+            since_dt = since_dt - timedelta(seconds=30)
         out: list[dict] = []
 
         # 1) Historical tx events for this sender (submission/inference)
@@ -648,6 +746,25 @@ class AlloraSDKEventFetcher:
             pass
 
         return out
+
+
+def _parse_json(s: Optional[str]) -> dict:
+    if not s:
+        return {}
+    try:
+        d = json.loads(s)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _extract_nonce(details_json: Optional[str]) -> Optional[int]:
+    d = _parse_json(details_json)
+    n = d.get("nonce")
+    try:
+        return int(n) if n is not None and str(n) != "" else None
+    except Exception:
+        return None
 
 
 def _to_float(value) -> Optional[float]:

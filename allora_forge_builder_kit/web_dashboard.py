@@ -28,6 +28,13 @@ HTML = """<!doctype html>
     .logbox { margin-top: 2px; background: #fafafa; border: 1px solid #eee; border-radius: 8px; padding: 6px; }
     .logbox summary { cursor: pointer; font-size: 12px; color: #444; }
     .logpre { margin: 6px 0 0 0; max-height: 220px; overflow: auto; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    .timeline { --slots: 25; display: grid; grid-template-columns: repeat(var(--slots), minmax(10px, 1fr)); gap: 3px; width: 100%; padding: 4px 0; }
+    .timeline-axis { font-size: 11px; color: #666; margin-top: 2px; }
+    .cell { width: 100%; height: clamp(12px, 1.8vw, 22px); border-radius: 3px; background: #ddd; cursor: help; }
+    .cell.success { background: #1f9d55; }
+    .cell.error { background: #d64545; }
+    .cell.missed { background: #cfd4da; }
+    .tooltip { position: fixed; z-index: 9999; display: none; max-width: 420px; background: #111; color: #fff; border-radius: 8px; padding: 8px 10px; font-size: 12px; line-height: 1.35; box-shadow: 0 6px 20px rgba(0,0,0,0.25); white-space: pre-wrap; pointer-events: none; }
     table { width: 100%; border-collapse: collapse; margin-top: 8px; }
     th, td { text-align: left; border-bottom: 1px solid #eee; padding: 6px; font-size: 14px; vertical-align: top; }
     .ok { color: #0a7; }
@@ -38,6 +45,7 @@ HTML = """<!doctype html>
   <h2>Allora Worker Dashboard</h2>
   <div id='meta' class='muted'>Loading...</div>
   <div id='root'></div>
+  <div id='tip' class='tooltip'></div>
   <script>
     const openLogPanels = new Set();
 
@@ -64,22 +72,87 @@ HTML = """<!doctype html>
       return Number.parseFloat(n.toPrecision(sig)).toString();
     }
 
-    async function load() {
-      const bust = Date.now();
-      const r = await fetch(`/api/dashboard?tail=30&_=${bust}`, {
-        cache: 'no-store',
-        headers: {
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache'
-        }
+    function timelineHtml(tl) {
+      const slots = (tl && tl.slots) ? tl.slots : [];
+      const cells = slots.map((s) => {
+        const sub = s.submission || {};
+        const tt = [
+          `nonce: ${(s.nonce === null || s.nonce === undefined) ? '—' : s.nonce}`,
+          `window time: ${s.ts || '—'}`,
+          `slot status: ${s.status || 'missed'}`,
+          `submission at: ${sub.observed_at || '—'}`,
+          `submission status: ${sub.status || '—'}`,
+          `inference value: ${(sub.inference_value === null || sub.inference_value === undefined) ? '—' : sub.inference_value}`,
+          `tx hash: ${sub.tx_hash || '—'}`,
+          `tx code: ${(sub.code === null || sub.code === undefined) ? '—' : sub.code}`,
+          `reward fraction (latest): ${(sub.reward_fraction === null || sub.reward_fraction === undefined) ? '—' : sub.reward_fraction}`,
+          `score EMA (latest): ${(sub.score_ema === null || sub.score_ema === undefined) ? '—' : sub.score_ema}`
+        ].join('\\n');
+        return `<span class='cell ${esc(s.status || 'missed')}' data-tip='${esc(tt)}'></span>`;
+      }).join('');
+      const first = slots[0] || {};
+      const last = slots[slots.length - 1] || {};
+      const axisText = `Axis: oldest nonce ${(first.nonce === null || first.nonce === undefined) ? '—' : first.nonce} (${first.ts || '—'}) → newest nonce ${(last.nonce === null || last.nonce === undefined) ? '—' : last.nonce} (${last.ts || '—'})`;
+      const axis = `<div class='timeline-axis'>${esc(axisText)}</div>`;
+      const slotCount = Math.max(slots.length, 1);
+      return `${axis}<div class='timeline' style='--slots:${slotCount}'>${cells}</div>`;
+    }
+
+    function placeTooltip(tip, e) {
+      const pad = 12;
+      const margin = 8;
+      const vw = window.innerWidth || document.documentElement.clientWidth;
+      const vh = window.innerHeight || document.documentElement.clientHeight;
+      const tw = tip.offsetWidth || 260;
+      const th = tip.offsetHeight || 80;
+
+      let left = e.clientX + pad;
+      let top = e.clientY + pad;
+
+      if (left + tw + margin > vw) left = e.clientX - tw - pad;
+      if (top + th + margin > vh) top = e.clientY - th - pad;
+
+      left = Math.max(margin, Math.min(left, vw - tw - margin));
+      top = Math.max(margin, Math.min(top, vh - th - margin));
+
+      tip.style.left = left + 'px';
+      tip.style.top = top + 'px';
+    }
+
+    function wireTooltips(root) {
+      const tip = document.getElementById('tip');
+      root.querySelectorAll('.cell[data-tip]').forEach((el) => {
+        el.addEventListener('mouseenter', (e) => {
+          tip.textContent = el.getAttribute('data-tip') || '';
+          tip.style.display = 'block';
+          placeTooltip(tip, e);
+        });
+        el.addEventListener('mousemove', (e) => {
+          placeTooltip(tip, e);
+        });
+        el.addEventListener('mouseleave', () => {
+          tip.style.display = 'none';
+        });
       });
-      const d = await r.json();
-      const sync = d.sync || {};
-      const syncErrs = (sync.errors || []).length;
-      document.getElementById('meta').textContent = `Updated: ${d.updated_at} | workers=${d.worker_count} | cadence=5s | sync_ok=${sync.ok} inserted=${sync.inserted || 0} errs=${syncErrs}`;
-      const root = document.getElementById('root');
-      root.innerHTML = '';
-      for (const grp of d.by_address) {
+    }
+
+    async function load() {
+      try {
+        const bust = Date.now();
+        const r = await fetch(`/api/dashboard?tail=30&_=${bust}`, {
+          cache: 'no-store',
+          headers: {
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache'
+          }
+        });
+        const d = await r.json();
+        const sync = d.sync || {};
+        const syncErrs = (sync.errors || []).length;
+        document.getElementById('meta').textContent = `Updated: ${d.updated_at} | workers=${d.worker_count} | cadence=5s | sync_ok=${sync.ok} inserted=${sync.inserted || 0} errs=${syncErrs}`;
+        const root = document.getElementById('root');
+        root.innerHTML = '';
+        for (const grp of d.by_address) {
         const card = document.createElement('div');
         card.className = 'card';
         card.innerHTML = `<div><b>Address</b> <span class='addr'>${grp.address}</span> (${grp.running}/${grp.total} running)</div>`;
@@ -115,6 +188,11 @@ HTML = """<!doctype html>
           trPath.innerHTML = `<td colspan='10'><span class='path-label'>Artifact:</span><span class='path-short' title='${esc(w.artifact_path || '')}'>${esc(shortPath(w.artifact_path || ''))}</span></td>`;
           tb.appendChild(trPath);
 
+          const trTimeline = document.createElement('tr');
+          trTimeline.className = 'path-row';
+          trTimeline.innerHTML = `<td colspan='10'><span class='path-label'>Submissions (last 25 slots):</span>${timelineHtml(w.timeline)}</td>`;
+          tb.appendChild(trTimeline);
+
           const trLogs = document.createElement('tr');
           trLogs.className = 'logs-row';
           trLogs.innerHTML = `<td colspan='10'>
@@ -138,7 +216,16 @@ HTML = """<!doctype html>
         card.appendChild(tbl);
         root.appendChild(card);
       }
+        wireTooltips(root);
+      } catch (e) {
+        const msg = (e && e.message) ? e.message : String(e);
+        document.getElementById('meta').textContent = `UI error: ${msg}`;
+      }
     }
+    window.addEventListener('error', (e) => {
+      const msg = (e && e.message) ? e.message : 'unknown frontend error';
+      document.getElementById('meta').textContent = `UI error: ${msg}`;
+    });
     load();
     setInterval(load, 5000);
   </script>
@@ -207,6 +294,7 @@ class DashboardApp:
                 "period_metrics": s.get("period_metrics", {}),
                 "last_score": s.get("last_score"),
                 "last_reward_fraction": s.get("last_reward_fraction"),
+                "timeline": self.monitor.get_submission_timeline(r["topic_id"], r["address"], deployment_id=s.get("deployment_id"), hours=24),
                 "last_inference_value": li.get("value_text"),
                 "last_inference_at": li.get("observed_at"),
             }
