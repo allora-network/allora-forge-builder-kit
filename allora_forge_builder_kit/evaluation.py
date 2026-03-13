@@ -27,23 +27,33 @@ class PerformanceEvaluator:
     """
     Comprehensive performance metrics calculator for financial time-series predictions.
     
-    Implements 8 primary metrics with pass/fail thresholds plus additional metrics
+    Implements 7 primary metrics with pass/fail thresholds plus additional metrics
     for evaluating predictive model performance.
+    
+    v3.0 evaluation framework:
+      - DA CI lower bound >= 0.50
+      - DA threshold >= 0.52
+      - DA p-value via z-test with continuity correction and
+        autocorrelation-aware effective sample size
+      - WRMSE improvement threshold >= 5%
+      - CZAR (Cumulative Z-scored Absolute Return) improvement >= 10%
+        replaces ZPTAE as primary metric
+      - Log Aspect Ratio moved to additional (non-scored) metrics
     """
     
-    # Primary metric thresholds (8 core metrics)
     THRESHOLDS = {
-        'directional_accuracy': 0.55,
-        'da_ci_lower': 0.52,
-        'da_pvalue': 0.05,  # Must be BELOW this
+        'directional_accuracy': 0.52,
+        'da_ci_lower': 0.50,             # CI lower bound must be ABOVE this
+        'da_pvalue': 0.05,               # must be BELOW this
         'pearson_r': 0.05,
-        'pearson_pvalue': 0.05,  # Must be BELOW this
-        'wrmse_improvement': 0.10,
-        'zptae_improvement': 0.20,
-        'log_aspect_ratio_abs': 0.5,  # |value| must be BELOW this
+        'pearson_pvalue': 0.05,          # must be BELOW this
+        'wrmse_improvement': 0.05,
+        'czar_improvement': 0.10,
     }
-    
-    # Performance grades based on how many primary metrics pass
+
+    NUM_PRIMARY_METRICS = 7
+
+    # Performance grades based on composite score (7 metrics + temporal coverage = 8 max)
     GRADES = {
         8: 'A+',
         7: 'A',
@@ -55,6 +65,8 @@ class PerformanceEvaluator:
         1: 'F',
         0: 'F',
     }
+
+    TEMPORAL_COVERAGE_THRESHOLD = 0.50
     
     def __init__(self):
         """Initialize the performance evaluator."""
@@ -82,6 +94,9 @@ class PerformanceEvaluator:
         """
         Calculate directional accuracy and related metrics.
         
+        Uses a z-test with continuity correction and autocorrelation-aware
+        effective sample size.
+        
         Args:
             y_true: Ground truth log returns
             y_pred: Predicted log returns
@@ -89,26 +104,53 @@ class PerformanceEvaluator:
         Returns:
             Dictionary with DA, confidence interval, and p-value
         """
-        n = len(y_true)
-        
-        # Directional accuracy: % of predictions with correct sign
-        correct_direction = np.sign(y_true) == np.sign(y_pred)
+        # Exclude zero true returns where direction is undefined
+        nonzero = y_true != 0
+        y_true_nz = y_true[nonzero]
+        y_pred_nz = y_pred[nonzero]
+        n = len(y_true_nz)
+
+        if n == 0:
+            return {
+                'directional_accuracy': 0.5,
+                'da_ci_lower': 0.0,
+                'da_ci_upper': 1.0,
+                'da_pvalue': 1.0,
+                'da_n_effective': 0.0,
+                'da_n_samples': 0,
+                'da_n_correct': 0,
+            }
+
+        correct_direction = np.sign(y_true_nz) == np.sign(y_pred_nz)
         da = np.mean(correct_direction)
+        n_correct = int(np.sum(correct_direction))
         
-        # Binomial test: is DA significantly better than random (0.5)?
-        # H0: DA = 0.5 (random guessing)
-        # H1: DA > 0.5 (better than random)
-        n_correct = np.sum(correct_direction)
-        binomial_test = stats.binomtest(n_correct, n, 0.5, alternative='greater')
-        da_pvalue = binomial_test.pvalue
+        # Effective sample size accounting for lag-1 autocorrelation.
+        correct_float = correct_direction.astype(float)
+        if n > 2:
+            rho = np.corrcoef(correct_float[:-1], correct_float[1:])[0, 1]
+            if np.isnan(rho):
+                rho = 0.0
+            rho = max(rho, 0.0)
+            n_eff = n * (1 - rho) / (1 + rho)
+            n_eff = max(n_eff, 2.0)
+        else:
+            rho = 0.0
+            n_eff = float(n)
         
-        # Confidence interval for DA (95% confidence level)
-        # Using Wilson score interval (better than normal approximation)
-        z = 1.96  # 95% confidence
+        # Z-test with continuity correction
+        # H0: p = 0.5, H1: p > 0.5
+        z_stat = (da - 0.5 - 0.5 / n_eff) / np.sqrt(0.25 / n_eff)
+        z_stat = max(z_stat, 0.0)
+        da_pvalue = 1.0 - stats.norm.cdf(z_stat)
+        
+        # Wilson score CI using effective sample size
+        z_ci = 1.96
         p_hat = da
-        denominator = 1 + z**2 / n
-        center = (p_hat + z**2 / (2*n)) / denominator
-        margin = z * np.sqrt((p_hat * (1 - p_hat) / n + z**2 / (4*n**2))) / denominator
+        ne = n_eff
+        denominator = 1 + z_ci**2 / ne
+        center = (p_hat + z_ci**2 / (2 * ne)) / denominator
+        margin = z_ci * np.sqrt((p_hat * (1 - p_hat) / ne + z_ci**2 / (4 * ne**2))) / denominator
         
         da_ci_lower = center - margin
         da_ci_upper = center + margin
@@ -119,7 +161,9 @@ class PerformanceEvaluator:
             'da_ci_upper': da_ci_upper,
             'da_pvalue': da_pvalue,
             'da_n_samples': n,
-            'da_n_correct': int(n_correct),
+            'da_n_effective': n_eff,
+            'da_n_correct': n_correct,
+            'da_autocorrelation': rho,
         }
     
     def calculate_correlation_metrics(
@@ -137,17 +181,14 @@ class PerformanceEvaluator:
         Returns:
             Dictionary with Pearson r, p-value, and related metrics
         """
-        # Pearson correlation
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             pearson_r, pearson_pvalue = stats.pearsonr(y_pred, y_true)
         
-        # Handle NaN (can happen if all predictions are identical)
         if np.isnan(pearson_r):
             pearson_r = 0.0
             pearson_pvalue = 1.0
         
-        # Spearman correlation (rank-based, more robust to outliers)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             spearman_r, spearman_pvalue = stats.spearmanr(y_pred, y_true)
@@ -184,7 +225,6 @@ class PerformanceEvaluator:
         weights = np.abs(y_true)
         weights_sum = np.sum(weights)
         
-        # Avoid division by zero
         if weights_sum == 0:
             return {
                 'wrmse_model': 0.0,
@@ -192,15 +232,12 @@ class PerformanceEvaluator:
                 'wrmse_improvement': 0.0,
             }
         
-        # WRMSE for model
         squared_errors = (y_true - y_pred) ** 2
         wrmse_model = np.sqrt(np.sum(weights * squared_errors) / weights_sum)
         
-        # WRMSE for baseline (always predict 0)
         baseline_squared_errors = y_true ** 2
         wrmse_baseline = np.sqrt(np.sum(weights * baseline_squared_errors) / weights_sum)
         
-        # Relative improvement
         if wrmse_baseline > 0:
             wrmse_improvement = (wrmse_baseline - wrmse_model) / wrmse_baseline
         else:
@@ -211,7 +248,49 @@ class PerformanceEvaluator:
             'wrmse_baseline': wrmse_baseline,
             'wrmse_improvement': wrmse_improvement,
         }
-    
+
+    def calculate_czar_improvement(
+        self,
+        y_true: np.ndarray,
+        y_pred: np.ndarray,
+    ) -> Dict[str, float]:
+        """
+        Calculate Cumulative Z-scored Absolute Return (CZAR) improvement.
+
+        Replaces ZPTAE as a primary metric. Measures the fraction of z-scored directional returns captured by
+        the model relative to a perfect-direction oracle.
+
+        A value of 0 corresponds to random guessing (50% DA); 1.0 means
+        every directional bet was correct, weighted by z-scored magnitude.
+
+        Args:
+            y_true: Ground truth log returns
+            y_pred: Predicted log returns
+
+        Returns:
+            Dictionary with CZAR model score, oracle score, and improvement
+        """
+        stdev = np.std(y_true)
+        if stdev == 0:
+            return {
+                'czar_model': 0.0,
+                'czar_oracle': 0.0,
+                'czar_improvement': 0.0,
+            }
+
+        z_true = y_true / stdev
+        correct = np.sign(y_true) == np.sign(y_pred)
+
+        czar_model = np.sum(np.where(correct, np.abs(z_true), -np.abs(z_true)))
+        czar_oracle = np.sum(np.abs(z_true))
+        czar_improvement = czar_model / czar_oracle
+
+        return {
+            'czar_model': czar_model,
+            'czar_oracle': czar_oracle,
+            'czar_improvement': czar_improvement,
+        }
+
     def calculate_zptae_improvement(
         self, 
         y_true: np.ndarray, 
@@ -220,10 +299,8 @@ class PerformanceEvaluator:
         """
         Calculate Z-transformed Power-Tanh Absolute Error improvement.
         
-        ZPTAE is a custom loss function that:
-        1. Z-scores the data (normalize by std)
-        2. Applies power-tanh transformation (robust to outliers)
-        3. Weights by absolute true value
+        Retained as an additional (non-scored) metric for backward
+        compatibility.  Replaced by CZAR in the primary metrics.
         
         Args:
             y_true: Ground truth log returns
@@ -240,7 +317,6 @@ class PerformanceEvaluator:
                 'zptae_improvement': 0.0,
             }
         
-        # Weights by absolute true value
         weights = np.abs(y_true)
         weights_sum = np.sum(weights)
         
@@ -251,24 +327,20 @@ class PerformanceEvaluator:
                 'zptae_improvement': 0.0,
             }
         
-        # Z-transform and apply power-tanh
         z_true = y_true / stdev
         z_pred = y_pred / stdev
         z_baseline = np.zeros_like(y_true)
         
-        # ZPTAE for model
         pt_diff_model = np.abs(
             self.power_tanh(z_true) - self.power_tanh(z_pred)
         )
         zptae_model = np.sum(weights * pt_diff_model) / weights_sum
         
-        # ZPTAE for baseline (always predict 0)
         pt_diff_baseline = np.abs(
             self.power_tanh(z_true) - self.power_tanh(z_baseline)
         )
         zptae_baseline = np.sum(weights * pt_diff_baseline) / weights_sum
         
-        # Relative improvement
         if zptae_baseline > 0:
             zptae_improvement = (zptae_baseline - zptae_model) / zptae_baseline
         else:
@@ -288,10 +360,7 @@ class PerformanceEvaluator:
         """
         Calculate log aspect ratio: log10(std(predicted) / std(actual)).
         
-        Measures if the model's predictions have appropriate variance.
-        - log_aspect_ratio = 0: perfect variance matching
-        - log_aspect_ratio > 0: over-confident (too much variance)
-        - log_aspect_ratio < 0: under-confident (too little variance)
+        Retained as an additional (non-scored) metric.
         
         Args:
             y_true: Ground truth log returns
@@ -324,8 +393,6 @@ class PerformanceEvaluator:
         Calculate naive annualized return from a simple trading strategy.
         
         Strategy: Go long if prediction is positive, short if negative.
-        Return = sum(|true_return| where direction is correct) - 
-                 sum(|true_return| where direction is wrong)
         
         Args:
             y_true: Ground truth log returns
@@ -335,16 +402,13 @@ class PerformanceEvaluator:
         Returns:
             Dictionary with return metrics
         """
-        # Same sign = correct direction
         same_sign = np.sign(y_true) == np.sign(y_pred)
         
-        # Calculate cumulative return
         naive_return = (
             np.sum(same_sign * np.abs(y_true)) - 
             np.sum(~same_sign * np.abs(y_true))
         )
         
-        # Annualize
         n = len(y_true)
         minutes_per_year = 365.24 * 24 * 60
         annualization_factor = minutes_per_year / epoch_length_minutes / n
@@ -370,22 +434,18 @@ class PerformanceEvaluator:
             y_pred: Predicted log returns
             
         Returns:
-            Dictionary with MAE, MSE, RMSE, R², MAPE
+            Dictionary with MAE, MSE, RMSE, R-squared, MAPE
         """
         errors = y_true - y_pred
         
-        # Basic metrics
         mae = np.mean(np.abs(errors))
         mse = np.mean(errors ** 2)
         rmse = np.sqrt(mse)
         
-        # R² (coefficient of determination)
         ss_res = np.sum(errors ** 2)
         ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
         r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
         
-        # MAPE (Mean Absolute Percentage Error)
-        # Only calculate for non-zero true values
         non_zero_mask = y_true != 0
         if np.any(non_zero_mask):
             mape = np.mean(np.abs(errors[non_zero_mask] / y_true[non_zero_mask])) * 100
@@ -415,26 +475,17 @@ class PerformanceEvaluator:
         Returns:
             Dictionary with precision, recall, F1, specificity
         """
-        # Convert to binary: 1 = up (positive), 0 = down (negative or zero)
         y_true_binary = (y_true > 0).astype(int)
         y_pred_binary = (y_pred > 0).astype(int)
         
-        # Confusion matrix
         tp = np.sum((y_true_binary == 1) & (y_pred_binary == 1))
         tn = np.sum((y_true_binary == 0) & (y_pred_binary == 0))
         fp = np.sum((y_true_binary == 0) & (y_pred_binary == 1))
         fn = np.sum((y_true_binary == 1) & (y_pred_binary == 0))
         
-        # Precision: TP / (TP + FP)
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        
-        # Recall (Sensitivity): TP / (TP + FN)
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        
-        # F1 Score
         f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-        
-        # Specificity: TN / (TN + FP)
         specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
         
         return {
@@ -450,11 +501,11 @@ class PerformanceEvaluator:
     
     def check_primary_metrics_pass(self, metrics: Dict[str, float]) -> Dict[str, bool]:
         """
-        Check which of the 8 primary metrics pass their thresholds.
-        
+        Check which of the 7 primary metrics pass their thresholds.
+
         Args:
             metrics: Dictionary of calculated metrics
-            
+
         Returns:
             Dictionary with pass/fail for each primary metric
         """
@@ -465,31 +516,60 @@ class PerformanceEvaluator:
             'pearson_r_pass': metrics['pearson_r'] >= self.THRESHOLDS['pearson_r'],
             'pearson_pvalue_pass': metrics['pearson_pvalue'] < self.THRESHOLDS['pearson_pvalue'],
             'wrmse_improvement_pass': metrics['wrmse_improvement'] >= self.THRESHOLDS['wrmse_improvement'],
-            'zptae_improvement_pass': metrics['zptae_improvement'] >= self.THRESHOLDS['zptae_improvement'],
-            'log_aspect_ratio_pass': np.abs(metrics['log_aspect_ratio']) < self.THRESHOLDS['log_aspect_ratio_abs'],
+            'czar_improvement_pass': metrics['czar_improvement'] >= self.THRESHOLDS['czar_improvement'],
         }
-    
-    def calculate_performance_score(self, passed: Dict[str, bool]) -> Tuple[float, str, int]:
+
+    @staticmethod
+    def check_temporal_coverage(
+        n_predictions: int,
+        n_expected: int,
+        threshold: float = 0.50,
+    ) -> bool:
+        """
+        Check whether predictions cover a sufficient portion of the evaluation window.
+
+        Args:
+            n_predictions: Number of actual predictions submitted.
+            n_expected: Total number of epochs in the evaluation window.
+            threshold: Minimum fraction of epochs that must have predictions.
+
+        Returns:
+            ``True`` if coverage >= threshold.
+        """
+        if n_expected <= 0:
+            return False
+        return (n_predictions / n_expected) >= threshold
+
+    def calculate_performance_score(
+        self,
+        passed: Dict[str, bool],
+        temporal_coverage_pass: bool = True,
+    ) -> Tuple[float, str, int]:
         """
         Calculate overall performance score and grade.
-        
+
+        The composite score counts up to 7 primary metrics plus an optional
+        temporal-coverage point, for a maximum of 8.
+
         Args:
-            passed: Dictionary of pass/fail for primary metrics
-            
+            passed: Dictionary of pass/fail for the 7 primary metrics.
+            temporal_coverage_pass: Whether temporal coverage is sufficient.
+
         Returns:
-            Tuple of (score, grade, num_passed)
+            Tuple of ``(score, grade, num_passed)`` where *num_passed*
+            includes the temporal-coverage point.
         """
-        num_passed = sum(passed.values())
+        num_passed = sum(passed.values()) + int(temporal_coverage_pass)
         score = num_passed / 8.0
         grade = self.GRADES.get(num_passed, 'F')
-        
         return score, grade, num_passed
     
     def evaluate(
         self,
         y_true: np.ndarray,
         y_pred: np.ndarray,
-        epoch_length_minutes: int = 60
+        epoch_length_minutes: int = 60,
+        n_expected_epochs: Optional[int] = None,
     ) -> Dict:
         """
         Calculate all performance metrics for log return predictions.
@@ -502,46 +582,50 @@ class PerformanceEvaluator:
         Returns:
             Comprehensive dictionary with all metrics, pass/fail, and grade
         """
-        # Convert to numpy arrays
         y_true = np.asarray(y_true).flatten()
         y_pred = np.asarray(y_pred).flatten()
         
-        # Validate inputs
         if len(y_true) != len(y_pred):
             raise ValueError(f"y_true and y_pred must have same length. Got {len(y_true)} and {len(y_pred)}")
         
         if len(y_true) == 0:
             raise ValueError("y_true and y_pred cannot be empty")
         
-        # Calculate all metrics
         metrics = {}
         
-        # 8 Primary Metrics
+        # 7 Primary Metrics
         metrics.update(self.calculate_directional_metrics(y_true, y_pred))
         metrics.update(self.calculate_correlation_metrics(y_true, y_pred))
         metrics.update(self.calculate_wrmse_improvement(y_true, y_pred))
+        metrics.update(self.calculate_czar_improvement(y_true, y_pred))
+        
+        # Additional (non-scored) metrics
         metrics.update(self.calculate_zptae_improvement(y_true, y_pred))
         metrics.update(self.calculate_aspect_ratio(y_true, y_pred))
-        
-        # Additional Metrics
         metrics.update(self.calculate_naive_annualized_return(y_true, y_pred, epoch_length_minutes))
         metrics.update(self.calculate_regression_metrics(y_true, y_pred))
         metrics.update(self.calculate_classification_metrics(y_true, y_pred))
         
-        # Check pass/fail
+        # Check pass/fail for the 7 primary metrics
         passed = self.check_primary_metrics_pass(metrics)
-        score, grade, num_passed = self.calculate_performance_score(passed)
-        
-        # Compile final report
+
+        temporal_pass = True
+        if n_expected_epochs is not None:
+            temporal_pass = self.check_temporal_coverage(len(y_true), n_expected_epochs)
+        score, grade, num_passed = self.calculate_performance_score(
+            passed, temporal_coverage_pass=temporal_pass
+        )
+
         report = {
             'metrics': metrics,
             'passed': passed,
             'score': score,
             'grade': grade,
             'num_passed': num_passed,
+            'num_primary_metrics': self.NUM_PRIMARY_METRICS,
             'thresholds': self.THRESHOLDS.copy(),
         }
-        
+
         return report
     
     def print_report(self, report: Dict, detailed: bool = True):
@@ -556,60 +640,66 @@ class PerformanceEvaluator:
         p = report['passed']
         
         print("=" * 80)
-        print(f"PERFORMANCE EVALUATION REPORT")
+        print("PERFORMANCE EVALUATION REPORT")
         print("=" * 80)
-        print(f"\n📊 OVERALL PERFORMANCE: {report['grade']} ({report['num_passed']}/8 metrics passed)")
+        print(f"\nOVERALL PERFORMANCE: {report['grade']} ({report['num_passed']}/8 points)")
+        print(f"   Primary metrics passed: {sum(p.values())}/{self.NUM_PRIMARY_METRICS}")
         print(f"   Performance Score: {report['score']:.2%}\n")
-        
+
         print("=" * 80)
-        print("🎯 PRIMARY METRICS (8 Core Metrics)")
+        print("PRIMARY METRICS (7 Core Metrics)")
         print("=" * 80)
-        
-        # Directional Accuracy
+
         print(f"\n1. Directional Accuracy:")
-        print(f"   Value: {m['directional_accuracy']:.4f}  {'✅ PASS' if p['da_pass'] else '❌ FAIL'}")
-        print(f"   Threshold: ≥ {self.THRESHOLDS['directional_accuracy']}")
+        print(f"   Value: {m['directional_accuracy']:.4f}  {'PASS' if p['da_pass'] else 'FAIL'}")
+        print(f"   Threshold: >= {self.THRESHOLDS['directional_accuracy']}")
         print(f"   Correct: {m['da_n_correct']}/{m['da_n_samples']} predictions")
-        
-        print(f"\n2. DA Confidence Interval (95%):")
-        print(f"   Lower: {m['da_ci_lower']:.4f}  {'✅ PASS' if p['da_ci_pass'] else '❌ FAIL'}")
-        print(f"   Upper: {m['da_ci_upper']:.4f}")
-        print(f"   Threshold: Lower ≥ {self.THRESHOLDS['da_ci_lower']}")
-        
+
+        print(f"\n2. DA CI Lower Bound:")
+        print(f"   Value: {m['da_ci_lower']:.4f}  {'PASS' if p['da_ci_pass'] else 'FAIL'}")
+        print(f"   Threshold: >= {self.THRESHOLDS['da_ci_lower']}")
+        print(f"   95% CI: [{m['da_ci_lower']:.4f}, {m['da_ci_upper']:.4f}]")
+        print(f"   Effective n: {m['da_n_effective']:.1f} (autocorr: {m['da_autocorrelation']:.3f})")
+
         print(f"\n3. DA Statistical Significance:")
-        print(f"   p-value: {m['da_pvalue']:.4f}  {'✅ PASS' if p['da_pvalue_pass'] else '❌ FAIL'}")
+        print(f"   p-value: {m['da_pvalue']:.4f}  {'PASS' if p['da_pvalue_pass'] else 'FAIL'}")
         print(f"   Threshold: < {self.THRESHOLDS['da_pvalue']}")
-        
+        print(f"   Method: z-test with continuity correction (n_eff={m['da_n_effective']:.1f})")
+
         print(f"\n4. Pearson Correlation:")
-        print(f"   r: {m['pearson_r']:.4f}  {'✅ PASS' if p['pearson_r_pass'] else '❌ FAIL'}")
-        print(f"   Threshold: ≥ {self.THRESHOLDS['pearson_r']}")
-        
+        print(f"   r: {m['pearson_r']:.4f}  {'PASS' if p['pearson_r_pass'] else 'FAIL'}")
+        print(f"   Threshold: >= {self.THRESHOLDS['pearson_r']}")
+
         print(f"\n5. Pearson Statistical Significance:")
-        print(f"   p-value: {m['pearson_pvalue']:.4f}  {'✅ PASS' if p['pearson_pvalue_pass'] else '❌ FAIL'}")
+        print(f"   p-value: {m['pearson_pvalue']:.4f}  {'PASS' if p['pearson_pvalue_pass'] else 'FAIL'}")
         print(f"   Threshold: < {self.THRESHOLDS['pearson_pvalue']}")
-        
+
         print(f"\n6. WRMSE Improvement:")
-        print(f"   Improvement: {m['wrmse_improvement']:.4f} ({m['wrmse_improvement']:.2%})  {'✅ PASS' if p['wrmse_improvement_pass'] else '❌ FAIL'}")
-        print(f"   Threshold: ≥ {self.THRESHOLDS['wrmse_improvement']} (10%)")
+        print(f"   Improvement: {m['wrmse_improvement']:.4f} ({m['wrmse_improvement']:.2%})  {'PASS' if p['wrmse_improvement_pass'] else 'FAIL'}")
+        print(f"   Threshold: >= {self.THRESHOLDS['wrmse_improvement']} (5%)")
         print(f"   Model WRMSE: {m['wrmse_model']:.6f}")
         print(f"   Baseline WRMSE: {m['wrmse_baseline']:.6f}")
-        
-        print(f"\n7. ZPTAE Improvement:")
-        print(f"   Improvement: {m['zptae_improvement']:.4f} ({m['zptae_improvement']:.2%})  {'✅ PASS' if p['zptae_improvement_pass'] else '❌ FAIL'}")
-        print(f"   Threshold: ≥ {self.THRESHOLDS['zptae_improvement']} (20%)")
-        print(f"   Model ZPTAE: {m['zptae_model']:.6f}")
-        print(f"   Baseline ZPTAE: {m['zptae_baseline']:.6f}")
-        
-        print(f"\n8. Log Aspect Ratio:")
-        print(f"   Value: {m['log_aspect_ratio']:.4f}  {'✅ PASS' if p['log_aspect_ratio_pass'] else '❌ FAIL'}")
-        print(f"   Threshold: |value| < {self.THRESHOLDS['log_aspect_ratio_abs']}")
-        print(f"   Std(true): {m['std_true']:.6f}")
-        print(f"   Std(pred): {m['std_pred']:.6f}")
+
+        print(f"\n7. CZAR Improvement:")
+        print(f"   Improvement: {m['czar_improvement']:.4f} ({m['czar_improvement']:.2%})  {'PASS' if p['czar_improvement_pass'] else 'FAIL'}")
+        print(f"   Threshold: >= {self.THRESHOLDS['czar_improvement']} (10%)")
+        print(f"   Model CZAR: {m['czar_model']:.6f}")
+        print(f"   Oracle CZAR: {m['czar_oracle']:.6f}")
         
         if detailed:
             print("\n" + "=" * 80)
-            print("📈 ADDITIONAL METRICS")
+            print("ADDITIONAL METRICS (non-scored)")
             print("=" * 80)
+
+            print(f"\nLog Aspect Ratio:")
+            print(f"   Value: {m['log_aspect_ratio']:.4f}")
+            print(f"   Std(true): {m['std_true']:.6f}")
+            print(f"   Std(pred): {m['std_pred']:.6f}")
+
+            print(f"\nZPTAE (legacy):")
+            print(f"   Improvement: {m['zptae_improvement']:.4f} ({m['zptae_improvement']:.2%})")
+            print(f"   Model ZPTAE: {m['zptae_model']:.6f}")
+            print(f"   Baseline ZPTAE: {m['zptae_baseline']:.6f}")
             
             print(f"\nRegression Metrics:")
             print(f"   MAE:  {m['mae']:.6f}")
@@ -638,6 +728,3 @@ class PerformanceEvaluator:
             print(f"   Spearman r: {m['spearman_r']:.4f} (p={m['spearman_pvalue']:.4f})")
         
         print("\n" + "=" * 80)
-
-
-
