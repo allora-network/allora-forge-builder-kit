@@ -1,53 +1,27 @@
 # SKILLS.md
 
-Task router for agents working in this repository.
+Task router for agents in this repo.
 
-## How to use this file
+## 1) Data exploration
+Use when you need topic discovery, coverage checks, data sanity, or backfill validation.
+- Guide: `skills/allora-data-exploration/SKILL.md`
+- Output: clear data/topic readiness summary
 
-1. Match the user request to one skill below.
-2. Read that skill's `SKILL.md`.
-3. Execute only the required steps.
-4. Keep outputs concise and reproducible.
+## 2) Model building
+Use when you need feature work, training, evaluation, or quality improvement.
+- Guide: `skills/allora-model-builder/SKILL.md`
+- Output: artifact + metrics + recommendation
 
----
-
-## Available skills
-
-### 1) Model building
-**Use for:** feature engineering, target creation, training loops, evaluation, experiment sweeps.
-
-- Path: `skills/allora-model-builder/SKILL.md`
-- Typical inputs: topic id, horizon, interval, feature set.
-- Typical outputs: metrics report, saved artifact, recommended config.
-
-### 2) Data exploration
-**Use for:** topic discovery, data sanity checks, backfill inspection, quick quality checks.
-
-- Path: `skills/allora-data-exploration/SKILL.md`
-- Typical outputs: available topics, data coverage/gaps, exploratory summaries.
-
-### 3) Worker operations
-**Use for:** deployment, local worker lifecycle, monitoring, dashboard workflow.
-
-- Path: `skills/allora-worker-manager/SKILL.md`
-- Typical outputs: deployed worker state, monitor summary, runtime diagnostics.
+## 3) Worker operations
+Use when you need deployment, local worker lifecycle, or submission monitoring.
+- Guide: `skills/allora-worker-manager/SKILL.md`
+- Output: running worker + monitor/dashboard status
 
 ---
 
-## Routing rules (important)
+## Routing rules
+- “What topic/data should I use?” → Data exploration
+- “Improve prediction quality” → Model building
+- “Go live / deploy / monitor” → Worker operations
 
-- If request is ambiguous, default to **data exploration** first.
-- If user asks to "go live" or "deploy", use **worker operations**.
-- If user asks to improve metrics/model quality, use **model building**.
-- Multi-step projects can chain skills, but keep each step explicit.
-
----
-
-## Release-mode expectation
-
-For release prep tasks, combine all three skills in this order:
-1. Data exploration (confirm topic/data assumptions)
-2. Model building (train/evaluate/export)
-3. Worker operations (deploy/monitor)
-
-Then update README/AGENTS docs to reflect the validated flow.
+For release tasks: run in order **Data → Model → Worker ops**.

@@ -1,111 +1,72 @@
 # AGENTS.md
 
-Agent operating guide for **Allora Forge Builder Kit**.
+Agent operating guide for this repository.
 
-## Mission
+## Goal
+In one working session, get a user from clone to live worker submissions with visible monitoring.
 
-Get a fresh user from clone → trained/evaluated model → deployed worker → live monitoring in one short session, with minimal ambiguity.
-
-## First-session protocol (mandatory)
-
-1. Read `README.md` (quickstart + path selection).
-2. Read `SKILLS.md` (task routing).
-3. Confirm environment setup:
+## First-run checklist (mandatory)
+1. Read `README.md`.
+2. Confirm environment:
    - Python 3.10+
    - virtualenv active
    - `pip install -e ".[dev]"`
-4. Confirm API key is available (`ALLORA_API_KEY` or `.allora_api_key` file).
-5. Ask user which path they want:
-   - Notebook path
-   - Python API path
-   - Local worker manager path
+3. Confirm API key exists:
+   - `ALLORA_API_KEY` env var, or
+   - `.allora_api_key` / `notebooks/.allora_api_key`
+4. Ask which execution path they want:
+   - Notebook/script
+   - Python API
+   - Worker operations
 
-Do **not** force one path when another is sufficient.
+## Canonical starter flows
 
-## Modular architecture rule
+### Flow A — Notebook/script (recommended default)
+Run one of the whitelist-free examples:
 
-The toolkit is intentionally modular:
-- Training/evaluation can run without worker manager.
-- Worker manager can run with prebuilt artifacts.
-- Topic discovery can be used standalone.
+```bash
+python notebooks/example_topic_69_bitcoin_walkthrough.py
+python notebooks/example_topic_77_bitcoin_5min_walkthrough.py
+```
 
-When editing docs/code, preserve this separation.
+Then deploy:
 
-## Canonical execution paths
+```bash
+python notebooks/deploy_worker.py
+# or topic helper
+python notebooks/deploy_worker_topic_77.py
+```
 
-### Path A — Notebook/script operator
+### Flow B — Python API (modular integration)
+Use these modules directly:
+- `workflow.py`
+- `evaluation.py`
+- `topic_discovery.py`
 
-Primary files:
-- `notebooks/example_topic_69_bitcoin_walkthrough.py`
-- `notebooks/deploy_worker.py`
+Do not require notebooks when API path is requested.
 
-Success criteria:
-- Feature/target dataframe generated
-- Evaluation report produced
-- Deployable predict artifact created
-- Worker deployment command succeeds
+### Flow C — Worker operations (optional)
+Use manager/monitor/dashboard:
 
-### Path B — Python API integrator
+```bash
+python -m allora_forge_builder_kit.workerctl dashboard
+python -m allora_forge_builder_kit.web_dashboard
+```
 
-Primary modules:
-- `allora_forge_builder_kit/workflow.py`
-- `allora_forge_builder_kit/evaluation.py`
-- `allora_forge_builder_kit/topic_discovery.py`
-
-Success criteria:
-- API-only script runs without notebook dependency
-- Inputs/outputs are explicit and typed where possible
-
-### Path C — Local worker operations
-
-Primary modules:
-- `allora_forge_builder_kit/worker_manager.py`
-- `allora_forge_builder_kit/worker_runtime.py`
-- `allora_forge_builder_kit/worker_monitor.py`
-- `allora_forge_builder_kit/web_dashboard.py`
-
-Success criteria:
-- Local workers can be started/stopped/reconciled
-- Monitoring shows inference/submission flow
-- Dashboard view works for active workers
+## Critical correctness rule
+Before deployment, verify topic prediction format:
+- **Price topic** → absolute price prediction
+- **Log-return topic** → `log(future/current)` prediction
 
 ## Repo hygiene rules
+- Never commit secrets or keys.
+- Keep generated runtime state out of git.
+- Keep docs short and command-oriented.
+- Prefer explicit, reproducible commands over prose.
 
-Before merge/PR, agents should check:
-
-1. `git status --short` and identify accidental runtime artifacts.
-2. Never commit secrets (`*.key`, `worker_secrets.json`, tokens).
-3. Keep generated state out of git (`worker_state.db`, local artifacts, env dirs).
-4. Keep README concise; put deep details in skill docs.
-5. Keep docs consistent with actual module names and commands.
-
-## Validation checklist
-
-Run at least:
-
-```bash
-pytest tests/test_data_managers.py -v -m "not integration"
-```
-
-If integration scope is requested:
-
-```bash
-export RUN_INTEGRATION_TESTS=1
-pytest -v
-```
-
-## Topic prediction correctness
-
-Always verify topic type before deployment:
-- **Price topic** → predict absolute price
-- **Log-return topic** → predict `log(future/current)`
-
-Use topic metadata/discovery to decide format.
-
-## Definition of done (release prep)
-
-- README is short, accurate, and action-oriented.
-- `AGENTS.md` + `SKILLS.md` are present and up to date.
-- A first-time agent can complete setup and first deployment from docs only.
-- Untracked/dirty local runtime noise is either intentionally tracked or ignored.
-- User can monitor live submissions with local dashboard/monitor tools.
+## Done criteria
+A task is done when:
+1. model path runs end-to-end,
+2. worker submits successfully,
+3. monitoring/dashboard confirms live flow,
+4. docs still let a new agent repeat this without ambiguity.

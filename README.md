@@ -1,169 +1,98 @@
 # Allora Forge Builder Kit
 
-Build, evaluate, and deploy Allora worker models with a **modular** workflow.
+Train, evaluate, and deploy Allora prediction workers from one Python toolkit.
 
-Use only what you need:
-- **Notebook path**: train + evaluate + export prediction artifact.
-- **Python API path**: integrate into your own scripts/pipelines.
-- **Worker manager path**: run multiple workers locally with monitoring/dashboard.
-
-No part of the kit is required to use the others.
+## What you get
+- **Workflow API** for data → features/targets → training dataset
+- **Evaluation** aligned with Allora scoring expectations
+- **Deployment tooling** for local worker runtime + monitoring dashboard
+- **Out-of-box examples for whitelist-free topics:** **69** and **77**
 
 ---
 
-## 1) Quick start (10 minutes)
+## Quick start (one session)
 
 ```bash
-# Clone + enter
 git clone https://github.com/allora-network/allora-forge-builder-kit.git
 cd allora-forge-builder-kit
 
-# Python env
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Install
 pip install -e ".[dev]"
-```
 
-Set API key (either env var or file):
-
-```bash
 export ALLORA_API_KEY="UP-..."
-# OR write to notebooks/.allora_api_key
 ```
 
-Run one example end-to-end:
+Run a full example:
 
 ```bash
+# topic 69 example
 python notebooks/example_topic_69_bitcoin_walkthrough.py
+
+# topic 77 example
+python notebooks/example_topic_77_bitcoin_5min_walkthrough.py
 ```
 
 ---
 
-## 2) Choose your path
+## Deploy + monitor locally
 
-### A) Notebook-first (fastest for humans/agents)
+```bash
+# generic deploy flow
+python notebooks/deploy_worker.py
 
-Use notebooks/scripts in `notebooks/` to:
-1. fetch/backfill data,
-2. build features/targets,
-3. train + evaluate,
-4. export a `predict` artifact,
-5. deploy worker.
+# topic-specific deploy helpers
+python notebooks/deploy_worker_topic_77.py
 
-Start with:
+# multi-worker dashboard
+python -m allora_forge_builder_kit.workerctl dashboard
+# optional web dashboard
+python -m allora_forge_builder_kit.web_dashboard
+```
+
+---
+
+## Minimal path map
+
+### Notebook/script path (fastest)
 - `notebooks/example_topic_69_bitcoin_walkthrough.py`
+- `notebooks/example_topic_77_bitcoin_5min_walkthrough.py`
 - `notebooks/deploy_worker.py`
 
-### B) Python API (embed in your own system)
+### Python API path (modular)
+- `allora_forge_builder_kit/workflow.py`
+- `allora_forge_builder_kit/evaluation.py`
+- `allora_forge_builder_kit/topic_discovery.py`
 
-```python
-from allora_forge_builder_kit import AlloraMLWorkflow, PerformanceEvaluator
+### Worker operations path (optional)
+- `allora_forge_builder_kit/worker_manager.py`
+- `allora_forge_builder_kit/worker_monitor.py`
+- `allora_forge_builder_kit/web_dashboard.py`
 
-workflow = AlloraMLWorkflow(
-    tickers=["btcusd"],
-    number_of_input_bars=48,
-    target_bars=24,
-    interval="1h",
-    data_source="allora",  # atlas-backed
-    api_key="UP-...",
-)
+Use one path or combine them.
 
-workflow.backfill(start="2025-01-01")
-df = workflow.get_full_feature_target_dataframe()
+---
 
-# train model -> y_pred
-# report = PerformanceEvaluator().evaluate(y_true, y_pred)
-```
+## Agent docs
+- `AGENTS.md` – exact runbook for coding agents
+- `SKILLS.md` – task routing for model/data/deploy work
 
-### C) Local worker operations (multi-worker + dashboard)
+If you are an agent, start with `AGENTS.md`.
 
-Use manager/runtime/monitor modules for local deployment lifecycle.
+---
+
+## Testing
 
 ```bash
-# CLI dashboard (from module)
-python -m allora_forge_builder_kit.workerctl dashboard
-
-# Include stopped workers
-python -m allora_forge_builder_kit.workerctl dashboard --all
-```
-
-Web dashboard (if enabled in your flow):
-
-```bash
-python -m allora_forge_builder_kit.web_dashboard
-# opens local status server/UI
-```
-
----
-
-## 3) Repository map
-
-```text
-allora_forge_builder_kit/
-  workflow.py            # Data -> features/targets orchestration
-  evaluation.py          # Allora-aligned scoring + grading
-  topic_discovery.py     # Discover active topics + metadata
-  worker_manager.py      # Local worker lifecycle manager
-  worker_runtime.py      # Managed worker runtime entrypoint
-  worker_monitor.py      # Submission/inference monitoring
-  web_dashboard.py       # Local dashboard server
-
-notebooks/
-  example_*              # End-to-end training examples
-  deploy_worker*.py      # Deployment scripts
-  *_sweep.py             # Model/feature experiments
-
-skills/
-  allora-model-builder/
-  allora-data-exploration/
-  allora-worker-manager/
-```
-
----
-
-## 4) Agent-first docs
-
-- `AGENTS.md` → exact operating guide for coding agents.
-- `SKILLS.md` → which skill to use for each task.
-- `skills/*/SKILL.md` → task-specific runbooks.
-
-If you are an agent: start with `AGENTS.md`.
-
----
-
-## 5) Data sources
-
-- `allora` / `atlas` (default): Atlas-backed candles (API key required)
-- `binance`: REST/WebSocket market data (no key required for public data)
-
----
-
-## 6) Testing
-
-```bash
-# Fast unit tests
+# fast tests
 pytest tests/test_data_managers.py -v -m "not integration"
 
-# Full tests (network/integration)
+# full suite (integration)
 export RUN_INTEGRATION_TESTS=1
 pytest -v
 ```
 
 ---
 
-## 7) Professional release checklist (suggested)
-
-Before merging to `main`:
-1. Remove local runtime artifacts (`.venv*`, `worker_state.db`, secrets files, temp artifacts).
-2. Ensure `.gitignore` covers generated files.
-3. Run tests and capture result summary in PR.
-4. Add a short "How to launch in one session" section in PR description.
-5. Verify notebook path and API path both work independently.
-
----
-
 ## License
-
-MIT — see `LICENSE`.
+MIT
