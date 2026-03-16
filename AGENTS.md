@@ -7,14 +7,15 @@ In one working session, get a user from clone to live worker submissions with vi
 
 ## First-run checklist (mandatory)
 1. Read `README.md`.
-2. Confirm environment:
+2. Read `SKILLS.md` (task routing and skills package map).
+3. Confirm environment:
    - Python 3.10+
    - virtualenv active
    - `pip install -e ".[dev]"`
-3. Confirm API key exists:
+4. Confirm API key exists:
    - `ALLORA_API_KEY` env var, or
    - `.allora_api_key` / `notebooks/.allora_api_key`
-4. Ask which execution path they want:
+5. Ask which execution path they want:
    - Notebook/script
    - Python API
    - Worker operations
@@ -29,11 +30,13 @@ python notebooks/example_topic_69_bitcoin_walkthrough.py
 python notebooks/example_topic_77_bitcoin_5min_walkthrough.py
 ```
 
-Then deploy:
+Then deploy with the script matching the topic walkthrough:
 
 ```bash
+# topic 69 walkthrough
 python notebooks/deploy_worker.py
-# or topic helper
+
+# topic 77 walkthrough
 python notebooks/deploy_worker_topic_77.py
 ```
 
