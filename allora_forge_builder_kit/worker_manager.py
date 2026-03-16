@@ -56,6 +56,7 @@ class WorkerManager:
         topic_desc_resolver: Optional[Callable[[int], Optional[str]]] = None,
         runtime_log_dir: str | Path = "worker_logs",
         artifact_dir: str | Path = "managed_artifacts",
+        key_dir: str | Path = "worker_keys",
         reconcile_on_start: bool = True,
     ):
         self.db_path = Path(db_path)
@@ -68,6 +69,8 @@ class WorkerManager:
         self.runtime_log_dir.mkdir(parents=True, exist_ok=True)
         self.artifact_dir = Path(artifact_dir)
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
+        self.key_dir = Path(key_dir)
+        self.key_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._runners: dict[tuple[int, str], dict] = {}
         self._init_db()
@@ -77,21 +80,23 @@ class WorkerManager:
     # ----------------------------
     # Identity handling
     # ----------------------------
-    def ensure_identity(self, alias: str | None = None, address: str | None = None, mnemonic: str | None = None) -> Identity:
+    def ensure_identity(self, alias: str | None = None, address: str | None = None, mnemonic: str | None = None, key_file: str | Path | None = None) -> Identity:
         with self._lock:
             if address:
                 existing = self._get_identity_by_address(address)
                 if existing:
                     return Identity(alias=existing["alias"], address=existing["address"])
-                if not mnemonic:
-                    raise ValueError("Mnemonic is required when importing a new address")
+                if not mnemonic and not key_file:
+                    raise ValueError("A mnemonic or key_file is required when importing a new address")
                 final_alias = alias or f"imported_{int(time.time())}"
-                self._insert_identity(final_alias, address, mnemonic)
+                kf = self._persist_key_file(final_alias, mnemonic=mnemonic, source_file=key_file)
+                self._insert_identity(final_alias, address, kf)
                 return Identity(alias=final_alias, address=address)
 
             created_alias, created_address, created_mnemonic = self._identity_creator()
             final_alias = alias or created_alias
-            self._insert_identity(final_alias, created_address, created_mnemonic)
+            kf = self._persist_key_file(final_alias, mnemonic=created_mnemonic)
+            self._insert_identity(final_alias, created_address, kf)
             return Identity(alias=final_alias, address=created_address)
 
     def list_identities(self) -> list[Identity]:
@@ -319,6 +324,11 @@ class WorkerManager:
             "--artifact",
             str(status["artifact_path"]),
         ]
+
+        key_file = self._get_key_file_for_address(address)
+        if key_file:
+            cmd.extend(["--mnemonic-file", str(key_file)])
+
         if "price" in str(status.get("topic_desc", "")).lower():
             cmd.append("--reject-zero")
         proc = subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT, cwd=str(Path.cwd()))
@@ -529,13 +539,39 @@ class WorkerManager:
             except PermissionError:
                 pass
 
-    def _insert_identity(self, alias: str, address: str, mnemonic: str) -> None:
+    def _insert_identity(self, alias: str, address: str, key_file: Path) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("INSERT INTO identities(alias, address) VALUES(?, ?)", (alias, address))
             conn.commit()
         data = self._load_secrets()
-        data[alias] = {"address": address, "mnemonic": mnemonic}
+        data[alias] = {"address": address, "key_file": str(key_file)}
         self._save_secrets(data)
+
+    def _persist_key_file(self, alias: str, mnemonic: str | None = None, source_file: str | Path | None = None) -> Path:
+        """Write or copy a mnemonic into worker_keys/<alias>.key (chmod 600)."""
+        dest = self.key_dir / f"{alias}.key"
+        if source_file:
+            shutil.copy2(str(source_file), str(dest))
+        elif mnemonic:
+            dest.write_text(mnemonic)
+        else:
+            raise ValueError("Either mnemonic or source_file must be provided")
+        try:
+            dest.chmod(0o600)
+        except PermissionError:
+            pass
+        return dest
+
+    def _get_key_file_for_address(self, address: str) -> Optional[Path]:
+        secrets = self._load_secrets()
+        for entry in secrets.values():
+            if isinstance(entry, dict) and entry.get("address") == address:
+                kf = entry.get("key_file")
+                if kf:
+                    p = Path(kf)
+                    if p.exists():
+                        return p
+        return None
 
     def _load_secrets(self) -> dict:
         try:
@@ -550,10 +586,16 @@ class WorkerManager:
         except PermissionError:
             pass
 
-    def _default_identity_creator(self) -> tuple[str, str, str]:
-        # Placeholder creator for local development; callers should inject SDK creator.
-        ts = int(time.time())
-        return (f"identity_{ts}", f"address_{ts}", f"mnemonic_{ts}")
+    @staticmethod
+    def _default_identity_creator() -> tuple[str, str, str]:
+        from cosmpy.mnemonic import generate_mnemonic
+        from cosmpy.aerial.wallet import LocalWallet
+
+        mnemonic = generate_mnemonic()
+        wallet = LocalWallet.from_mnemonic(mnemonic, "allo")
+        address = str(wallet.address())
+        alias = f"identity_{uuid.uuid4().hex[:12]}"
+        return (alias, address, mnemonic)
 
     def _get_identity_by_address(self, address: str) -> Optional[dict]:
         with sqlite3.connect(self.db_path) as conn:

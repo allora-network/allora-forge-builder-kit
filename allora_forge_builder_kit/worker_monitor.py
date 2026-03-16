@@ -592,14 +592,17 @@ class AlloraSDKEventFetcher:
         # 1) Historical tx events for this sender (submission/inference)
         query = f"message.sender='{address}'"
         for page in range(1, self.max_pages + 1):
-            txs = self.client.tx.get_txs_event(
-                GetTxsEventRequest(
-                    query=query,
-                    order_by=OrderBy.DESC,
-                    page=page,
-                    limit=self.page_limit,
+            try:
+                txs = self.client.tx.get_txs_event(
+                    GetTxsEventRequest(
+                        query=query,
+                        order_by=OrderBy.DESC,
+                        page=page,
+                        limit=self.page_limit,
+                    )
                 )
-            )
+            except Exception:
+                break
             tx_responses = list(getattr(txs, "tx_responses", []) or [])
             if not tx_responses:
                 break
