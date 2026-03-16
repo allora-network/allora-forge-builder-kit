@@ -12,7 +12,7 @@ Use `WorkerManager` when running multiple topics and ensuring one worker per `(t
 - Unique worker key is `(topic_id, address)`.
 - Deploy with only `topic_id + artifact` will:
   1) reuse an existing managed address not used for that topic,
-  2) otherwise create a new identity/address.
+  2) otherwise create a new wallet and address automatically.
 - Deploying to an existing `(topic_id, address)` requires `replace=True`.
 
 ## Quick Start
@@ -30,7 +30,24 @@ wm.start_all()
 print(wm.health_all())
 ```
 
-## Notes
+## Key management
 
-- Secrets are stored in `worker_secrets.json` (chmod 600 when possible).
-- Prefer environment/keychain integration for production secret storage.
+- Wallet mnemonics are stored as individual files in `worker_keys/` (chmod 600).
+- `worker_secrets.json` maps identity aliases to `{address, key_file}` — never contains raw mnemonics.
+- The runtime reads the key file directly via `AlloraWalletConfig(mnemonic_file=...)`.
+- Users can inspect their mnemonic by reading the key file: `cat worker_keys/<alias>.key`
+
+## Monitoring
+
+```python
+from allora_forge_builder_kit import WorkerMonitor, AlloraSDKEventFetcher
+
+monitor = WorkerMonitor(db_path="worker_state.db", event_fetcher=AlloraSDKEventFetcher())
+wm.attach_monitor(monitor, sync_now=True)
+
+# CLI dashboard
+# python -m allora_forge_builder_kit.workerctl dashboard
+
+# Web dashboard
+# python -m allora_forge_builder_kit.web_dashboard --host 0.0.0.0 --port 8787
+```
