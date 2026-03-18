@@ -30,6 +30,8 @@ dependencies = [
 dev = [
     "pytest",
     "websocket-client",
+    "scikit-learn",
+    "matplotlib",
 ]
 binance = [
     "websocket-client",
