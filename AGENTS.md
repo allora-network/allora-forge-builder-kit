@@ -12,17 +12,22 @@ In one working session, get a user from clone to live worker submissions with vi
    - Python 3.10+ (`python3 --version`). On macOS, use `python3.11` or `python3.12` explicitly if system `python3` is 3.9.
    - virtualenv active
    - `pip install -e ".[dev]"`
-4. **Allora API key — YOU MUST ASK THE USER.**
-   This is a required human interaction step. Do not skip it or try to proceed without it.
-   - First, check if one already exists: `ALLORA_API_KEY` env var → `.allora_api_key` file → `notebooks/.allora_api_key` file.
-   - **If no key is found, ask the user to provide one.** Tell them:
-     > You need a free Allora API key. Sign up at https://developer.allora.network to get one.
-     > Once you have it, paste it here or run: `export ALLORA_API_KEY="UP-..."`
-   - **Wait for the user to respond** with the key before continuing. Do not proceed to data steps without it.
-   - Once the user provides the key, write it to `.allora_api_key` and set the env var.
-   - **If the user says they don't want an API key or can't get one right now**, that's OK — switch to
-     `data_source="binance"` in the workflow. This pulls OHLCV data from Binance directly with no key.
-     This does not block progress; it is just one step of the setup.
+4. **Allora API key — STOP AND ASK THE USER. Do not silently proceed.**
+   Treat the API key as **human-confirmed input**, not implicit context.
+   Never auto-use a discovered key without the user's explicit approval in this session.
+
+   **If a key file or env var already exists**, tell the user what you found and ask:
+   > I found an Allora API key at `.allora_api_key`. Should I use this, or do you want to provide a different one?
+
+   **If no key is found anywhere**, stop and prompt with clear options:
+   > I need an Allora API key to fetch data. You have three options:
+   > 1. **Sign up free** at https://developer.allora.network and paste your key here.
+   > 2. **Set it as an env var**: `export ALLORA_API_KEY="UP-..."`
+   > 3. **Skip the API key** — I'll use Binance as the data source instead (no key required).
+
+   **Wait for the user to respond before continuing.** Do not proceed to any data, model,
+   or deploy step without either a confirmed key or explicit approval to use Binance.
+   Once confirmed, write the key to `.allora_api_key` and export it as `ALLORA_API_KEY`.
 5. Ask which execution path they want:
    - Notebook/script
    - Python API

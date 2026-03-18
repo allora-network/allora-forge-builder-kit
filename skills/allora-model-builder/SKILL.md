@@ -15,10 +15,12 @@ Forge Builder Kit.
 pip install -e ".[dev]"
 ```
 
-**API key**: Before running any data or model steps, check if the user has an Allora API key
-(`ALLORA_API_KEY` env var or `.allora_api_key` file). If not, **ask the user for one** and
-tell them to sign up free at https://developer.allora.network. Wait for them to provide it.
-If they decline, use `data_source="binance"` instead of `"allora"` to proceed without a key.
+**API key — stop and ask the user before proceeding.**
+Do not silently use a discovered key — treat it as human-confirmed input.
+- If a key exists in env/file, tell the user and ask: "Should I use this key, or a different one?"
+- If no key is found, prompt: "Sign up free at https://developer.allora.network and paste
+  your key, or I can use `data_source='binance'` instead (no key needed)."
+- **Wait for the user to respond.** Do not proceed to data/model steps without confirmation.
 
 ## Steps
 
