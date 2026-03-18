@@ -9,7 +9,7 @@ In one working session, get a user from clone to live worker submissions with vi
 1. Read `README.md`.
 2. Read `SKILLS.md` (task routing and skills package map).
 3. Confirm environment:
-   - Python 3.10+
+   - Python 3.10+ (`python3 --version`). On macOS, use `python3.11` or `python3.12` explicitly if system `python3` is 3.9.
    - virtualenv active
    - `pip install -e ".[dev]"`
 4. Confirm API key exists:

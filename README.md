@@ -16,6 +16,8 @@ Train, evaluate, and deploy Allora prediction workers from one Python toolkit.
 git clone https://github.com/allora-network/allora-forge-builder-kit.git
 cd allora-forge-builder-kit
 
+# Requires Python 3.10+. On macOS, use python3.11 or python3.12 explicitly
+# if `python3 --version` shows 3.9.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
