@@ -9,6 +9,14 @@ Allora Network topics.
 - User needs to inspect historical OHLCV data.
 - User wants to understand topic parameters before building a model.
 
+## API key (ask the user first)
+
+Before running any data commands, check if the user has an Allora API key
+(`ALLORA_API_KEY` env var or `.allora_api_key` file). **If not found, ask the user
+for one** — tell them to sign up free at https://developer.allora.network and paste
+the key. Wait for them to respond before proceeding. If they decline or can't get one
+right now, use the Binance data source (see below) — it requires no key.
+
 ## Atlas Data Exploration
 
 ```python

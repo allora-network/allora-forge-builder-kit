@@ -12,12 +12,17 @@ In one working session, get a user from clone to live worker submissions with vi
    - Python 3.10+ (`python3 --version`). On macOS, use `python3.11` or `python3.12` explicitly if system `python3` is 3.9.
    - virtualenv active
    - `pip install -e ".[dev]"`
-4. **Allora API key** (required for Allora data source, optional for Binance):
-   - Check: `ALLORA_API_KEY` env var → `.allora_api_key` file → `notebooks/.allora_api_key` file.
-   - If missing, **direct the user to sign up at https://developer.allora.network** to get a free key.
-   - Then have them set it: `export ALLORA_API_KEY="UP-..."` or write to `.allora_api_key`.
-   - **If the user does not want an API key**, use `data_source="binance"` in the workflow instead.
-     This pulls OHLCV data from Binance directly and requires no key.
+4. **Allora API key — YOU MUST ASK THE USER.**
+   This is a required human interaction step. Do not skip it or try to proceed without it.
+   - First, check if one already exists: `ALLORA_API_KEY` env var → `.allora_api_key` file → `notebooks/.allora_api_key` file.
+   - **If no key is found, ask the user to provide one.** Tell them:
+     > You need a free Allora API key. Sign up at https://developer.allora.network to get one.
+     > Once you have it, paste it here or run: `export ALLORA_API_KEY="UP-..."`
+   - **Wait for the user to respond** with the key before continuing. Do not proceed to data steps without it.
+   - Once the user provides the key, write it to `.allora_api_key` and set the env var.
+   - **If the user says they don't want an API key or can't get one right now**, that's OK — switch to
+     `data_source="binance"` in the workflow. This pulls OHLCV data from Binance directly with no key.
+     This does not block progress; it is just one step of the setup.
 5. Ask which execution path they want:
    - Notebook/script
    - Python API

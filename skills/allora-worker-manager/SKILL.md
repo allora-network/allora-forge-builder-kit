@@ -7,6 +7,13 @@ description: "Manage multiple Allora SDK workers by topic/address with lightweig
 
 Use `WorkerManager` when running multiple topics and ensuring one worker per `(topic_id, address)`.
 
+## API key requirement
+
+Workers need an `ALLORA_API_KEY` to submit predictions on-chain. Before deploying,
+check if the user has one (`ALLORA_API_KEY` env var or `.allora_api_key` file).
+**If not, ask the user for a key** — tell them to sign up free at
+https://developer.allora.network. Wait for them to provide it before deploying.
+
 ## Core Rules
 
 - Unique worker key is `(topic_id, address)`.

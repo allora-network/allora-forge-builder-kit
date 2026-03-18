@@ -15,7 +15,10 @@ Forge Builder Kit.
 pip install -e ".[dev]"
 ```
 
-An Allora API key is required (obtain free at https://developer.allora.network).
+**API key**: Before running any data or model steps, check if the user has an Allora API key
+(`ALLORA_API_KEY` env var or `.allora_api_key` file). If not, **ask the user for one** and
+tell them to sign up free at https://developer.allora.network. Wait for them to provide it.
+If they decline, use `data_source="binance"` instead of `"allora"` to proceed without a key.
 
 ## Steps
 
