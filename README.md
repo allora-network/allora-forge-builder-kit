@@ -22,8 +22,10 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
-export ALLORA_API_KEY="UP-..."
+export ALLORA_API_KEY="UP-..."   # Free key from https://developer.allora.network
 ```
+
+> **No API key?** You can use `data_source="binance"` in the workflow to pull data directly from Binance instead.
 
 Run a full example:
 

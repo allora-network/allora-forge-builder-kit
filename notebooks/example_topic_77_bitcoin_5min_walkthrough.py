@@ -235,10 +235,11 @@ def save_run_artifacts(df_eval, best_result, best_params, run_dir, feature_cols,
 # =============================================================================
 print("\n[1/6] Initializing workflow...")
 
-# Read Allora API key
-api_key_path = os.path.join(os.path.dirname(__file__), '.allora_api_key')
-with open(api_key_path, 'r') as f:
-    api_key = f.read().strip()
+# Resolve Allora API key (env var → file → prompt).
+# Get a free key at https://developer.allora.network
+# Alternatively, set data_source="binance" below to skip the API key entirely.
+from allora_forge_builder_kit.utils import get_api_key
+api_key = get_api_key(api_key_file=os.path.join(os.path.dirname(__file__), '.allora_api_key'))
 
 workflow = AlloraMLWorkflow(
     tickers=TICKERS,
@@ -264,15 +265,25 @@ try:
     workflow.backfill(start=start_date)
     print("✅ Backfill complete")
 except Exception as e:
-    print(f"⚠️ Backfill skipped due to error: {e}")
-    print("   Proceeding with locally cached parquet data...")
+    print(f"⚠️ Backfill failed: {e}")
+    print("   Will attempt to use locally cached parquet data...")
 
 # =============================================================================
 # STEP 3: Extract Features & Engineer New Features
 # =============================================================================
 print("\n[3/6] Extracting and engineering features...")
 
-df_all = workflow.get_full_feature_target_dataframe(start_date=start_date).reset_index()
+try:
+    df_all = workflow.get_full_feature_target_dataframe(start_date=start_date).reset_index()
+except Exception as e:
+    raise RuntimeError(
+        f"No data available: {e}\n\n"
+        "This usually means the backfill failed (bad/missing API key) and there is "
+        "no locally cached parquet data.\n\n"
+        "Fix options:\n"
+        "  1. Set a valid ALLORA_API_KEY (free at https://developer.allora.network)\n"
+        "  2. Use data_source='binance' in AlloraMLWorkflow() to skip the API key\n"
+    ) from e
 
 # Feature Engineering: Add log returns to base features
 # For detailed TA indicators and visualizations, see: feature_engineering_example.py

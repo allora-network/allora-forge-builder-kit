@@ -51,8 +51,21 @@ inf = discovery.get_inference(topic_id=69)
 print(inf)
 ```
 
+## Binance fallback (no API key required)
+
+If the user does not have an Allora API key, use the Binance data source instead:
+
+```python
+from allora_forge_builder_kit import DataManager
+
+dm = DataManager(source="binance", interval="5m", market="futures")
+```
+
+This pulls OHLCV data directly from Binance and requires no authentication.
+
 ## Key points
 
+- **API key**: Free from https://developer.allora.network — required for Atlas/Allora data source.
 - Atlas base URL: `https://forge-data.allora.run/api/`
 - Auth: `X-API-Key` header (same key as legacy Allora service).
 - Datasets follow naming pattern `tiingo_{ticker}_1min`.
