@@ -36,21 +36,25 @@ In one working session, get a user from clone to live worker submissions with vi
 ## Canonical starter flows
 
 ### Flow A — Notebook/script (recommended default)
-Run one of the whitelist-free examples:
+Run one of the whitelist-free examples to train + evaluate + save `predict.pkl`:
 
 ```bash
 python notebooks/example_topic_69_bitcoin_walkthrough.py
 python notebooks/example_topic_77_bitcoin_5min_walkthrough.py
 ```
 
-Then deploy with the script matching the topic walkthrough:
+Then deploy. The deploy scripts use `WorkerManager` internally — wallet creation,
+key management, and process lifecycle are fully automatic (no interactive prompts):
 
 ```bash
-# topic 69 walkthrough
+# topic 69 (default)
 python notebooks/deploy_worker.py
 
-# topic 77 walkthrough
+# topic 77
 python notebooks/deploy_worker_topic_77.py
+
+# any topic via env var
+TOPIC_ID=42 python notebooks/deploy_worker.py
 ```
 
 ### Flow B — Python API (modular integration)
@@ -61,11 +65,23 @@ Use these modules directly:
 
 Do not require notebooks when API path is requested.
 
-### Flow C — Worker operations (optional)
-Use manager/monitor/dashboard:
+### Flow C — Worker operations (deploy + monitor)
+Use `WorkerManager` for multi-worker lifecycle and monitoring:
+
+```python
+from pathlib import Path
+from allora_forge_builder_kit import WorkerManager, WorkerMonitor, AlloraSDKEventFetcher
+
+wm = WorkerManager()
+result = wm.deploy_worker(topic_id=77, artifact_path=Path("predict.pkl"))
+wm.attach_monitor(WorkerMonitor(event_fetcher=AlloraSDKEventFetcher()))
+wm.start_all()
+```
 
 ```bash
+# CLI dashboard
 python -m allora_forge_builder_kit.workerctl dashboard
+# Web dashboard
 python -m allora_forge_builder_kit.web_dashboard
 ```
 

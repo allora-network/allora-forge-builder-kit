@@ -1,61 +1,49 @@
 #!/usr/bin/env python3
 """
-Deploy trained model to Allora Network as a worker.
+Deploy trained model via WorkerManager.
 
-Compatible with allora_sdk >= 1.0.6.
+Usage:
+    python notebooks/deploy_worker.py                    # defaults to topic 69
+    TOPIC_ID=77 python notebooks/deploy_worker.py       # override topic
+
+Expects predict.pkl in the current directory.
+The WorkerManager handles wallet creation, key management, and process
+lifecycle automatically — no interactive prompts required.
 """
 
 import os
-import asyncio
-import traceback
-import cloudpickle
-from allora_sdk.worker import AlloraWorker
+from pathlib import Path
+from allora_forge_builder_kit import WorkerManager, WorkerMonitor, AlloraSDKEventFetcher
 
-# Configuration
-TOPIC_ID = 69
-PREDICT_PKL = "predict.pkl"
-API_KEY_FILE = ".allora_api_key"
-DEBUG_MODE = True
+TOPIC_ID = int(os.environ.get("TOPIC_ID", "69"))
+PREDICT_PKL = os.environ.get("PREDICT_PKL", "predict.pkl")
 
-# SECURITY NOTE: cloudpickle.load executes arbitrary code. Only load pickle
-# files that you created yourself. Never load untrusted pickle files.
-print(f"Loading model from {PREDICT_PKL}...")
-with open(PREDICT_PKL, "rb") as f:
-    predict_fn = cloudpickle.load(f)
-print("Model loaded")
-
-# Read API key (prefer ALLORA_API_KEY env var over plaintext file)
-api_key = os.environ.get("ALLORA_API_KEY")
-if not api_key:
-    api_key_path = os.path.join(os.path.dirname(__file__), API_KEY_FILE)
-    with open(api_key_path, "r") as f:
-        api_key = f.read().strip()
-
-
-async def main():
-    """Run the Allora worker with the trained model."""
-    print(f"\nStarting Allora worker for Topic {TOPIC_ID}...")
-
-    worker = AlloraWorker(
-        run=predict_fn,
-        topic_id=TOPIC_ID,
-        api_key=api_key,
-        debug=DEBUG_MODE,
+artifact = Path(PREDICT_PKL)
+if not artifact.exists():
+    raise FileNotFoundError(
+        f"{PREDICT_PKL} not found. Run a walkthrough first:\n"
+        "  python notebooks/example_topic_69_bitcoin_walkthrough.py\n"
+        "  python notebooks/example_topic_77_bitcoin_5min_walkthrough.py"
     )
 
-    print("Worker initialized. Submitting predictions...")
+wm = WorkerManager()
 
-    async for result in worker.run():
-        if isinstance(result, Exception):
-            print(f"Error: {result!r} ({type(result).__name__})")
-            tb = "".join(traceback.format_exception(type(result), result, result.__traceback__))
-            print("--- exception traceback start ---")
-            print(tb)
-            print("--- exception traceback end ---")
-        else:
-            print(f"Prediction submitted: {result.prediction}")
+print(f"Deploying worker for Topic {TOPIC_ID}...")
+result = wm.deploy_worker(topic_id=TOPIC_ID, artifact_path=artifact)
+print(f"  {result.message}")
+print(f"  Address: {result.address_assigned}")
 
+monitor = WorkerMonitor(event_fetcher=AlloraSDKEventFetcher())
+wm.attach_monitor(monitor)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+print("Starting worker...")
+wm.start_worker(TOPIC_ID, result.address_assigned)
 
+status = wm.status_worker(TOPIC_ID, result.address_assigned)
+print(f"  Status: {status['status']}")
+print(f"  PID: {status.get('last_pid')}")
+print(f"  Log: worker_logs/worker_{TOPIC_ID}_{result.address_assigned}.log")
+
+print(f"\nWorker running. Monitor with:")
+print(f"  python -m allora_forge_builder_kit.workerctl dashboard")
+print(f"  python -m allora_forge_builder_kit.web_dashboard")
