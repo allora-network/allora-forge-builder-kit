@@ -57,6 +57,8 @@ class WorkerManager:
         runtime_log_dir: str | Path = "worker_logs",
         artifact_dir: str | Path = "managed_artifacts",
         key_dir: str | Path = "worker_keys",
+        network: str = "testnet",
+        no_faucet: bool = False,
         reconcile_on_start: bool = True,
     ):
         self.db_path = Path(db_path)
@@ -71,6 +73,8 @@ class WorkerManager:
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
         self.key_dir = Path(key_dir)
         self.key_dir.mkdir(parents=True, exist_ok=True)
+        self._network = network
+        self._no_faucet = no_faucet
         self._lock = threading.RLock()
         self._runners: dict[tuple[int, str], dict] = {}
         self._init_db()
@@ -326,9 +330,17 @@ class WorkerManager:
         ]
 
         key_file = self._get_key_file_for_address(address)
-        if key_file:
-            cmd.extend(["--mnemonic-file", str(key_file)])
+        if not key_file:
+            log_f.close()
+            raise FileNotFoundError(
+                f"No key file found for address {address}. "
+                f"Check worker_secrets.json and worker_keys/ directory."
+            )
+        cmd.extend(["--mnemonic-file", str(key_file)])
+        cmd.extend(["--network", self._network])
 
+        if self._no_faucet:
+            cmd.append("--no-faucet")
         if "price" in str(status.get("topic_desc", "")).lower():
             cmd.append("--reject-zero")
         proc = subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT, cwd=str(Path.cwd()))
@@ -547,9 +559,15 @@ class WorkerManager:
         data[alias] = {"address": address, "key_file": str(key_file)}
         self._save_secrets(data)
 
+    @staticmethod
+    def _sanitize_alias(alias: str) -> str:
+        import re
+        safe = re.sub(r"[^a-zA-Z0-9_\-]", "_", alias)
+        return safe[:128] or "unnamed"
+
     def _persist_key_file(self, alias: str, mnemonic: str | None = None, source_file: str | Path | None = None) -> Path:
         """Write or copy a mnemonic into worker_keys/<alias>.key (chmod 600)."""
-        dest = self.key_dir / f"{alias}.key"
+        dest = self.key_dir / f"{self._sanitize_alias(alias)}.key"
         if source_file:
             shutil.copy2(str(source_file), str(dest))
         elif mnemonic:

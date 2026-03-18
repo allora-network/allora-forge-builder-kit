@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -601,7 +604,11 @@ class AlloraSDKEventFetcher:
                         limit=self.page_limit,
                     )
                 )
-            except Exception:
+            except Exception as exc:
+                if page > 1:
+                    logger.debug("Pagination ended at page %d: %s", page, exc)
+                else:
+                    logger.warning("Failed to fetch tx events for %s: %s", address, exc)
                 break
             tx_responses = list(getattr(txs, "tx_responses", []) or [])
             if not tx_responses:
