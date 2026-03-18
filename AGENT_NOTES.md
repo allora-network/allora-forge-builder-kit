@@ -34,6 +34,17 @@ The SDK fell back to `getpass()` → `EOFError` in non-interactive shells.
 ### 4. Identity alias collision fix
 Changed from `int(time.time())` to `uuid.uuid4().hex[:12]` for alias generation.
 
+### 5. Pre-merge hardening (review feedback)
+- `start_worker` now **fails immediately** with `FileNotFoundError` if the mnemonic key file
+  is missing, instead of silently launching without credentials.
+- `worker_monitor.py` pagination errors are now **logged** (warning on page 1, debug on later
+  pages) instead of silently swallowed.
+- Alias strings are **sanitized** (`_sanitize_alias`) to safe filename characters before being
+  used in `worker_keys/<alias>.key` paths.
+- `--network` and `--no-faucet` flags are now **wired through** `WorkerManager.__init__` →
+  `start_worker` → `worker_runtime.py` subprocess, so callers can configure network and faucet
+  behavior at the manager level.
+
 ## Remaining concerns
 
 ### Direct deploy scripts bypass WorkerManager
@@ -68,7 +79,7 @@ fragile — explicit ticker indexing would be safer.
 ## Suggested upgrades
 
 1. **Unify deploy paths**: make `WorkerManager` the single deploy entry point.
-2. **Add `--network` flag** to `workerctl`, `web_dashboard`, and `worker_runtime`.
+2. **Add `--network` flag** to `workerctl` and `web_dashboard` (already wired in `WorkerManager` → `worker_runtime`).
 3. **Fix `stream_live_predictions`** — either remove it or wire to `extract_features_polars`.
 4. **Graceful shutdown** in `worker_runtime.py` (SIGTERM handler for clean exit).
 5. **Web dashboard authentication** — currently open to anyone on the network.
