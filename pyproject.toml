@@ -23,6 +23,7 @@ dependencies = [
     "numba",
     "scipy",
     "allora-sdk>=1.0.6",
+    "cloudpickle",
 ]
 
 [project.optional-dependencies]
@@ -32,9 +33,6 @@ dev = [
 ]
 binance = [
     "websocket-client",
-]
-deploy = [
-    "cloudpickle",
 ]
 
 [project.urls]
