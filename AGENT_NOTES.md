@@ -47,12 +47,9 @@ Changed from `int(time.time())` to `uuid.uuid4().hex[:12]` for alias generation.
 
 ## Remaining concerns
 
-### Direct deploy scripts bypass WorkerManager
-`deploy_worker.py`, `deploy_worker_topic_77.py` call `AlloraWorker` directly — no identity
-management, no secrets, no monitoring. AGENTS.md routes users to these scripts for Flow A,
-but they will fail in non-interactive environments (same `getpass` issue).
-Should either: (a) add wallet file support to direct scripts, or
-(b) route agents to `WorkerManager` path exclusively.
+### ~~Direct deploy scripts bypass WorkerManager~~ (FIXED)
+`deploy_worker.py` and `deploy_worker_topic_77.py` now use `WorkerManager` internally.
+Wallet creation, key management, monitoring, and process lifecycle are automatic.
 
 ### `stream_live_predictions` is broken
 `workflow.py` references `self.extract_features` which doesn't exist (only `extract_features_polars`).

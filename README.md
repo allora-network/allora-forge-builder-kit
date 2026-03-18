@@ -41,16 +41,21 @@ python notebooks/example_topic_77_bitcoin_5min_walkthrough.py
 
 ## Deploy + monitor locally
 
+Deploy scripts use `WorkerManager` — wallet creation, key files, and process management
+are fully automatic (no interactive prompts):
+
 ```bash
-# generic deploy flow
+# deploy topic 69 (default)
 python notebooks/deploy_worker.py
 
-# topic-specific deploy helpers
+# deploy topic 77
 python notebooks/deploy_worker_topic_77.py
 
-# multi-worker dashboard
+# deploy any topic
+TOPIC_ID=42 python notebooks/deploy_worker.py
+
+# dashboards
 python -m allora_forge_builder_kit.workerctl dashboard
-# optional web dashboard
 python -m allora_forge_builder_kit.web_dashboard
 ```
 
