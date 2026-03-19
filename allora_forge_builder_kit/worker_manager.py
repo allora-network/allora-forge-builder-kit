@@ -571,9 +571,10 @@ class WorkerManager:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("INSERT INTO identities(alias, address) VALUES(?, ?)", (alias, address))
             conn.commit()
-        data = self._load_secrets()
-        data[alias] = {"address": address, "key_file": str(key_file)}
-        self._save_secrets(data)
+        with self._secrets_file_lock():
+            data = self._load_secrets()
+            data[alias] = {"address": address, "key_file": str(key_file)}
+            self._save_secrets(data)
 
     @staticmethod
     def _sanitize_alias(alias: str) -> str:
@@ -616,6 +617,24 @@ class WorkerManager:
                         return p
         return None
 
+    def _secrets_file_lock(self):
+        """Cross-process advisory lock for worker_secrets.json read-modify-write."""
+        import contextlib
+        import fcntl
+
+        @contextlib.contextmanager
+        def _lock():
+            lock_path = str(self.secrets_path) + ".lock"
+            lf = open(lock_path, "w")
+            try:
+                fcntl.flock(lf, fcntl.LOCK_EX)
+                yield
+            finally:
+                fcntl.flock(lf, fcntl.LOCK_UN)
+                lf.close()
+
+        return _lock()
+
     def _load_secrets(self) -> dict:
         try:
             return json.loads(self.secrets_path.read_text())
@@ -623,11 +642,12 @@ class WorkerManager:
             return {}
 
     def _save_secrets(self, data: dict) -> None:
-        self.secrets_path.write_text(json.dumps(data, indent=2))
+        content = json.dumps(data, indent=2).encode()
+        fd = os.open(str(self.secrets_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
         try:
-            self.secrets_path.chmod(0o600)
-        except PermissionError:
-            pass
+            os.write(fd, content)
+        finally:
+            os.close(fd)
 
     @staticmethod
     def _default_identity_creator() -> tuple[str, str, str]:
