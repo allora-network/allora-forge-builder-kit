@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import signal
@@ -13,6 +14,8 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -423,20 +426,33 @@ class WorkerManager:
     def reconcile(self) -> dict:
         restarted = 0
         running = 0
+        failed: list[dict] = []
         for row in self.status_all():
             pid = row.get("last_pid")
             alive = bool(pid and self._is_pid_alive(pid))
+            need_start = False
             if row["enabled"] and (row["status"] == "running" or row.get("last_pid")):
                 if alive:
                     running += 1
                 else:
+                    need_start = True
+            elif row["enabled"] and row["status"] == "stopped":
+                need_start = True
+            if need_start:
+                try:
                     self.start_worker(row["topic_id"], row["address"])
                     restarted += 1
-            elif row["enabled"] and row["status"] == "stopped":
-                # autostart enabled workers on manager boot
-                self.start_worker(row["topic_id"], row["address"])
-                restarted += 1
-        return {"running": running, "restarted": restarted}
+                except Exception as exc:
+                    logger.error(
+                        "reconcile: failed to start worker topic=%s addr=%s: %s",
+                        row["topic_id"], row["address"], exc,
+                    )
+                    failed.append({
+                        "topic_id": row["topic_id"],
+                        "address": row["address"],
+                        "error": str(exc),
+                    })
+        return {"running": running, "restarted": restarted, "failed": failed}
 
     def refresh_topic_descriptions(self) -> dict:
         """Refresh all worker topic descriptions from resolver, when configured."""
@@ -576,8 +592,7 @@ class WorkerManager:
             try:
                 dest.chmod(0o600)
             except OSError as exc:
-                import logging
-                logging.getLogger(__name__).warning(
+                logger.warning(
                     "Could not set permissions on %s: %s", dest, exc
                 )
         elif mnemonic:
