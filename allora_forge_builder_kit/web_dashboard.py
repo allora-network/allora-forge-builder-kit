@@ -286,7 +286,13 @@ class DashboardApp:
         rows = self.wm.status_all_with_logs(tail_lines=tail_lines)
         grouped: dict[str, list[dict]] = {}
         for r in rows:
-            s = self.monitor.get_summary(r["topic_id"], r["address"])
+            try:
+                s = self.monitor.get_summary(r["topic_id"], r["address"])
+            except (KeyError, Exception):
+                s = {"events_total": 0, "submission_success": 0, "submission_error": 0,
+                     "inference_count": 0, "rewards_total": 0, "last_inference": None,
+                     "period_metrics": {}, "last_score": None, "last_reward_fraction": None,
+                     "deployment_id": None}
             li = s.get("last_inference") or {}
             item = {
                 "topic_id": r["topic_id"],
