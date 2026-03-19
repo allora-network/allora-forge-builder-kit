@@ -47,7 +47,11 @@ def cmd_dashboard(with_monitor: bool, running_only: bool, **mgr_kwargs) -> None:
         print(f"address={r['address']}")
         print(f"status={r['status']} pid={r.get('last_pid')} deployed={r.get('deployed_at')}")
         if monitor:
-            s = monitor.get_summary(r["topic_id"], r["address"])
+            try:
+                s = monitor.get_summary(r["topic_id"], r["address"])
+            except (KeyError, Exception):
+                s = {"events_total": 0, "submission_success": 0, "submission_error": 0,
+                     "inference_count": 0, "rewards_total": 0, "last_inference": None}
             li = s.get("last_inference") or {}
             print(
                 f"events={s['events_total']} subs_ok={s['submission_success']} subs_err={s['submission_error']} "
