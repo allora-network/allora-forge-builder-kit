@@ -68,6 +68,31 @@ class WorkerManager:
         no_faucet: bool = False,
         reconcile_on_start: bool = True,
     ):
+        """Initialise the worker manager.
+
+        Args:
+            db_path: Path to the SQLite state database.
+            secrets_path: Path to the JSON file storing worker identities.
+            identity_creator: Callable that returns ``(alias, address, mnemonic)``
+                for new worker identities.  Defaults to an internal creator that
+                generates a fresh mnemonic and derives the Allora address.
+            monitor: Optional :class:`WorkerMonitor` instance for on-chain
+                event tracking.
+            auto_monitor_sync: When *True*, automatically sync monitor targets
+                after worker state changes (deploy, remove, etc.).
+            topic_desc_resolver: Optional callable mapping a topic ID to a
+                human-readable description string.
+            runtime_log_dir: Directory for worker process stdout/stderr logs.
+            artifact_dir: Directory for managed worker artifacts
+                (Dockerfiles, configs, etc.).
+            key_dir: Directory for per-worker key files.
+            network: Allora network name (``'testnet'`` or ``'mainnet'``).
+            no_faucet: Skip the testnet faucet drip when creating identities.
+            reconcile_on_start: When *True* (the default), call
+                :meth:`reconcile` during construction, which spawns
+                subprocesses for every enabled worker.  Set to *False* for
+                unit tests or when deferred startup is desired.
+        """
         self.db_path = Path(db_path)
         self.secrets_path = Path(secrets_path)
         self._identity_creator = identity_creator or self._default_identity_creator
