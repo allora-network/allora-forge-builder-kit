@@ -14,8 +14,21 @@ Provides a simple string-based API for creating data managers::
 (forge-data.allora.run).
 """
 
+import warnings
 from typing import Optional, List
 from .binance_data_manager import BinanceDataManager
+
+
+def _check_unknown_kwargs(kwargs: dict) -> None:
+    if "max_pages" in kwargs:
+        warnings.warn(
+            "max_pages is deprecated and ignored in v3; use page_size instead.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        kwargs.pop("max_pages")
+    if kwargs:
+        raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
 
 
 def DataManager(
@@ -59,6 +72,7 @@ def DataManager(
         market = kwargs.pop("market", "futures")
         batch_timeout = kwargs.pop("batch_timeout", 20)
         rate_limit = kwargs.pop("rate_limit", 0.5)
+        _check_unknown_kwargs(kwargs)
 
         return BinanceDataManager(
             base_dir=base_dir,
@@ -84,6 +98,7 @@ def DataManager(
         base_url = kwargs.pop("base_url", None)
         page_size = kwargs.pop("page_size", 250)
         sleep_sec = kwargs.pop("sleep_sec", 0.05)
+        _check_unknown_kwargs(kwargs)
 
         ctor_kwargs = dict(
             api_key=api_key,
