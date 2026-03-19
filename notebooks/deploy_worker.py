@@ -13,37 +13,44 @@ lifecycle automatically — no interactive prompts required.
 
 import os
 from pathlib import Path
-from allora_forge_builder_kit import WorkerManager, WorkerMonitor, AlloraSDKEventFetcher
 
-TOPIC_ID = int(os.environ.get("TOPIC_ID", "69"))
-PREDICT_PKL = os.environ.get("PREDICT_PKL", "predict.pkl")
 
-artifact = Path(PREDICT_PKL)
-if not artifact.exists():
-    raise FileNotFoundError(
-        f"{PREDICT_PKL} not found. Run a walkthrough first:\n"
-        "  python notebooks/example_topic_69_bitcoin_walkthrough.py\n"
-        "  python notebooks/example_topic_77_bitcoin_5min_walkthrough.py"
-    )
+def main():
+    from allora_forge_builder_kit import WorkerManager, WorkerMonitor, AlloraSDKEventFetcher
 
-wm = WorkerManager()
+    topic_id = int(os.environ.get("TOPIC_ID", "69"))
+    predict_pkl = os.environ.get("PREDICT_PKL", "predict.pkl")
 
-print(f"Deploying worker for Topic {TOPIC_ID}...")
-result = wm.deploy_worker(topic_id=TOPIC_ID, artifact_path=artifact)
-print(f"  {result.message}")
-print(f"  Address: {result.address_assigned}")
+    artifact = Path(predict_pkl)
+    if not artifact.exists():
+        raise FileNotFoundError(
+            f"{predict_pkl} not found. Run a walkthrough first:\n"
+            "  python notebooks/example_topic_69_bitcoin_walkthrough.py\n"
+            "  python notebooks/example_topic_77_bitcoin_5min_walkthrough.py"
+        )
 
-monitor = WorkerMonitor(event_fetcher=AlloraSDKEventFetcher())
-wm.attach_monitor(monitor)
+    wm = WorkerManager()
 
-print("Starting worker...")
-wm.start_worker(TOPIC_ID, result.address_assigned)
+    print(f"Deploying worker for Topic {topic_id}...")
+    result = wm.deploy_worker(topic_id=topic_id, artifact_path=artifact)
+    print(f"  {result.message}")
+    print(f"  Address: {result.address_assigned}")
 
-status = wm.status_worker(TOPIC_ID, result.address_assigned)
-print(f"  Status: {status['status']}")
-print(f"  PID: {status.get('last_pid')}")
-print(f"  Log: worker_logs/worker_{TOPIC_ID}_{result.address_assigned}.log")
+    monitor = WorkerMonitor(event_fetcher=AlloraSDKEventFetcher())
+    wm.attach_monitor(monitor)
 
-print(f"\nWorker running. Monitor with:")
-print(f"  python -m allora_forge_builder_kit.workerctl dashboard")
-print(f"  python -m allora_forge_builder_kit.web_dashboard")
+    print("Starting worker...")
+    wm.start_worker(topic_id, result.address_assigned)
+
+    status = wm.status_worker(topic_id, result.address_assigned)
+    print(f"  Status: {status['status']}")
+    print(f"  PID: {status.get('last_pid')}")
+    print(f"  Log: worker_logs/worker_{topic_id}_{result.address_assigned}.log")
+
+    print(f"\nWorker running. Monitor with:")
+    print(f"  python -m allora_forge_builder_kit.workerctl dashboard")
+    print(f"  python -m allora_forge_builder_kit.web_dashboard")
+
+
+if __name__ == "__main__":
+    main()

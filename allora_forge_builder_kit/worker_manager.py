@@ -567,7 +567,10 @@ class WorkerManager:
 
     def _persist_key_file(self, alias: str, mnemonic: str | None = None, source_file: str | Path | None = None) -> Path:
         """Write or copy a mnemonic into worker_keys/<alias>.key (chmod 600)."""
-        dest = self.key_dir / f"{self._sanitize_alias(alias)}.key"
+        safe = self._sanitize_alias(alias)
+        dest = self.key_dir / f"{safe}.key"
+        if dest.exists():
+            dest = self.key_dir / f"{safe}_{uuid.uuid4().hex[:8]}.key"
         if source_file:
             shutil.copy2(str(source_file), str(dest))
         elif mnemonic:
