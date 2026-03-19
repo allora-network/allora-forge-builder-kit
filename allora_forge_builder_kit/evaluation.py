@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Allora Forge Builder Kit - Performance Metrics Evaluation
 ==========================================================
@@ -19,7 +20,6 @@ Usage:
 
 import numpy as np
 from scipy import stats
-from typing import Dict, Tuple, Optional
 import warnings
 
 
@@ -90,7 +90,7 @@ class PerformanceEvaluator:
         self, 
         y_true: np.ndarray, 
         y_pred: np.ndarray
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """
         Calculate directional accuracy and related metrics.
         
@@ -171,7 +171,7 @@ class PerformanceEvaluator:
         self, 
         y_true: np.ndarray, 
         y_pred: np.ndarray
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """
         Calculate Pearson correlation and related metrics.
         
@@ -209,7 +209,7 @@ class PerformanceEvaluator:
         self, 
         y_true: np.ndarray, 
         y_pred: np.ndarray
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """
         Calculate Weighted RMSE improvement vs. zero-returns baseline.
         
@@ -254,7 +254,7 @@ class PerformanceEvaluator:
         self,
         y_true: np.ndarray,
         y_pred: np.ndarray,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """
         Calculate Cumulative Z-scored Absolute Return (CZAR) improvement.
 
@@ -296,7 +296,7 @@ class PerformanceEvaluator:
         self, 
         y_true: np.ndarray, 
         y_pred: np.ndarray
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """
         Calculate Z-transformed Power-Tanh Absolute Error improvement.
         
@@ -357,7 +357,7 @@ class PerformanceEvaluator:
         self, 
         y_true: np.ndarray, 
         y_pred: np.ndarray
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """
         Calculate log aspect ratio: log10(std(predicted) / std(actual)).
         
@@ -389,7 +389,7 @@ class PerformanceEvaluator:
         y_true: np.ndarray, 
         y_pred: np.ndarray,
         epoch_length_minutes: int
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """
         Calculate naive annualized return from a simple trading strategy.
         
@@ -426,7 +426,7 @@ class PerformanceEvaluator:
         self, 
         y_true: np.ndarray, 
         y_pred: np.ndarray
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """
         Calculate standard regression metrics.
         
@@ -465,7 +465,7 @@ class PerformanceEvaluator:
         self, 
         y_true: np.ndarray, 
         y_pred: np.ndarray
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """
         Calculate classification metrics for directional predictions.
         
@@ -500,7 +500,7 @@ class PerformanceEvaluator:
             'false_negatives': int(fn),
         }
     
-    def check_primary_metrics_pass(self, metrics: Dict[str, float]) -> Dict[str, bool]:
+    def check_primary_metrics_pass(self, metrics: dict[str, float]) -> dict[str, bool]:
         """
         Check which of the 7 primary metrics pass their thresholds.
 
@@ -543,9 +543,9 @@ class PerformanceEvaluator:
 
     def calculate_performance_score(
         self,
-        passed: Dict[str, bool],
+        passed: dict[str, bool],
         temporal_coverage_pass: bool = True,
-    ) -> Tuple[float, str, int]:
+    ) -> tuple[float, str, int]:
         """
         Calculate overall performance score and grade.
 
