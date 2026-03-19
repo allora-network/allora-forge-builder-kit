@@ -10,6 +10,18 @@ from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
+MONITOR_TARGETS_DDL = """
+CREATE TABLE IF NOT EXISTS monitor_targets (
+    topic_id INTEGER NOT NULL,
+    address TEXT NOT NULL,
+    deployed_at TEXT NOT NULL,
+    deployment_id TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    last_sync_at TEXT,
+    PRIMARY KEY(topic_id, address)
+)
+"""
+
 
 @dataclass(frozen=True)
 class MonitorTarget:
@@ -508,19 +520,7 @@ class WorkerMonitor:
     def _init_db(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS monitor_targets (
-                    topic_id INTEGER NOT NULL,
-                    address TEXT NOT NULL,
-                    deployed_at TEXT NOT NULL,
-                    deployment_id TEXT,
-                    enabled INTEGER NOT NULL DEFAULT 1,
-                    last_sync_at TEXT,
-                    PRIMARY KEY(topic_id, address)
-                )
-                """
-            )
+            conn.execute(MONITOR_TARGETS_DDL)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS monitor_events (
