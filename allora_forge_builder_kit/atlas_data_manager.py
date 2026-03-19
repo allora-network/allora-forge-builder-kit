@@ -337,24 +337,17 @@ class AtlasDataManager(BaseDataManager):
             offset_minutes = (minute + 1) % self._interval_minutes()
             offset = f"{offset_minutes}min" if offset_minutes != 0 else "0min"
 
-            agg_dict = {
-                "open": "first",
-                "high": "max",
-                "low": "min",
-                "close": "last",
-                "volume": "sum",
-                "trades_done": "sum",
-            }
+        agg_dict = {
+            "open": "first",
+            "high": "max",
+            "low": "min",
+            "close": "last",
+            "volume": "sum",
+            "trades_done": "sum",
+        }
+        if live_mode:
             bars = df.resample(self._interval_to_pandas_freq(), offset=offset).agg(agg_dict)
         else:
-            agg_dict = {
-                "open": "first",
-                "high": "max",
-                "low": "min",
-                "close": "last",
-                "volume": "sum",
-                "trades_done": "sum",
-            }
             bars = df.resample(self._interval_to_pandas_freq()).agg(agg_dict)
 
         return bars.dropna()
