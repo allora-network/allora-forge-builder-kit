@@ -34,6 +34,7 @@ class WorkerSpec:
     artifact_path: Path
     identity_ref: str
     enabled: bool = True
+    reject_zero: bool = False
 
 
 @dataclass
@@ -125,8 +126,8 @@ class WorkerManager:
             try:
                 conn.execute(
                     """
-                    INSERT INTO workers(topic_id, topic_desc, address, artifact_path, identity_ref, enabled, status, deployed_at, updated_at)
-                    VALUES(?, ?, ?, ?, ?, ?, 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    INSERT INTO workers(topic_id, topic_desc, address, artifact_path, identity_ref, enabled, status, reject_zero, deployed_at, updated_at)
+                    VALUES(?, ?, ?, ?, ?, ?, 'stopped', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     """,
                     (
                         spec.topic_id,
@@ -135,6 +136,7 @@ class WorkerManager:
                         str(managed_artifact),
                         spec.identity_ref,
                         1 if spec.enabled else 0,
+                        1 if spec.reject_zero else 0,
                     ),
                 )
                 conn.commit()
@@ -187,7 +189,8 @@ class WorkerManager:
             rows = conn.execute(
                 """
                 SELECT topic_id, COALESCE(topic_desc, ''), address, artifact_path, identity_ref, enabled, status,
-                       COALESCE(last_error, ''), deployed_at, updated_at, last_pid, last_started_at, last_stopped_at, last_exit_code
+                       COALESCE(last_error, ''), deployed_at, updated_at, last_pid, last_started_at, last_stopped_at, last_exit_code,
+                       reject_zero
                 FROM workers ORDER BY topic_id, address
                 """
             ).fetchall()
@@ -207,6 +210,7 @@ class WorkerManager:
                 "last_started_at": row[11],
                 "last_stopped_at": row[12],
                 "last_exit_code": row[13],
+                "reject_zero": bool(row[14]) if row[14] is not None else False,
             }
             if include_desc:
                 item["topic_desc"] = row[1]
@@ -245,6 +249,7 @@ class WorkerManager:
         topic_desc: str | None = None,
         replace: bool = False,
         mode: str = "auto",
+        reject_zero: bool = False,
     ) -> DeployResult:
         artifact = Path(artifact_path)
         if not artifact.exists():
@@ -274,7 +279,7 @@ class WorkerManager:
                     raise ValueError(f"Worker already exists for topic={topic_id} address={address}")
                 # auto mode: allocate alternate identity/address
                 ident, _ = self._pick_or_create_identity_for_topic(topic_id)
-                spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias)
+                spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias, reject_zero=reject_zero)
                 self.add_worker(spec)
                 return DeployResult(
                     topic_id=topic_id,
@@ -289,7 +294,7 @@ class WorkerManager:
 
             ident = self.ensure_identity(alias=identity_alias, address=address, mnemonic=mnemonic)
             action = "reused" if self._address_has_other_topics(ident.address) else "created"
-            spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias)
+            spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias, reject_zero=reject_zero)
             self.add_worker(spec)
             return DeployResult(
                 topic_id=topic_id,
@@ -302,7 +307,7 @@ class WorkerManager:
         # Auto address path: reuse free identity first, else create new
         ident, created = self._pick_or_create_identity_for_topic(topic_id)
         action = "created" if created else "reused"
-        spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias)
+        spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias, reject_zero=reject_zero)
         self.add_worker(spec)
         return DeployResult(
             topic_id=topic_id,
@@ -346,7 +351,7 @@ class WorkerManager:
 
         if self._no_faucet:
             cmd.append("--no-faucet")
-        if "price" in str(status.get("topic_desc", "")).lower():
+        if status.get("reject_zero"):
             cmd.append("--reject-zero")
         proc = subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT, cwd=str(Path.cwd()))
         key = (topic_id, address)
@@ -531,6 +536,7 @@ class WorkerManager:
                     last_started_at TEXT,
                     last_stopped_at TEXT,
                     last_exit_code INTEGER,
+                    reject_zero INTEGER NOT NULL DEFAULT 0,
                     UNIQUE(topic_id, address)
                 )
                 """
@@ -562,6 +568,8 @@ class WorkerManager:
                 conn.execute("ALTER TABLE workers ADD COLUMN last_stopped_at TEXT")
             if "last_exit_code" not in cols:
                 conn.execute("ALTER TABLE workers ADD COLUMN last_exit_code INTEGER")
+            if "reject_zero" not in cols:
+                conn.execute("ALTER TABLE workers ADD COLUMN reject_zero INTEGER NOT NULL DEFAULT 0")
             conn.commit()
         if not self.secrets_path.exists():
             self.secrets_path.write_text("{}")
