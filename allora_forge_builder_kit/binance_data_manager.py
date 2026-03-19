@@ -184,32 +184,33 @@ class BinanceDataManager(BaseDataManager):
     def backfill_symbol(self, symbol: str, start: datetime, end: Optional[datetime] = None):
         """Backfill historical data for a single symbol via REST API."""
         self._in_backfill = True
-        url = self._rest_url()
-        start_ms = to_ms(start)
-        end_ms = to_ms(end) if end else None
-        limit = 1000
-        ts = start_ms
+        try:
+            url = self._rest_url()
+            start_ms = to_ms(start)
+            end_ms = to_ms(end) if end else None
+            limit = 1000
+            ts = start_ms
 
-        while True:
-            params = {"symbol": symbol.upper(), "interval": self.interval, "limit": limit, "startTime": ts}
-            if end_ms:
-                params["endTime"] = end_ms
+            while True:
+                params = {"symbol": symbol.upper(), "interval": self.interval, "limit": limit, "startTime": ts}
+                if end_ms:
+                    params["endTime"] = end_ms
 
-            r = self._rest_get(url, params, timeout=30)
-            data = r.json()
+                r = self._rest_get(url, params, timeout=30)
+                data = r.json()
 
-            if not data or r.status_code == 400:
-                break
+                if not data or r.status_code == 400:
+                    break
 
-            for kl in data:
-                bar = self._parse_binance_kline(kl, symbol)
-                self._append_bar(bar, backfill=True)
+                for kl in data:
+                    bar = self._parse_binance_kline(kl, symbol)
+                    self._append_bar(bar, backfill=True)
 
-            ts = data[-1][0] + 1
-            if len(data) < limit:
-                break
-
-        self._in_backfill = False
+                ts = data[-1][0] + 1
+                if len(data) < limit:
+                    break
+        finally:
+            self._in_backfill = False
 
     def backfill_realtime(self, symbols: List[str]):
         """Fill only from the last stored bar forward (overwrite last bar)."""
