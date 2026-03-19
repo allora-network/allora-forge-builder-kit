@@ -639,7 +639,7 @@ class AlloraSDKEventFetcher:
                             "tx_hash": tx.txhash,
                             "observed_at": getattr(tx, "timestamp", None),
                             "value_text": value_text,
-                            "details_json": f'{{"nonce":"{nonce}","code":{getattr(tx, "code", 0)}}}',
+                            "details_json": json.dumps({"nonce": nonce, "code": getattr(tx, "code", 0)}),
                         }
                     )
                     out.append(
@@ -651,7 +651,7 @@ class AlloraSDKEventFetcher:
                             "observed_at": getattr(tx, "timestamp", None),
                             "value_text": value_text,
                             "value_num": _to_float(value_text),
-                            "details_json": f'{{"nonce":"{nonce}"}}',
+                            "details_json": json.dumps({"nonce": nonce}),
                         }
                     )
             if stop_paging:
