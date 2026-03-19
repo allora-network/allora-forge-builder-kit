@@ -520,6 +520,7 @@ class WorkerMonitor:
     def _init_db(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.db_path) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(MONITOR_TARGETS_DDL)
             conn.execute(
                 """
