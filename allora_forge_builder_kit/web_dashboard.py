@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import secrets
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -328,9 +330,22 @@ class DashboardApp:
         }
 
 
-def make_handler(app: DashboardApp):
+def make_handler(app: DashboardApp, auth_token: str | None = None):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            if auth_token:
+                header = self.headers.get("Authorization", "")
+                qs_check = parse_qs(urlparse(self.path).query)
+                token_ok = (
+                    header == f"Bearer {auth_token}"
+                    or qs_check.get("token", [None])[0] == auth_token
+                )
+                if not token_ok:
+                    self.send_response(401)
+                    self.end_headers()
+                    self.wfile.write(b"Unauthorized")
+                    return
+
             parsed = urlparse(self.path)
             route = parsed.path
             qs = parse_qs(parsed.query)
@@ -388,15 +403,30 @@ def main():
     parser.add_argument("--db-path", default="worker_state.db")
     parser.add_argument("--secrets-path", default="worker_secrets.json")
     parser.add_argument("--network", default="testnet")
+    parser.add_argument("--token", default=None, help="Bearer token for auth (auto-generated if host is non-loopback)")
     args = parser.parse_args()
+
+    auth_token = args.token
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        if not auth_token:
+            auth_token = secrets.token_urlsafe(32)
+        print(
+            "WARNING: Dashboard bound to non-loopback interface "
+            f"({args.host}). Auth token required for all requests.",
+            file=sys.stderr,
+        )
+        print(f"Auth token: {auth_token}", file=sys.stderr)
 
     app = DashboardApp(
         db_path=args.db_path,
         secrets_path=args.secrets_path,
         network=args.network,
     )
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(app))
-    print(f"Dashboard: http://{args.host}:{args.port}")
+    server = ThreadingHTTPServer((args.host, args.port), make_handler(app, auth_token=auth_token))
+    url = f"http://{args.host}:{args.port}"
+    if auth_token:
+        url += f"?token={auth_token}"
+    print(f"Dashboard: {url}")
     try:
         server.serve_forever()
     finally:
