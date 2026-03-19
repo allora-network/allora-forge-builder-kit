@@ -119,6 +119,7 @@ class PerformanceEvaluator:
                 'da_n_effective': 0.0,
                 'da_n_samples': 0,
                 'da_n_correct': 0,
+                'da_autocorrelation': 0.0,
             }
 
         correct_direction = np.sign(y_true_nz) == np.sign(y_pred_nz)
