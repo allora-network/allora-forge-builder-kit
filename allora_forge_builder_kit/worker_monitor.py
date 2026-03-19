@@ -6,7 +6,19 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class EventFetcherProtocol(Protocol):
+    """Protocol for event fetchers used by WorkerMonitor.
+
+    Implementers must be callable with (topic_id, address, since) -> list[dict].
+    Optionally expose a ``client`` attribute for SDK-backed nonce window queries.
+    """
+    client: Optional[Any]
+
+    def __call__(self, topic_id: int, address: str, since: Optional[str]) -> list[dict]: ...
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +55,7 @@ class WorkerMonitor:
     def __init__(
         self,
         db_path: str | Path = "worker_state.db",
-        event_fetcher: Optional[Callable[[int, str, Optional[str]], list[dict]]] = None,
+        event_fetcher: Optional[EventFetcherProtocol | Callable[[int, str, Optional[str]], list[dict]]] = None,
     ):
         self.db_path = Path(db_path)
         self._event_fetcher = event_fetcher or self._default_event_fetcher
