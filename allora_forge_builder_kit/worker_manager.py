@@ -566,21 +566,28 @@ class WorkerManager:
         return safe[:128] or "unnamed"
 
     def _persist_key_file(self, alias: str, mnemonic: str | None = None, source_file: str | Path | None = None) -> Path:
-        """Write or copy a mnemonic into worker_keys/<alias>.key (chmod 600)."""
+        """Write or copy a mnemonic into worker_keys/<alias>.key with mode 0o600."""
         safe = self._sanitize_alias(alias)
         dest = self.key_dir / f"{safe}.key"
         if dest.exists():
             dest = self.key_dir / f"{safe}_{uuid.uuid4().hex[:8]}.key"
         if source_file:
             shutil.copy2(str(source_file), str(dest))
+            try:
+                dest.chmod(0o600)
+            except OSError as exc:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Could not set permissions on %s: %s", dest, exc
+                )
         elif mnemonic:
-            dest.write_text(mnemonic)
+            fd = os.open(str(dest), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+            try:
+                os.write(fd, mnemonic.encode())
+            finally:
+                os.close(fd)
         else:
             raise ValueError("Either mnemonic or source_file must be provided")
-        try:
-            dest.chmod(0o600)
-        except PermissionError:
-            pass
         return dest
 
     def _get_key_file_for_address(self, address: str) -> Optional[Path]:
