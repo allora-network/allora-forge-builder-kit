@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import signal
 import sqlite3
@@ -589,7 +590,6 @@ class WorkerManager:
 
     @staticmethod
     def _sanitize_alias(alias: str) -> str:
-        import re
         safe = re.sub(r"[^a-zA-Z0-9_\-]", "_", alias)
         return safe[:128] or "unnamed"
 

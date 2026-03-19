@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import glob as _glob
 import os
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
 import numpy as np
 import pandas as pd
@@ -51,8 +53,6 @@ class AtlasDataManager(BaseDataManager):
         super().__init__(
             base_dir=base_dir, interval=interval, symbols=symbols, cache_len=cache_len
         )
-        from urllib.parse import urlparse
-
         effective_hosts = allowed_hosts if allowed_hosts is not None else _ALLOWED_HOSTS
         parsed = urlparse(base_url)
         if parsed.hostname not in effective_hosts:
@@ -489,8 +489,6 @@ class AtlasDataManager(BaseDataManager):
         for sym in symbols:
             last = self.latest(sym)
             print(f"[Atlas backfill-missing] Checking {sym} {start.date()} -> {now.date()}")
-
-            import glob as _glob
 
             safe = self._normalize_symbol_for_path(sym)
             glob_path = f"{self.base_dir}/symbol={safe}/dt=*.parquet"
