@@ -40,6 +40,9 @@ def get_api_key(api_key_file: str | None = None) -> str:
             "Sign up at https://developer.allora.network"
         )
     dest = api_key_file or ".allora_api_key"
-    with open(dest, "w") as f:
-        f.write(key)
+    fd = os.open(dest, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, key.encode())
+    finally:
+        os.close(fd)
     return key
