@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Any
 
+from .worker_monitor import MONITOR_TARGETS_DDL
+
 logger = logging.getLogger(__name__)
 
 
@@ -856,19 +858,7 @@ class WorkerManager:
         """
         deployed_at = self._get_worker_deployed_at(topic_id, address)
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS monitor_targets (
-                    topic_id INTEGER NOT NULL,
-                    address TEXT NOT NULL,
-                    deployed_at TEXT NOT NULL,
-                    deployment_id TEXT,
-                    enabled INTEGER NOT NULL DEFAULT 1,
-                    last_sync_at TEXT,
-                    PRIMARY KEY(topic_id, address)
-                )
-                """
-            )
+            conn.execute(MONITOR_TARGETS_DDL)
             conn.execute(
                 """
                 INSERT OR IGNORE INTO monitor_targets(topic_id, address, deployed_at, deployment_id, enabled, last_sync_at)
