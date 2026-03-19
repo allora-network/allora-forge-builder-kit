@@ -46,17 +46,19 @@ class AtlasDataManager(BaseDataManager):
         cache_len: int = 1000,
         page_size: int = 1000,
         sleep_sec: float = 0.0,
+        allowed_hosts: Optional[set] = None,
     ):
         super().__init__(
             base_dir=base_dir, interval=interval, symbols=symbols, cache_len=cache_len
         )
         from urllib.parse import urlparse
 
+        effective_hosts = allowed_hosts if allowed_hosts is not None else _ALLOWED_HOSTS
         parsed = urlparse(base_url)
-        if parsed.hostname not in _ALLOWED_HOSTS:
+        if parsed.hostname not in effective_hosts:
             raise ValueError(
                 f"base_url host '{parsed.hostname}' is not in the allowed list "
-                f"{_ALLOWED_HOSTS}. This protects against API key leakage."
+                f"{effective_hosts}. This protects against API key leakage."
             )
 
         self.api_key = api_key
