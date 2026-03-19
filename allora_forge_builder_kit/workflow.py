@@ -130,7 +130,7 @@ class AlloraMLWorkflow:
         self.test_targets = None
         self.interval = interval
 
-        # 🔹 Use provided data manager OR create from factory
+        # Use provided data manager instance, or create one from the factory string.
         if data_manager is not None:
             # Advanced API: explicit instance
             if not isinstance(data_manager, BaseDataManager):
@@ -333,9 +333,7 @@ class AlloraMLWorkflow:
             datasets.append(df)
 
         full_data = pl.concat(datasets).sort(["ticker", "open_time"])
-        # If you need a MultiIndex, you can convert to pandas at the end:
         return full_data.to_pandas().set_index(["ticker", "open_time"])
-        # return full_data.drop_nulls()
 
     def resample_ohlcv_polars(
         self,
