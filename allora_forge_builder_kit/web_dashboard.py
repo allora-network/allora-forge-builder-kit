@@ -334,7 +334,10 @@ def make_handler(app: DashboardApp):
             parsed = urlparse(self.path)
             route = parsed.path
             qs = parse_qs(parsed.query)
-            tail = int(qs.get("tail", ["20"])[0])
+            try:
+                tail = max(1, min(int(qs.get("tail", ["20"])[0]), 500))
+            except (ValueError, IndexError):
+                tail = 20
 
             if route == "/":
                 self.send_response(200)
