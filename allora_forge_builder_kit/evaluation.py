@@ -579,7 +579,10 @@ class PerformanceEvaluator:
             y_true: Ground truth log returns (actual)
             y_pred: Predicted log returns
             epoch_length_minutes: Length of each prediction epoch in minutes
-            
+            n_expected_epochs: Total number of epochs in the evaluation
+                window, used to compute the temporal-coverage score.
+                Pass ``None`` (default) to skip temporal-coverage scoring.
+
         Returns:
             Comprehensive dictionary with all metrics, pass/fail, and grade
         """
