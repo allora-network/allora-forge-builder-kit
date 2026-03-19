@@ -235,17 +235,24 @@ HTML = """<!doctype html>
 
 
 class DashboardApp:
-    def __init__(self):
+    def __init__(
+        self,
+        db_path: str = "worker_state.db",
+        secrets_path: str = "worker_secrets.json",
+        network: str = "testnet",
+    ):
         self.monitor = WorkerMonitor(
-            db_path="worker_state.db",
-            event_fetcher=AlloraSDKEventFetcher(network="testnet", max_pages=2, page_limit=25),
+            db_path=db_path,
+            event_fetcher=AlloraSDKEventFetcher(network=network, max_pages=2, page_limit=25),
         )
         self.wm = WorkerManager(
-            db_path="worker_state.db",
-            secrets_path="worker_secrets.json",
+            db_path=db_path,
+            secrets_path=secrets_path,
+            network=network,
             monitor=self.monitor,
-            reconcile_on_start=True,
+            reconcile_on_start=False,
         )
+        self.wm.reconcile()
         self._last_sync = {"ok": None, "inserted": 0, "targets": 0, "errors": [], "at": None}
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._sync_loop, daemon=True)
@@ -369,9 +376,16 @@ def main():
     parser = argparse.ArgumentParser(description="Run local web dashboard")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
+    parser.add_argument("--db-path", default="worker_state.db")
+    parser.add_argument("--secrets-path", default="worker_secrets.json")
+    parser.add_argument("--network", default="testnet")
     args = parser.parse_args()
 
-    app = DashboardApp()
+    app = DashboardApp(
+        db_path=args.db_path,
+        secrets_path=args.secrets_path,
+        network=args.network,
+    )
     server = ThreadingHTTPServer((args.host, args.port), make_handler(app))
     print(f"Dashboard: http://{args.host}:{args.port}")
     try:

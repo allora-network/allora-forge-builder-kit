@@ -7,24 +7,31 @@ from .worker_manager import WorkerManager
 from .worker_monitor import WorkerMonitor, AlloraSDKEventFetcher
 
 
-def _make_manager(with_monitor: bool) -> tuple[WorkerManager, WorkerMonitor | None]:
+def _make_manager(
+    with_monitor: bool,
+    db_path: str = "worker_state.db",
+    secrets_path: str = "worker_secrets.json",
+    network: str = "testnet",
+) -> tuple[WorkerManager, WorkerMonitor | None]:
     monitor = None
     if with_monitor:
         monitor = WorkerMonitor(
-            db_path="worker_state.db",
-            event_fetcher=AlloraSDKEventFetcher(network="testnet", max_pages=2, page_limit=25),
+            db_path=db_path,
+            event_fetcher=AlloraSDKEventFetcher(network=network, max_pages=2, page_limit=25),
         )
     wm = WorkerManager(
-        db_path="worker_state.db",
-        secrets_path="worker_secrets.json",
+        db_path=db_path,
+        secrets_path=secrets_path,
+        network=network,
         monitor=monitor,
-        reconcile_on_start=True,
+        reconcile_on_start=False,
     )
+    wm.reconcile()
     return wm, monitor
 
 
-def cmd_dashboard(with_monitor: bool, running_only: bool) -> None:
-    wm, monitor = _make_manager(with_monitor=with_monitor)
+def cmd_dashboard(with_monitor: bool, running_only: bool, **mgr_kwargs) -> None:
+    wm, monitor = _make_manager(with_monitor=with_monitor, **mgr_kwargs)
     if monitor:
         monitor.sync_once()
 
@@ -51,6 +58,9 @@ def cmd_dashboard(with_monitor: bool, running_only: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Worker control CLI")
+    parser.add_argument("--db-path", default="worker_state.db")
+    parser.add_argument("--secrets-path", default="worker_secrets.json")
+    parser.add_argument("--network", default="testnet")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_dash = sub.add_parser("dashboard", help="Show worker dashboard")
@@ -62,12 +72,13 @@ def main() -> None:
     sub.add_parser("stop-all", help="Stop running workers")
 
     args = parser.parse_args()
+    mgr_kwargs = dict(db_path=args.db_path, secrets_path=args.secrets_path, network=args.network)
 
     if args.cmd == "dashboard":
-        cmd_dashboard(with_monitor=not args.no_monitor, running_only=not args.all)
+        cmd_dashboard(with_monitor=not args.no_monitor, running_only=not args.all, **mgr_kwargs)
         return
 
-    wm, _ = _make_manager(with_monitor=False)
+    wm, _ = _make_manager(with_monitor=False, **mgr_kwargs)
     if args.cmd == "reconcile":
         print(wm.reconcile())
     elif args.cmd == "start-all":
