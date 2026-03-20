@@ -47,12 +47,6 @@ LEARNING_RATES = [0.01, 0.05, 0.1]
 MAX_DEPTHS = [3, 5, 7]
 NUM_LEAVES = [15, 31, 63]
 
-# Tail-incentive experiment configuration
-TAIL_WEIGHT_POWER = 1.0
-TAIL_WEIGHT_CLIP_MIN = 0.25
-TAIL_WEIGHT_CLIP_MAX = 6.0
-MIDDLE_TRIM_QUANTILE = 0.40
-
 # =============================================================================
 # SCRIPT START
 # =============================================================================
@@ -79,78 +73,7 @@ def _to_serializable(obj):
     return obj
 
 
-def find_best_amplitude_scale(y_true, y_pred, evaluator, k_grid=None):
-    """Find scalar k that maximizes CZAR improvement on validation predictions."""
-    if k_grid is None:
-        k_grid = np.arange(0.6, 2.01, 0.05)
-
-    best = None
-    for k in k_grid:
-        report_k = evaluator.evaluate(y_true=y_true, y_pred=y_pred * k)
-        czar_k = report_k["metrics"]["czar_improvement"]
-        if best is None or czar_k > best["czar_improvement"]:
-            best = {
-                "k": float(k),
-                "report": report_k,
-                "czar_improvement": float(czar_k),
-            }
-    return best
-
-
-def build_tail_sample_weights(y_train, power=1.0, clip_min=0.25, clip_max=6.0):
-    """Continuous tail weighting: larger absolute returns get more training weight."""
-    abs_y = np.abs(np.asarray(y_train))
-    scale = np.median(abs_y[abs_y > 0]) if np.any(abs_y > 0) else 1.0
-    scale = max(scale, 1e-8)
-    weights = (abs_y / scale) ** power
-    weights = np.clip(weights, clip_min, clip_max)
-    return weights
-
-
-def run_tail_variant_cv(df, feature_cols, tscv, evaluator, model_params, variant_name):
-    """Run one CV pass for a specific tail-incentive variant using fixed model params."""
-    preds_all = pd.Series(np.nan, index=df.index)
-
-    for fold_idx, (train_idx, test_idx) in enumerate(tscv.split(df), start=1):
-        X_train = df.iloc[train_idx][feature_cols]
-        y_train = df.iloc[train_idx]["target"]
-        X_test = df.iloc[test_idx][feature_cols]
-
-        fit_kwargs = {}
-        if variant_name in {"weighted", "weighted_trim"}:
-            fit_kwargs["sample_weight"] = build_tail_sample_weights(
-                y_train,
-                power=TAIL_WEIGHT_POWER,
-                clip_min=TAIL_WEIGHT_CLIP_MIN,
-                clip_max=TAIL_WEIGHT_CLIP_MAX,
-            )
-
-        if variant_name in {"trimmed", "weighted_trim"}:
-            threshold = y_train.abs().quantile(MIDDLE_TRIM_QUANTILE)
-            keep_mask = y_train.abs() >= threshold
-            X_train = X_train.loc[keep_mask]
-            y_train = y_train.loc[keep_mask]
-            if "sample_weight" in fit_kwargs:
-                fit_kwargs["sample_weight"] = np.asarray(fit_kwargs["sample_weight"])[keep_mask.values]
-
-        lgb = LGBMRegressor(**model_params)
-        lgb.fit(X_train, y_train, **fit_kwargs)
-        preds_all.iloc[test_idx] = lgb.predict(X_test)
-
-    valid_mask = ~preds_all.isna()
-    report = evaluator.evaluate(
-        y_true=df.loc[valid_mask, "target"],
-        y_pred=preds_all.loc[valid_mask],
-    )
-
-    return {
-        "variant": variant_name,
-        "report": report,
-        "predictions": preds_all,
-    }
-
-
-def save_run_artifacts(df_eval, best_result, best_params, run_dir, feature_cols, calibration=None, tail_experiments=None):
+def save_run_artifacts(df_eval, best_result, best_params, run_dir, feature_cols):
     """Persist config/metrics/predictions and basic diagnostic plots for reproducibility."""
     os.makedirs(run_dir, exist_ok=True)
 
@@ -182,8 +105,6 @@ def save_run_artifacts(df_eval, best_result, best_params, run_dir, feature_cols,
         "thresholds": best_result.get("thresholds", {}),
         "passed": best_result.get("passed", {}),
         "metrics": best_result.get("metrics", {}),
-        "amplitude_calibration": calibration,
-        "tail_experiments": tail_experiments,
     }
     with open(os.path.join(run_dir, "metrics.json"), "w") as f:
         json.dump(_to_serializable(metrics_payload), f, indent=2)
@@ -416,87 +337,6 @@ print("="*80)
 evaluator.print_report(best_result, detailed=False)
 print("="*80)
 
-# Amplitude calibration (post-hoc scalar on validation predictions)
-valid_mask = ~best_result['predictions'].isna()
-y_true_val = df_all.loc[valid_mask, 'target'].values
-y_pred_val = best_result['predictions'].loc[valid_mask].values
-cal = find_best_amplitude_scale(y_true=y_true_val, y_pred=y_pred_val, evaluator=evaluator)
-
-print("\nAmplitude calibration sweep (k * pred):")
-print(f"   Best k: {cal['k']:.2f}")
-print(f"   CZAR: {best_result['metrics']['czar_improvement']:.4f} -> {cal['report']['metrics']['czar_improvement']:.4f}")
-print(f"   WRMSE: {best_result['metrics']['wrmse_improvement']:.4f} -> {cal['report']['metrics']['wrmse_improvement']:.4f}")
-print(f"   Score: {best_result['num_passed']}/8 -> {cal['report']['num_passed']}/8")
-
-calibration_payload = {
-    'best_k': cal['k'],
-    'before': {
-        'czar_improvement': best_result['metrics']['czar_improvement'],
-        'wrmse_improvement': best_result['metrics']['wrmse_improvement'],
-        'num_passed': best_result['num_passed'],
-        'score': best_result['score'],
-    },
-    'after': {
-        'czar_improvement': cal['report']['metrics']['czar_improvement'],
-        'wrmse_improvement': cal['report']['metrics']['wrmse_improvement'],
-        'num_passed': cal['report']['num_passed'],
-        'score': cal['report']['score'],
-        'grade': cal['report']['grade'],
-        'passed': cal['report']['passed'],
-    }
-}
-
-# Tail incentive ablation: baseline vs weighting/trim strategies (fixed best hyperparams)
-print("\nTail incentive ablation (fixed best params):")
-variant_model_params = dict(
-    n_estimators=best_params['n_estimators'],
-    learning_rate=best_params['learning_rate'],
-    max_depth=best_params['max_depth'],
-    num_leaves=best_params['num_leaves'],
-    random_state=42,
-    verbose=-1,
-)
-variants = ["baseline", "weighted", "trimmed", "weighted_trim"]
-variant_runs = []
-for variant in variants:
-    out = run_tail_variant_cv(
-        df=df_all,
-        feature_cols=feature_cols,
-        tscv=tscv,
-        evaluator=evaluator,
-        model_params=variant_model_params,
-        variant_name=variant,
-    )
-    variant_runs.append(out)
-    r = out['report']
-    print(
-        f"   - {variant:13s}: {r['num_passed']}/8 | "
-        f"CZAR={r['metrics']['czar_improvement']:.4f} | "
-        f"WRMSE={r['metrics']['wrmse_improvement']:.4f}"
-    )
-
-tail_experiments_payload = {
-    'settings': {
-        'tail_weight_power': TAIL_WEIGHT_POWER,
-        'tail_weight_clip_min': TAIL_WEIGHT_CLIP_MIN,
-        'tail_weight_clip_max': TAIL_WEIGHT_CLIP_MAX,
-        'middle_trim_quantile': MIDDLE_TRIM_QUANTILE,
-    },
-    'results': [
-        {
-            'variant': v['variant'],
-            'num_passed': v['report']['num_passed'],
-            'score': v['report']['score'],
-            'grade': v['report']['grade'],
-            'czar_improvement': v['report']['metrics']['czar_improvement'],
-            'wrmse_improvement': v['report']['metrics']['wrmse_improvement'],
-            'directional_accuracy': v['report']['metrics']['directional_accuracy'],
-            'passed': v['report']['passed'],
-        }
-        for v in variant_runs
-    ]
-}
-
 # Save reproducibility artifacts + diagnostic plot
 run_timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
 run_dir = os.path.join(os.path.dirname(__file__), "runs", run_timestamp)
@@ -506,8 +346,6 @@ artifacts = save_run_artifacts(
     best_params=best_params,
     run_dir=run_dir,
     feature_cols=feature_cols,
-    calibration=calibration_payload,
-    tail_experiments=tail_experiments_payload,
 )
 
 # =============================================================================
