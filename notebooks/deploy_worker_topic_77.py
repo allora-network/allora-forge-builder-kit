@@ -1,31 +1,28 @@
 #!/usr/bin/env python3
 """
-Deploy trained model via WorkerManager.
+Deploy trained Topic 77 model via WorkerManager.
 
 Usage:
-    python notebooks/deploy_worker.py                    # defaults to topic 69
-    TOPIC_ID=77 python notebooks/deploy_worker.py       # override topic
+    python notebooks/deploy_worker_topic_77.py
 
-Expects predict.pkl in the current directory.
+Expects predict.pkl in the current directory (output of the walkthrough).
 The WorkerManager handles wallet creation, key management, and process
 lifecycle automatically — no interactive prompts required.
 """
 
-import os
 from pathlib import Path
 
 
 def main():
     from allora_forge_builder_kit import WorkerManager, WorkerMonitor, AlloraSDKEventFetcher
 
-    topic_id = int(os.environ.get("TOPIC_ID", "69"))
-    predict_pkl = os.environ.get("PREDICT_PKL", "predict.pkl")
+    topic_id = 77
+    predict_pkl = "predict.pkl"
 
     artifact = Path(predict_pkl)
     if not artifact.exists():
         raise FileNotFoundError(
-            f"{predict_pkl} not found. Run a walkthrough first:\n"
-            "  python notebooks/example_topic_69_bitcoin_walkthrough.py\n"
+            f"{predict_pkl} not found. Run the Topic 77 walkthrough first:\n"
             "  python notebooks/example_topic_77_bitcoin_5min_walkthrough.py"
         )
 

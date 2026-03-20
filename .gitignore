@@ -35,6 +35,7 @@ pip-wheel-metadata/
 # Environments
 .env
 .venv/
+.venv-*/
 venv/
 ENV/
 env/
@@ -66,3 +67,11 @@ results/
 # Worker runtime files
 notebooks/run_worker.py
 notebooks/worker/
+worker_secrets.json
+worker_state.db
+worker_logs/
+worker_keys/
+managed_artifacts/
+artifacts/
+notebooks/artifacts/
+notebooks/runs/
