@@ -10,7 +10,12 @@ Train, evaluate, and deploy Allora prediction workers from one Python toolkit.
 
 ---
 
-## Quick start (one session)
+## Zero to deploy (complete walkthrough)
+
+Follow these steps in order to go from a fresh clone to live workers with a
+monitoring dashboard. The whole process runs in one terminal session.
+
+### Step 1 — Clone and install
 
 ```bash
 git clone https://github.com/allora-network/allora-forge-builder-kit.git
@@ -27,36 +32,66 @@ export ALLORA_API_KEY="UP-..."   # Free key from https://developer.allora.networ
 
 > **No API key?** You can use `data_source="binance"` in the workflow to pull data directly from Binance instead.
 
-Run a full example:
+### Step 2 — Train a model
+
+Run one (or both) of the example walkthroughs. Each backfills historical data,
+engineers features, grid-searches hyperparameters, evaluates the model, and
+saves a `predict.pkl` artifact.
 
 ```bash
-# topic 69 example
-python notebooks/example_topic_69_bitcoin_walkthrough.py
+cd notebooks
 
-# topic 77 example
-python notebooks/example_topic_77_bitcoin_5min_walkthrough.py
+# Topic 69 — 1-day BTC/USD price prediction (1h bars, ~3 min)
+python example_topic_69_bitcoin_walkthrough.py
+
+# Topic 77 — 5-min BTC/USD price prediction (5m bars, ~2 min)
+python example_topic_77_bitcoin_5min_walkthrough.py
 ```
 
----
+When each script finishes you will see a summary with the evaluation grade and
+a `predict.pkl` file in the current directory.
 
-## Deploy + monitor locally
+### Step 3 — Deploy workers
 
-Deploy scripts use `WorkerManager` — wallet creation, key files, and process management
-are fully automatic (no interactive prompts):
+The deploy scripts use `WorkerManager` to handle wallet creation, key files,
+faucet funding, and process lifecycle automatically — no interactive prompts.
 
 ```bash
-# deploy topic 69 (default)
-python notebooks/deploy_worker.py
+# Still in the notebooks/ directory.
+# Deploy topic 69 (uses the predict.pkl from step 2)
+python deploy_worker.py
 
-# deploy topic 77
-python notebooks/deploy_worker_topic_77.py
+# Deploy topic 77
+python deploy_worker_topic_77.py
+```
 
-# deploy any topic
-TOPIC_ID=42 python notebooks/deploy_worker.py
+Each script prints the assigned wallet address and confirms the worker is
+running. Workers poll the chain for open nonces and submit predictions
+automatically.
 
-# dashboards
-python -m allora_forge_builder_kit.workerctl dashboard
+### Step 4 — Monitor with the web dashboard
+
+```bash
+# From the notebooks/ directory:
 python -m allora_forge_builder_kit.web_dashboard
+```
+
+Then open **http://localhost:8787** in your browser. You will see all deployed
+workers, their submission timelines, on-chain scores, and live log tails.
+The page auto-refreshes every 5 seconds.
+
+> **CLI alternative:** `python -m allora_forge_builder_kit.workerctl dashboard`
+> prints a text summary to the terminal.
+
+> **Remote access:** Pass `--host 0.0.0.0` to bind to all interfaces. An auth
+> token is auto-generated and printed to stderr — append it as `?token=...` in
+> the URL.
+
+### Step 5 — Deploy more topics (optional)
+
+```bash
+# Deploy any topic by ID
+TOPIC_ID=42 python deploy_worker.py
 ```
 
 ---
