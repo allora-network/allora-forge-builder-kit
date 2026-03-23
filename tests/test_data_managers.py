@@ -192,6 +192,93 @@ def test_atlas_manager_default_directory():
     assert dm.base_dir == "parquet_data_allora"
 
 
+import requests as _requests
+from unittest.mock import patch, MagicMock
+
+
+class TestResolveDatasetId:
+    """Unit tests for AtlasDataManager._resolve_dataset_id."""
+
+    def _make_dm(self, tmp_path):
+        return AtlasDataManager(
+            api_key="test-key", interval="5m",
+            base_dir=str(tmp_path / "atlas_resolve"),
+        )
+
+    def _mock_response(self, results, status_code=200):
+        resp = MagicMock()
+        resp.status_code = status_code
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {"results": results}
+        return resp
+
+    def test_happy_path_exact_name_match(self, tmp_path):
+        dm = self._make_dm(tmp_path)
+        results = [
+            {"id": 99, "name": "candlegpt_15min_btcusd"},
+            {"id": 3, "name": "tiingo_btcusd_1min"},
+        ]
+        with patch("requests.get", return_value=self._mock_response(results)) as mock_get:
+            ds_id = dm._resolve_dataset_id("btcusd")
+
+        assert ds_id == 3
+        assert dm._dataset_cache["btcusd"] == 3
+        call_params = mock_get.call_args[1]["params"]
+        assert call_params["search"] == "tiingo_btcusd_1min"
+        assert call_params["limit"] == 10
+
+    def test_cache_hit_skips_http(self, tmp_path):
+        dm = self._make_dm(tmp_path)
+        dm._dataset_cache["btcusd"] = 42
+        with patch("requests.get") as mock_get:
+            ds_id = dm._resolve_dataset_id("btcusd")
+        assert ds_id == 42
+        mock_get.assert_not_called()
+
+    def test_no_results_raises_valueerror(self, tmp_path):
+        dm = self._make_dm(tmp_path)
+        with patch("requests.get", return_value=self._mock_response([])):
+            with pytest.raises(ValueError, match="No Atlas dataset"):
+                dm._resolve_dataset_id("btcusd")
+
+    def test_ambiguous_results_selects_correct_name(self, tmp_path):
+        dm = self._make_dm(tmp_path)
+        results = [
+            {"id": 50, "name": "kraken_btcusd_1min"},
+            {"id": 3, "name": "tiingo_btcusd_1min"},
+        ]
+        with patch("requests.get", return_value=self._mock_response(results)):
+            ds_id = dm._resolve_dataset_id("btcusd")
+        assert ds_id == 3
+
+    def test_no_exact_match_raises_even_with_results(self, tmp_path):
+        dm = self._make_dm(tmp_path)
+        results = [{"id": 50, "name": "kraken_btcusd_1min"}]
+        with patch("requests.get", return_value=self._mock_response(results)):
+            with pytest.raises(ValueError, match="kraken_btcusd_1min"):
+                dm._resolve_dataset_id("btcusd")
+
+    def test_http_error_raises_runtime_error(self, tmp_path):
+        dm = self._make_dm(tmp_path)
+        with patch("requests.get", side_effect=_requests.exceptions.ConnectionError("network")):
+            with pytest.raises(RuntimeError, match="Atlas API error"):
+                dm._resolve_dataset_id("btcusd")
+
+    def test_non_integer_id_raises_type_error(self, tmp_path):
+        dm = self._make_dm(tmp_path)
+        results = [{"id": None, "name": "tiingo_btcusd_1min"}]
+        with patch("requests.get", return_value=self._mock_response(results)):
+            with pytest.raises(TypeError, match="non-integer"):
+                dm._resolve_dataset_id("btcusd")
+
+    def test_ticker_normalization(self, tmp_path):
+        dm = self._make_dm(tmp_path)
+        results = [{"id": 3, "name": "tiingo_btcusd_1min"}]
+        with patch("requests.get", return_value=self._mock_response(results)):
+            assert dm._resolve_dataset_id("BTC/USD") == 3
+            assert dm._resolve_dataset_id("BTC-USD") == 3
+
+
 def test_atlas_bulk_download_chunked_splits_on_failure(tmp_path):
     dm = AtlasDataManager(api_key="test-key", interval="5m", base_dir=str(tmp_path / "allora_data"))
 
