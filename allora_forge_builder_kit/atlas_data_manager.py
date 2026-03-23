@@ -99,20 +99,15 @@ class AtlasDataManager(BaseDataManager):
         if norm in self._dataset_cache:
             return self._dataset_cache[norm]
 
-        dataset_name = f"tiingo_{norm}_1min"
+        search_term = f"{norm}_1min"
         resp = requests.get(
-            f"{self.base_url}/datasets/search/",
+            f"{self.base_url}/datasets/",
             headers=self.headers,
-            params={"source": "tiingo", "ticker": norm, "frequency": "1min"},
+            params={"search": search_term},
             timeout=30,
         )
         resp.raise_for_status()
         results = resp.json().get("results", [])
-
-        for ds in results:
-            if ds["name"] == dataset_name:
-                self._dataset_cache[norm] = ds["id"]
-                return ds["id"]
 
         if results:
             self._dataset_cache[norm] = results[0]["id"]
@@ -120,7 +115,7 @@ class AtlasDataManager(BaseDataManager):
 
         raise ValueError(
             f"No Atlas dataset found for ticker '{ticker}' "
-            f"(searched for '{dataset_name}')"
+            f"(searched for '{search_term}')"
         )
 
     # ------------------------------------------------------------------
