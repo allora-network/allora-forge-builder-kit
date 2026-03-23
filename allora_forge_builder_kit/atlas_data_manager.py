@@ -99,28 +99,25 @@ class AtlasDataManager(BaseDataManager):
         if norm in self._dataset_cache:
             return self._dataset_cache[norm]
 
-        dataset_name = f"tiingo_{norm}_1min"
+        expected_name = f"tiingo_{norm}_1min"
         resp = requests.get(
-            f"{self.base_url}/datasets/search/",
+            f"{self.base_url}/datasets/",
             headers=self.headers,
-            params={"source": "tiingo", "ticker": norm, "frequency": "1min"},
+            params={"search": expected_name, "limit": 10},
             timeout=30,
         )
         resp.raise_for_status()
         results = resp.json().get("results", [])
 
-        for ds in results:
-            if ds["name"] == dataset_name:
-                self._dataset_cache[norm] = ds["id"]
-                return ds["id"]
-
-        if results:
-            self._dataset_cache[norm] = results[0]["id"]
-            return results[0]["id"]
+        match = next((ds for ds in results if ds.get("name") == expected_name), None)
+        if match is not None:
+            self._dataset_cache[norm] = match["id"]
+            return match["id"]
 
         raise ValueError(
-            f"No Atlas dataset found for ticker '{ticker}' "
-            f"(searched for '{dataset_name}')"
+            f"No Atlas dataset with expected name '{expected_name}' found for "
+            f"ticker '{ticker}'. Got {len(results)} result(s)"
+            + (f"; first was '{results[0].get('name')}'" if results else "")
         )
 
     # ------------------------------------------------------------------
