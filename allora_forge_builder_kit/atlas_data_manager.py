@@ -99,29 +99,39 @@ class AtlasDataManager(BaseDataManager):
         if norm in self._dataset_cache:
             return self._dataset_cache[norm]
 
-        dataset_name = f"tiingo_{norm}_1min"
-        resp = requests.get(
-            f"{self.base_url}/datasets/search/",
-            headers=self.headers,
-            params={"source": "tiingo", "ticker": norm, "frequency": "1min"},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        results = resp.json().get("results", [])
+        expected_name = f"tiingo_{norm}_1min"
+        try:
+            resp = requests.get(
+                f"{self.base_url}/datasets/",
+                headers=self.headers,
+                params={"search": expected_name, "limit": 10},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
+        except requests.exceptions.RequestException as e:
+            raise RuntimeError(
+                f"Atlas API error while resolving dataset for ticker '{ticker}': {e}"
+            ) from e
 
-        for ds in results:
-            if ds["name"] == dataset_name:
-                self._dataset_cache[norm] = ds["id"]
-                return ds["id"]
+        match = next((ds for ds in results if ds.get("name") == expected_name), None)
+        if match is None:
+            raise ValueError(
+                f"No Atlas dataset with expected name '{expected_name}' found for "
+                f"ticker '{ticker}'. Got {len(results)} result(s)"
+                + (f"; first was '{results[0].get('name')}'" if results else "")
+                + ". Use list_available_datasets() or search_datasets() to discover datasets."
+            )
 
-        if results:
-            self._dataset_cache[norm] = results[0]["id"]
-            return results[0]["id"]
+        dataset_id = match.get("id")
+        if not isinstance(dataset_id, int):
+            raise TypeError(
+                f"Atlas returned non-integer dataset ID {dataset_id!r} "
+                f"for '{expected_name}'"
+            )
 
-        raise ValueError(
-            f"No Atlas dataset found for ticker '{ticker}' "
-            f"(searched for '{dataset_name}')"
-        )
+        self._dataset_cache[norm] = dataset_id
+        return dataset_id
 
     # ------------------------------------------------------------------
     # Data fetching
@@ -662,16 +672,24 @@ class AtlasDataManager(BaseDataManager):
         source: str = "tiingo",
         frequency: str = "1min",
     ) -> List[Dict]:
-        """List datasets available on Atlas for a given source and frequency."""
-        params = {"source": source, "frequency": frequency, "limit": 250}
+        """List datasets available on Atlas for a given source and frequency.
+
+        Uses text search on ``/datasets/`` and filters results client-side,
+        since ``/datasets/search/`` currently rejects multiple metadata filters.
+        """
         resp = requests.get(
-            f"{self.base_url}/datasets/search/",
+            f"{self.base_url}/datasets/",
             headers=self.headers,
-            params=params,
+            params={"search": source, "limit": 250},
             timeout=30,
         )
         resp.raise_for_status()
-        return resp.json().get("results", [])
+        results = resp.json().get("results", [])
+        return [
+            ds for ds in results
+            if ds.get("metadata", {}).get("source") == source
+            and ds.get("metadata", {}).get("frequency") == frequency
+        ]
 
     def search_datasets(self, query: str) -> List[Dict]:
         """Free-text search across Atlas dataset names and descriptions."""
