@@ -5,3 +5,4 @@ pandas
 numpy
 matplotlib
 cloudpickle
+websocket
