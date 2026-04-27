@@ -31,12 +31,22 @@ with open(PREDICT_PKL, "rb") as f:
     predict_fn = cloudpickle.load(f)
 print("Model loaded")
 
-# Read API key (prefer ALLORA_API_KEY env var over plaintext file)
-api_key = os.environ.get("ALLORA_API_KEY")
+# Read API key — env var takes priority, then checks key file in notebooks/ then repo root
+api_key = os.environ.get("ALLORA_API_KEY", "").strip()
 if not api_key:
-    api_key_path = os.path.join(os.path.dirname(__file__), API_KEY_FILE)
-    with open(api_key_path, "r") as f:
-        api_key = f.read().strip()
+    _search_paths = [
+        os.path.join(os.path.dirname(__file__), API_KEY_FILE),
+        os.path.join(os.path.dirname(__file__), "..", API_KEY_FILE),
+    ]
+    for _path in _search_paths:
+        if os.path.exists(_path):
+            api_key = open(_path).read().strip()
+            if api_key:
+                break
+if not api_key:
+    raise RuntimeError(
+        "ALLORA_API_KEY not found. Set the env var or create a .allora_api_key file."
+    )
 
 
 async def main():

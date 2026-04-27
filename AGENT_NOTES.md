@@ -80,5 +80,5 @@ fragile — explicit ticker indexing would be safer.
 3. **Fix `stream_live_predictions`** — either remove it or wire to `extract_features_polars`.
 4. **Graceful shutdown** in `worker_runtime.py` (SIGTERM handler for clean exit).
 5. **Web dashboard authentication** — currently open to anyone on the network.
-6. **Model score**: Topic 77 scored 4/7 (C grade, 50%). Feature set is minimal — adding TA indicators
+6. **Model score**: Topic 77 scored 4/7 (C grade, 57%). Feature set is minimal — adding TA indicators
    and tuning the tail-incentive strategy could improve this.

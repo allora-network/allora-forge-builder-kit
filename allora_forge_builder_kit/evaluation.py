@@ -543,21 +543,18 @@ class PerformanceEvaluator:
     def calculate_performance_score(
         self,
         passed: dict[str, bool],
-        temporal_coverage_pass: bool = True,
     ) -> tuple[float, str, int]:
         """
         Calculate overall performance score and grade.
 
-        The composite score counts up to 7 primary metrics plus an optional
-        temporal-coverage point, for a maximum of 8.
+        The composite score is the count of the 7 primary metrics that pass,
+        divided by 7. Temporal coverage is informational only (see evaluate()).
 
         Args:
             passed: Dictionary of pass/fail for the 7 primary metrics.
-            temporal_coverage_pass: Whether temporal coverage is sufficient.
 
         Returns:
-            Tuple of ``(score, grade, num_passed)`` where *num_passed*
-            includes the temporal-coverage point.
+            Tuple of ``(score, grade, num_passed)``.
         """
         num_passed = sum(passed.values())
         score = num_passed / 7.0
@@ -579,8 +576,9 @@ class PerformanceEvaluator:
             y_pred: Predicted log returns
             epoch_length_minutes: Length of each prediction epoch in minutes
             n_expected_epochs: Total number of epochs in the evaluation
-                window, used to compute the temporal-coverage score.
-                Pass ``None`` (default) to skip temporal-coverage scoring.
+                window. When provided, temporal coverage is checked and
+                included in the report as ``temporal_coverage_pass`` (informational
+                only — does not affect the score or grade).
 
         Returns:
             Comprehensive dictionary with all metrics, pass/fail, and grade
@@ -612,12 +610,10 @@ class PerformanceEvaluator:
         # Check pass/fail for the 7 primary metrics
         passed = self.check_primary_metrics_pass(metrics)
 
-        temporal_pass = True
+        temporal_pass = None
         if n_expected_epochs is not None:
             temporal_pass = self.check_temporal_coverage(len(y_true), n_expected_epochs)
-        score, grade, num_passed = self.calculate_performance_score(
-            passed, temporal_coverage_pass=temporal_pass
-        )
+        score, grade, num_passed = self.calculate_performance_score(passed)
 
         report = {
             'metrics': metrics,
@@ -627,6 +623,7 @@ class PerformanceEvaluator:
             'num_passed': num_passed,
             'num_primary_metrics': self.NUM_PRIMARY_METRICS,
             'thresholds': self.THRESHOLDS.copy(),
+            'temporal_coverage_pass': temporal_pass,
         }
 
         return report
