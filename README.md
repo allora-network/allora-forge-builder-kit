@@ -101,7 +101,8 @@ Open **http://localhost:8787** — auto-refreshes every 5 seconds, shows all wor
 ### Step 5 — Deploy other topics
 
 ```bash
-TOPIC_ID=42 python deploy_worker.py
+TOPIC_ID=42 python deploy_worker.py   # deploy topic 42
+TOPIC_ID=77 python deploy_worker.py   # deploy topic 77
 ```
 
 Discover available topics:
