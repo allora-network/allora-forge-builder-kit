@@ -53,15 +53,14 @@ class PerformanceEvaluator:
 
     NUM_PRIMARY_METRICS = 7
 
-    # Performance grades based on composite score (7 metrics + temporal coverage = 8 max)
+    # Performance grades based on composite score (7 primary metrics)
     GRADES = {
-        8: 'A+',
-        7: 'A',
-        6: 'B+',
-        5: 'B',
-        4: 'C',
-        3: 'D',
-        2: 'F',
+        7: 'A+',
+        6: 'A',
+        5: 'B+',
+        4: 'B',
+        3: 'C',
+        2: 'D',
         1: 'F',
         0: 'F',
     }
@@ -560,8 +559,8 @@ class PerformanceEvaluator:
             Tuple of ``(score, grade, num_passed)`` where *num_passed*
             includes the temporal-coverage point.
         """
-        num_passed = sum(passed.values()) + int(temporal_coverage_pass)
-        score = num_passed / 8.0
+        num_passed = sum(passed.values())
+        score = num_passed / 7.0
         grade = self.GRADES.get(num_passed, 'F')
         return score, grade, num_passed
     
@@ -646,7 +645,7 @@ class PerformanceEvaluator:
         print("=" * 80)
         print("PERFORMANCE EVALUATION REPORT")
         print("=" * 80)
-        print(f"\nOVERALL PERFORMANCE: {report['grade']} ({report['num_passed']}/8 points)")
+        print(f"\nOVERALL PERFORMANCE: {report['grade']} ({report['num_passed']}/7 points)")
         print(f"   Primary metrics passed: {sum(p.values())}/{self.NUM_PRIMARY_METRICS}")
         print(f"   Performance Score: {report['score']:.2%}\n")
 

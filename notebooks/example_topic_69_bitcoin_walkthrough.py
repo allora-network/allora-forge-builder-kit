@@ -138,7 +138,7 @@ def save_run_artifacts(df_eval, best_result, best_params, run_dir, feature_cols)
     with open(os.path.join(run_dir, "report.txt"), "w") as f:
         f.write("Allora Topic 69 Run Report\n")
         f.write("=" * 40 + "\n")
-        f.write(f"Score: {best_result['score']:.1%} ({best_result['num_passed']}/8)\n")
+        f.write(f"Score: {best_result['score']:.1%} ({best_result['num_passed']}/7)\n")
         f.write(f"Grade: {best_result['grade']}\n")
         f.write(f"Best params: {best_params}\n\n")
         f.write("Primary metric pass/fail:\n")
@@ -310,7 +310,7 @@ for lr in LEARNING_RATES:
                 })
                 
                 print(f"   [{config_num:2d}] n={n_est:4d}, lr={lr:.2f}, d={depth}, l={leaves:2d} -> "
-                      f"{metrics['num_passed']}/8 ({metrics['score']:.1%} - {metrics['grade']})")
+                      f"{metrics['num_passed']}/7 ({metrics['score']:.1%} - {metrics['grade']})")
 
 # Analyze results
 results_df = pd.DataFrame([{k: v for k, v in r.items() if k != 'predictions'} for r in results])
@@ -326,7 +326,7 @@ best_result = results[results_df.iloc[0]['config_num'] - 1]
 best_params = {k: best_result[k] for k in ['n_estimators', 'learning_rate', 'max_depth', 'num_leaves']}
 
 print(f"\nBest: Config #{best_result['config_num']}")
-print(f"   {best_result['num_passed']}/8 points ({best_result['score']:.1%}) | "
+print(f"   {best_result['num_passed']}/7 points ({best_result['score']:.1%}) | "
       f"n={best_params['n_estimators']}, lr={best_params['learning_rate']}, d={best_params['max_depth']}, l={best_params['num_leaves']}")
 
 # =============================================================================
@@ -417,7 +417,7 @@ with open("predict.pkl", "wb") as f:
 print("\n" + "="*80)
 print("COMPLETE!")
 print("="*80)
-print(f"{len(feature_cols)} features | {best_result['num_passed']}/8 points ({best_result['score']:.1%})")
+print(f"{len(feature_cols)} features | {best_result['num_passed']}/7 points ({best_result['score']:.1%})")
 print("Saved to predict.pkl")
 print(f"Run artifacts: {artifacts['run_dir']}")
 print(f"- Predictions: {artifacts['predictions_csv']}")
