@@ -1,3 +1,11 @@
+<img width="1536" height="1024" alt="forge_silicon" src="https://github.com/user-attachments/assets/f1444abf-e649-4e48-a9f0-187b78b59ccc" />
+
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![GitHub issues](https://img.shields.io/github/issues/allora-network/allora-forge-builder-kit)](https://github.com/allora-network/allora-forge-builder-kit/issues)
+[![Last Commit](https://img.shields.io/github/last-commit/allora-network/allora-forge-builder-kit)](https://github.com/allora-network/allora-forge-builder-kit/commits/main)
+[![Stars](https://img.shields.io/github/stars/allora-network/allora-forge-builder-kit?style=social)](https://github.com/allora-network/allora-forge-builder-kit/stargazers)
+
 # Allora Forge Builder Kit
 
 Build, evaluate, and deploy ML inference workers on the [Allora Network](https://allora.network).
