@@ -69,9 +69,34 @@ class AtlasDataManager(BaseDataManager):
 
         self._dataset_cache: Dict[str, int] = {}
 
+        self._ensure_public_tag()
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    def _ensure_public_tag(self) -> None:
+        """Acquire the 'public' tag if not already held.
+
+        The Atlas UI does this automatically on login. API users need to call
+        POST /api/tags/acquire/ once so they can see public datasets.
+        This is idempotent — safe to call every time.
+        """
+        try:
+            resp = requests.post(
+                f"{self.base_url}/tags/acquire/",
+                headers={**self.headers, "Content-Type": "application/json"},
+                json={"tag_name": "public"},
+                timeout=15,
+            )
+            if resp.status_code in (200, 201):
+                print("[Atlas] Acquired 'public' tag — public datasets are now accessible.")
+            elif resp.status_code == 409:
+                pass  # already held, nothing to do
+            else:
+                print(f"[Atlas] Warning: could not acquire 'public' tag (HTTP {resp.status_code}): {resp.text}")
+        except requests.exceptions.RequestException as e:
+            print(f"[Atlas] Warning: could not acquire 'public' tag: {e}")
+
     @staticmethod
     def _normalize_ticker(ticker: str) -> str:
         return ticker.replace("/", "").replace("-", "").lower()
