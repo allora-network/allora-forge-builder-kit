@@ -268,7 +268,7 @@ pytest -v
 - [Allora Network](https://allora.network)
 - [Allora Explorer](https://explorer.allora.network)
 - [Developer Portal](https://developer.allora.network)
-- [Testnet Faucet](https://faucet.testnet.allora.network)
+- [Testnet Faucet](https://faucet.testnet.allora.run)
 - [Discord](https://discord.gg/allora)
 
 ## License
