@@ -236,13 +236,17 @@ The 8th point is **temporal coverage** — whether your model submitted predicti
 
 | Path | Purpose |
 |------|---------|
-| `notebooks/example_topic_69_bitcoin_walkthrough.py` | End-to-end example: data → model → artifact |
-| `notebooks/deploy_worker.py` | Deploy a worker from a saved artifact |
+| `notebooks/example_topic_69_bitcoin_walkthrough.py` | End-to-end example for topic 69: data → features → model → artifact |
+| `notebooks/example_topic_77_bitcoin_5min_walkthrough.py` | End-to-end example for topic 77: 5-min BTC prediction |
+| `notebooks/deploy_worker.py` | Deploy any topic with WorkerManager (`TOPIC_ID=N python deploy_worker.py`) |
+| `notebooks/deploy_worker_raw.py` | Minimal SDK-only deployment reference (no WorkerManager) |
+| `notebooks/feature_engineering_example.py` | Standalone feature engineering reference |
 | `allora_forge_builder_kit/workflow.py` | Data + feature pipeline |
-| `allora_forge_builder_kit/evaluation.py` | Model scoring |
-| `allora_forge_builder_kit/topic_discovery.py` | Query live topics |
-| `allora_forge_builder_kit/worker_manager.py` | Wallet + process lifecycle |
-| `allora_forge_builder_kit/web_dashboard.py` | Monitoring UI |
+| `allora_forge_builder_kit/evaluation.py` | Model scoring (7 primary metrics + grading) |
+| `allora_forge_builder_kit/topic_discovery.py` | Query live topics on testnet/mainnet |
+| `allora_forge_builder_kit/worker_manager.py` | Wallet creation, key management, process lifecycle |
+| `allora_forge_builder_kit/worker_monitor.py` | On-chain event tracking |
+| `allora_forge_builder_kit/web_dashboard.py` | Web monitoring UI |
 
 ---
 
