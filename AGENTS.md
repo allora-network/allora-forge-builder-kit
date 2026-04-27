@@ -85,6 +85,25 @@ python -m allora_forge_builder_kit.workerctl dashboard
 python -m allora_forge_builder_kit.web_dashboard
 ```
 
+## Base feature schema
+
+`get_full_feature_target_dataframe()` returns columns named:
+
+```
+feature_open_0, feature_high_0, feature_low_0, feature_close_0, feature_volume_0
+feature_open_1, feature_high_1, feature_low_1, feature_close_1, feature_volume_1
+...
+feature_open_N, feature_high_N, feature_low_N, feature_close_N, feature_volume_N
+```
+
+Index `0` is the **oldest** bar, index `N-1` is the **most recent**.
+
+**Normalization (critical for feature engineering):**
+- All OHLC values are divided by the **last bar's close** → `feature_close_{N-1}` is always `1.0`
+- Volume values are divided by the **last bar's volume** → `feature_volume_{N-1}` is always `1.0`
+
+All base features are therefore **ratios**, not raw prices. Any additional engineered features (TA indicators, log returns, etc.) must be normalized consistently — either derived from the already-normalized columns, or computed from raw data and then divided by the same last-close/last-volume values — before being passed to the model.
+
 ## Critical correctness rule
 Before deployment, verify topic prediction format:
 - **Price topic** → absolute price prediction
