@@ -88,15 +88,52 @@ On first run, `WorkerManager` creates a wallet, writes the key file to `worker_k
 
 > **Faucet activity is logged, not printed.** If a worker fails to start, check `worker_logs/` for the subprocess output — faucet requests, balance checks, and on-chain errors all appear there.
 
-### Step 4 — Monitor
+### Step 4 — Monitor and manage workers
 
 ```bash
+# Web dashboard (recommended)
 python -m allora_forge_builder_kit.web_dashboard
 ```
 
 Open **http://localhost:8787** — auto-refreshes every 5 seconds, shows all workers with submission timelines, on-chain scores, and live log tails.
 
 > Pass `--host 0.0.0.0` to expose on all interfaces. An auth token is printed to stderr; append it as `?token=...` in the URL.
+
+```bash
+# CLI dashboard — text summary of all workers
+python -m allora_forge_builder_kit.workerctl dashboard
+```
+
+**Worker management via the Python API:**
+
+```python
+from allora_forge_builder_kit import WorkerManager
+
+wm = WorkerManager(reconcile_on_start=False)
+
+# See all workers and their status
+for w in wm.status_all():
+    print(w['topic_id'], w['address'], w['status'])
+
+# Stop a worker (keeps it registered, can be restarted)
+wm.stop_worker(topic_id=69, address="allo1...")
+
+# Start a stopped worker
+wm.start_worker(topic_id=69, address="allo1...")
+
+# Remove a worker entirely (stops it and deletes the record)
+wm.remove_worker(topic_id=69, address="allo1...", force=True)
+
+# Stop all running workers
+wm.stop_all()
+
+# Restart all enabled workers (e.g. after a reboot)
+wm.start_all()
+
+# Tail a worker's log
+lines = wm.get_worker_log_tail(topic_id=69, address="allo1...", lines=50)
+print("\n".join(lines))
+```
 
 ### Step 5 — Deploy other topics
 
