@@ -115,6 +115,31 @@ for t in d.get_all_topics():
     print(t.topic_id, t.raw.get("topic_name"), t.epoch_length, t.loss_method)
 ```
 
+### Topic reference
+
+Playground topics (testnet only) are the recommended starting point — no whitelist required.
+
+| Testnet ID | Name | Notes |
+|-----------|------|-------|
+| **69** | BTC/USD - 1 Day Price Prediction | Playground — example walkthroughs use this |
+| **77** | BTC/USD - 5 Min Price Prediction | Playground Fast |
+
+Mainnet topics and their testnet equivalents:
+
+| Mainnet ID | Mainnet Name | Testnet ID | Testnet Name |
+|-----------|-------------|-----------|-------------|
+| 1  | BTC/USD - Log Returns - 8h  | 64 | 8h BTC/USD Log-Return (5min updates) |
+| 2  | ETH/USD - Log Returns - 8h  | — | Missing |
+| 3  | SOL/USD - Log Returns - 8h  | 57 | 8h SOL/USD Log-Return *(inactive)* |
+| 9  | ETH/USD - Price Prediction - 8h | 41 | ETH/USD - 8h Price Prediction |
+| 10 | SOL/USD - Price Prediction - 8h | 38 | SOL/USD - 8h Price Prediction |
+| 14 | BTC/USD - Price Prediction - 8h | 42 | BTC/USD - 8h Price Prediction |
+| 15 | BTC/USD - Log Returns - 24h | 61 | 1 day BTC/USD Log-Return Prediction |
+| 16 | ETH/USD - Log Returns - 24h | 63 | 1 day ETH/USD Log-Return Prediction |
+| 17 | SOL/USD - Log Returns - 24h | 62 | 1 day SOL/USD Log-Return Prediction |
+| 18 | BTC/USD - Log Returns - 20m | — | Missing |
+| 19 | NEAR/USD - Log Returns - 8h | 71 | 8h NEAR/USD Log-Return Prediction |
+
 ---
 
 ## Python API (quick reference)
