@@ -203,6 +203,35 @@ grade = evaluator.evaluate(predict_fn)
 
 ---
 
+## Evaluation metrics
+
+`PerformanceEvaluator` scores your model on 7 primary metrics before you deploy. Each has a pass/fail threshold. The composite score (7 metrics + temporal coverage = 8 max) maps to a letter grade.
+
+| # | Metric | Threshold | What it measures |
+|---|--------|-----------|-----------------|
+| 1 | **Directional Accuracy (DA)** | ≥ 52% | Fraction of predictions where the sign (up/down) matches the actual return |
+| 2 | **DA CI Lower Bound** | ≥ 0.50 | Lower bound of the 95% Wilson confidence interval for DA, adjusted for autocorrelation — ensures the edge isn't a statistical fluke |
+| 3 | **DA p-value** | < 0.05 | One-tailed z-test (H₀: DA = 50%) with continuity correction and autocorrelation-aware effective sample size |
+| 4 | **Pearson r** | ≥ 0.05 | Linear correlation between predicted and actual returns |
+| 5 | **Pearson p-value** | < 0.05 | Statistical significance of the Pearson correlation |
+| 6 | **WRMSE Improvement** | ≥ 5% | Weighted RMSE vs. a zero-prediction baseline, where errors are weighted by the magnitude of actual returns — bigger moves count more |
+| 7 | **CZAR Improvement** | ≥ 10% | Cumulative Z-scored Absolute Return: the fraction of z-scored directional return captured vs. a perfect oracle. 0 = random guessing, 1 = perfect |
+
+**Grading:**
+
+| Points (out of 8) | Grade |
+|-------------------|-------|
+| 8 | A+ |
+| 7 | A |
+| 6 | B+ |
+| 5 | B |
+| 4 | C |
+| ≤ 3 | F |
+
+The 8th point is **temporal coverage** — whether your model submitted predictions for ≥ 50% of the evaluation window's epochs.
+
+---
+
 ## File map
 
 | Path | Purpose |
