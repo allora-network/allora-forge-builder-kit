@@ -205,7 +205,7 @@ grade = evaluator.evaluate(predict_fn)
 
 ## Evaluation metrics
 
-`PerformanceEvaluator` scores your model on 7 primary metrics before you deploy. Each has a pass/fail threshold. The composite score (7 metrics + temporal coverage = 8 max) maps to a letter grade.
+`PerformanceEvaluator` scores your model on 7 primary metrics before you deploy. Each has a pass/fail threshold. The composite score (out of 7) maps to a letter grade.
 
 | # | Metric | Threshold | What it measures |
 |---|--------|-----------|-----------------|
@@ -219,16 +219,15 @@ grade = evaluator.evaluate(predict_fn)
 
 **Grading:**
 
-| Points (out of 8) | Grade |
+| Points (out of 7) | Grade |
 |-------------------|-------|
-| 8 | A+ |
-| 7 | A |
-| 6 | B+ |
-| 5 | B |
-| 4 | C |
-| ≤ 3 | F |
-
-The 8th point is **temporal coverage** — whether your model submitted predictions for ≥ 50% of the evaluation window's epochs.
+| 7 | A+ |
+| 6 | A |
+| 5 | B+ |
+| 4 | B |
+| 3 | C |
+| 2 | D |
+| ≤ 1 | F |
 
 ---
 
