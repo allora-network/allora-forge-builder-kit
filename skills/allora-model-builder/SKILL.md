@@ -117,7 +117,21 @@ worker = AlloraWorker(
 - Use `data_source="allora"` — this connects to Atlas (Tiingo candles).
 - Tickers: lowercase, no slash (`btcusd`, `ethusd`).
 - Evaluation uses **7 primary metrics** (DA, DA CI, DA p-value, Pearson r,
-  Pearson p-value, WRMSE improvement, CZAR improvement) with a max
-  composite score of 8 (7 metrics + temporal coverage).
+  Pearson p-value, WRMSE improvement, CZAR improvement) scored out of 7.
 - For **price topics**, return an absolute price.
   For **log-return topics**, return the log return.
+
+## Base feature normalization
+
+Features from `get_full_feature_target_dataframe()` are **not raw prices** — they are normalized ratios:
+
+- `feature_open_i`, `feature_high_i`, `feature_low_i`, `feature_close_i` → divided by the last bar's close (`feature_close_{N-1}` is always `1.0`)
+- `feature_volume_i` → divided by the last bar's volume (`feature_volume_{N-1}` is always `1.0`)
+
+Index `0` = oldest bar, index `N-1` = most recent bar.
+
+**When adding engineered features** (TA indicators, log returns, etc.), normalize them consistently:
+- Derive them from the already-normalized feature columns, OR
+- Compute from raw data and divide by the same last-close / last-volume values
+
+Mixing raw prices with normalized features will produce a badly conditioned model.

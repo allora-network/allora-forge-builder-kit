@@ -38,6 +38,8 @@ class AtlasDataManager(BaseDataManager):
       - Compatible with AlloraMLWorkflow
     """
 
+    _acquired_keys: set = set()
+
     def __init__(
         self,
         api_key: str,
@@ -49,6 +51,7 @@ class AtlasDataManager(BaseDataManager):
         page_size: int = 1000,
         sleep_sec: float = 0.0,
         allowed_hosts: Optional[set] = None,
+        auto_acquire_tag: bool = True,
     ):
         super().__init__(
             base_dir=base_dir, interval=interval, symbols=symbols, cache_len=cache_len
@@ -69,9 +72,36 @@ class AtlasDataManager(BaseDataManager):
 
         self._dataset_cache: Dict[str, int] = {}
 
+        if auto_acquire_tag and api_key not in AtlasDataManager._acquired_keys:
+            self._ensure_public_tag()
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    def _ensure_public_tag(self) -> None:
+        """Acquire the 'public' tag if not already held.
+
+        The Atlas UI does this automatically on login. API users need to call
+        POST /api/tags/acquire/ once so they can see public datasets.
+        This is idempotent — safe to call every time.
+        """
+        try:
+            resp = requests.post(
+                f"{self.base_url}/tags/acquire/",
+                headers={**self.headers, "Content-Type": "application/json"},
+                json={"tag_name": "public"},
+                timeout=15,
+            )
+            if resp.status_code in (200, 201):
+                print("[Atlas] Acquired 'public' tag — public datasets are now accessible.")
+                AtlasDataManager._acquired_keys.add(self.api_key)
+            elif resp.status_code == 409:
+                AtlasDataManager._acquired_keys.add(self.api_key)  # already held
+            else:
+                print(f"[Atlas] Warning: could not acquire 'public' tag (HTTP {resp.status_code}): {resp.text[:200]}")
+        except requests.exceptions.RequestException as e:
+            print(f"[Atlas] Warning: could not acquire 'public' tag: {e}")
+
     @staticmethod
     def _normalize_ticker(ticker: str) -> str:
         return ticker.replace("/", "").replace("-", "").lower()

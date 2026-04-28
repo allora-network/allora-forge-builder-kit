@@ -53,15 +53,14 @@ class PerformanceEvaluator:
 
     NUM_PRIMARY_METRICS = 7
 
-    # Performance grades based on composite score (7 metrics + temporal coverage = 8 max)
+    # Performance grades based on composite score (7 primary metrics)
     GRADES = {
-        8: 'A+',
-        7: 'A',
-        6: 'B+',
-        5: 'B',
-        4: 'C',
-        3: 'D',
-        2: 'F',
+        7: 'A+',
+        6: 'A',
+        5: 'B+',
+        4: 'B',
+        3: 'C',
+        2: 'D',
         1: 'F',
         0: 'F',
     }
@@ -544,24 +543,21 @@ class PerformanceEvaluator:
     def calculate_performance_score(
         self,
         passed: dict[str, bool],
-        temporal_coverage_pass: bool = True,
     ) -> tuple[float, str, int]:
         """
         Calculate overall performance score and grade.
 
-        The composite score counts up to 7 primary metrics plus an optional
-        temporal-coverage point, for a maximum of 8.
+        The composite score is the count of the 7 primary metrics that pass,
+        divided by 7. Temporal coverage is informational only (see evaluate()).
 
         Args:
             passed: Dictionary of pass/fail for the 7 primary metrics.
-            temporal_coverage_pass: Whether temporal coverage is sufficient.
 
         Returns:
-            Tuple of ``(score, grade, num_passed)`` where *num_passed*
-            includes the temporal-coverage point.
+            Tuple of ``(score, grade, num_passed)``.
         """
-        num_passed = sum(passed.values()) + int(temporal_coverage_pass)
-        score = num_passed / 8.0
+        num_passed = sum(passed.values())
+        score = num_passed / 7.0
         grade = self.GRADES.get(num_passed, 'F')
         return score, grade, num_passed
     
@@ -580,11 +576,15 @@ class PerformanceEvaluator:
             y_pred: Predicted log returns
             epoch_length_minutes: Length of each prediction epoch in minutes
             n_expected_epochs: Total number of epochs in the evaluation
-                window, used to compute the temporal-coverage score.
-                Pass ``None`` (default) to skip temporal-coverage scoring.
+                window. When provided, temporal coverage is checked and
+                included in the report as ``temporal_coverage_pass`` (informational
+                only — does not affect the score or grade).
 
         Returns:
-            Comprehensive dictionary with all metrics, pass/fail, and grade
+            Comprehensive dictionary with all metrics, pass/fail, and grade.
+            ``report['temporal_coverage_pass']`` is ``None`` when
+            ``n_expected_epochs`` is not provided, or a ``bool`` when it is.
+            Guard with ``is not None`` before using it.
         """
         y_true = np.asarray(y_true).flatten()
         y_pred = np.asarray(y_pred).flatten()
@@ -613,12 +613,10 @@ class PerformanceEvaluator:
         # Check pass/fail for the 7 primary metrics
         passed = self.check_primary_metrics_pass(metrics)
 
-        temporal_pass = True
+        temporal_pass = None
         if n_expected_epochs is not None:
             temporal_pass = self.check_temporal_coverage(len(y_true), n_expected_epochs)
-        score, grade, num_passed = self.calculate_performance_score(
-            passed, temporal_coverage_pass=temporal_pass
-        )
+        score, grade, num_passed = self.calculate_performance_score(passed)
 
         report = {
             'metrics': metrics,
@@ -628,6 +626,7 @@ class PerformanceEvaluator:
             'num_passed': num_passed,
             'num_primary_metrics': self.NUM_PRIMARY_METRICS,
             'thresholds': self.THRESHOLDS.copy(),
+            'temporal_coverage_pass': temporal_pass,
         }
 
         return report
@@ -646,7 +645,7 @@ class PerformanceEvaluator:
         print("=" * 80)
         print("PERFORMANCE EVALUATION REPORT")
         print("=" * 80)
-        print(f"\nOVERALL PERFORMANCE: {report['grade']} ({report['num_passed']}/8 points)")
+        print(f"\nOVERALL PERFORMANCE: {report['grade']} ({report['num_passed']}/7 points)")
         print(f"   Primary metrics passed: {sum(p.values())}/{self.NUM_PRIMARY_METRICS}")
         print(f"   Performance Score: {report['score']:.2%}\n")
 

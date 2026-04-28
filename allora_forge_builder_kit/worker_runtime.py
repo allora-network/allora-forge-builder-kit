@@ -23,10 +23,17 @@ def _load_api_key(explicit: str | None) -> str:
     raise RuntimeError("ALLORA_API_KEY not found")
 
 
+_TESTNET_FAUCET_URL = "https://faucet.testnet.allora.run"
+
+
 def _build_network(network: str, no_faucet: bool) -> AlloraNetworkConfig:
     cfg = AlloraNetworkConfig.mainnet() if network == "mainnet" else AlloraNetworkConfig.testnet()
     if no_faucet:
         cfg.faucet_url = None
+    elif network != "mainnet":
+        # SDK default points to .allora.network which 301-redirects to .allora.run;
+        # requests silently converts the POST to a GET on redirect so the drip never fires.
+        cfg.faucet_url = _TESTNET_FAUCET_URL
     return cfg
 
 
