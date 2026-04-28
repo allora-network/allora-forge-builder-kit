@@ -4,6 +4,19 @@
 
 Build, evaluate, and deploy ML inference workers on the [Allora Network](https://allora.network).
 
+## Contents
+
+- [What is Allora?](#what-is-allora)
+- [What is the Allora Forge?](#what-is-the-allora-forge)
+- [What you get](#what-you-get)
+- [Zero to deploy](#zero-to-deploy)
+- [Python API (quick reference)](#python-api-quick-reference)
+- [The learning problem](#the-learning-problem)
+- [Evaluation metrics](#evaluation-metrics)
+- [File map](#file-map)
+- [Testing](#testing)
+- [Links](#links)
+
 ## What is Allora?
 
 Allora is a decentralized AI network that coordinates predictions across many independent ML models. Rather than relying on a single model, the network aggregates inferences from competing workers and weights them by historical accuracy — producing a combined output that outperforms any individual contributor.
@@ -15,11 +28,21 @@ The network is organized into **topics**. Each topic defines a prediction task (
 3. **Evaluation window** runs for the topic's time horizon (e.g. 8 hours)
 4. **Scores are revealed** — workers are ranked by loss against the ground truth, and rewards are distributed
 
+```
+time ──────────────────────────────────────────────────────────────────►
+
+  ◄── submission ──►◄─────────────── evaluation period (e.g. 8h) ──────►
+  │                 │                                                    │
+open             close                                               scores
+workers          predictions                                        revealed
+polled           locked                                           + rewarded
+```
+
 All live topics today are crypto market predictions across assets like BTC, ETH, SOL, and NEAR. New topics are added over time.
 
 ## What is the Allora Forge?
 
-The [Allora Model Forge](https://allora.network/forge) is the hub for ML practitioners to compete, earn rewards, and build reputation on the network. Workers start on testnet to establish a track record, then graduate to mainnet where top performers earn ALLO token rewards.
+The [Allora Model Forge](https://forge.allora.network) is the hub for ML practitioners to compete, earn rewards, and build reputation on the network. Workers start on testnet to establish a track record, then graduate to mainnet where top performers earn ALLO token rewards.
 
 This toolkit handles everything between your model and the network: data, feature engineering, evaluation, wallet management, and worker deployment.
 
@@ -202,6 +225,48 @@ from allora_forge_builder_kit import PerformanceEvaluator
 evaluator = PerformanceEvaluator(workflow)
 grade = evaluator.evaluate(predict_fn)
 ```
+
+---
+
+## The learning problem
+
+### Framing forecasting as supervised learning
+
+At any point in time $t$, the model observes a window of $N$ past bars as input features $\mathbf{x} \in \mathbb{R}^d$ and predicts a future outcome $y$ — a price or log return over the next $H$ bars. By sliding this window across the full history, a single time series becomes thousands of labeled examples $(\mathbf{x}_i, y_i)$, turning forecasting into a standard supervised learning problem.
+
+The `AlloraMLWorkflow` handles this construction: `backfill()` fetches historical data, `get_full_feature_target_dataframe()` builds the feature matrix and target vector, ready for any scikit-learn compatible model.
+
+### Empirical risk minimization
+
+The standard recipe is to pick a model $f$ by minimizing empirical (in-sample) loss:
+
+$$f^* = \arg\min_{f \in \mathcal{F}} \frac{1}{n} \sum_{i=1}^{n} \ell(y_i,\, f(\mathbf{x}_i))$$
+
+The ERM assumption is that training and deployment data share the same distribution — so a model that fits well in-sample will generalize out-of-sample. This is a reasonable working assumption in many domains.
+
+### Why finance makes this hard
+
+Financial markets violate the ERM assumption routinely:
+
+- **Regime changes** — volatility regimes, macro shocks, and structural breaks mean the distribution of returns today can look nothing like last year's.
+- **Non-stationarity** — correlations, volatility, and return distributions all drift over time.
+- **Low signal-to-noise** — crypto returns are heavily noise-dominated, making it easy to fit noise rather than signal.
+
+The practical consequence is that **overfitting is the default failure mode**. A model can lower in-sample loss while out-of-sample loss increases — more model complexity captures noise instead of signal. Traditional remedies (early stopping, depth limits, regularization, conservative learning rates) are especially important here.
+
+### Walk-forward validation
+
+To measure true out-of-sample performance the toolkit uses **walk-forward cross-validation**: train on data up to time $t$, evaluate on data strictly after $t$, advance the window, repeat. This respects temporal ordering (no lookahead leakage) and produces a realistic sample of out-of-sample predictions. The evaluation metrics in the next section are computed entirely on these held-out predictions.
+
+### The model builder's job
+
+The example notebooks use **LightGBM** (gradient boosting over decision trees) with conservative defaults as a starting point. Gradient boosting is a strong tabular baseline — it handles non-linearity and feature interactions well and is relatively robust to scale.
+
+From here, improving your score comes down to three levers:
+
+1. **Feature engineering** — what information goes into $\mathbf{x}$. The base features are normalized OHLCV ratios (last-close normalized to 1.0). Adding technical indicators (RSI, MACD, realized volatility), log-return series, or cross-asset signals is where most alpha lives.
+2. **Model and regularization** — early stopping, tree depth, learning rate, and subsampling to keep variance in check.
+3. **Maximizing out-of-sample metrics** — the evaluation suite (DA, Pearson $r$, WRMSE, CZAR) is the scorecard, not in-sample loss. A higher grade means better generalization and a higher expected score on the Allora network.
 
 ---
 
