@@ -181,11 +181,11 @@ def test_evaluate_rejects_empty_arrays(evaluator):
 
 def test_grade_scale(evaluator):
     passed_all = {f"metric_{i}": True for i in range(7)}
-    score, grade, n = evaluator.calculate_performance_score(passed_all, temporal_coverage_pass=True)
+    score, grade, n = evaluator.calculate_performance_score(passed_all)
     assert grade == "A+"
-    assert n == 8
+    assert n == 7
 
     passed_none = {f"metric_{i}": False for i in range(7)}
-    score, grade, n = evaluator.calculate_performance_score(passed_none, temporal_coverage_pass=False)
+    score, grade, n = evaluator.calculate_performance_score(passed_none)
     assert grade == "F"
     assert n == 0

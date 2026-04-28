@@ -40,7 +40,8 @@ if not api_key:
     ]
     for _path in _search_paths:
         if os.path.exists(_path):
-            api_key = open(_path).read().strip()
+            with open(_path) as f:
+                api_key = f.read().strip()
             if api_key:
                 break
 if not api_key:
