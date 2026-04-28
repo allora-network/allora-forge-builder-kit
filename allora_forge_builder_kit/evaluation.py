@@ -581,7 +581,10 @@ class PerformanceEvaluator:
                 only — does not affect the score or grade).
 
         Returns:
-            Comprehensive dictionary with all metrics, pass/fail, and grade
+            Comprehensive dictionary with all metrics, pass/fail, and grade.
+            ``report['temporal_coverage_pass']`` is ``None`` when
+            ``n_expected_epochs`` is not provided, or a ``bool`` when it is.
+            Guard with ``is not None`` before using it.
         """
         y_true = np.asarray(y_true).flatten()
         y_pred = np.asarray(y_pred).flatten()

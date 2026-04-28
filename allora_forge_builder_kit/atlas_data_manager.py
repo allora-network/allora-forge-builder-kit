@@ -38,6 +38,8 @@ class AtlasDataManager(BaseDataManager):
       - Compatible with AlloraMLWorkflow
     """
 
+    _public_tag_acquired: bool = False
+
     def __init__(
         self,
         api_key: str,
@@ -49,6 +51,7 @@ class AtlasDataManager(BaseDataManager):
         page_size: int = 1000,
         sleep_sec: float = 0.0,
         allowed_hosts: Optional[set] = None,
+        auto_acquire_tag: bool = True,
     ):
         super().__init__(
             base_dir=base_dir, interval=interval, symbols=symbols, cache_len=cache_len
@@ -69,7 +72,8 @@ class AtlasDataManager(BaseDataManager):
 
         self._dataset_cache: Dict[str, int] = {}
 
-        self._ensure_public_tag()
+        if auto_acquire_tag and not AtlasDataManager._public_tag_acquired:
+            self._ensure_public_tag()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -90,10 +94,11 @@ class AtlasDataManager(BaseDataManager):
             )
             if resp.status_code in (200, 201):
                 print("[Atlas] Acquired 'public' tag — public datasets are now accessible.")
+                AtlasDataManager._public_tag_acquired = True
             elif resp.status_code == 409:
-                pass  # already held, nothing to do
+                AtlasDataManager._public_tag_acquired = True  # already held
             else:
-                print(f"[Atlas] Warning: could not acquire 'public' tag (HTTP {resp.status_code}): {resp.text}")
+                print(f"[Atlas] Warning: could not acquire 'public' tag (HTTP {resp.status_code}): {resp.text[:200]}")
         except requests.exceptions.RequestException as e:
             print(f"[Atlas] Warning: could not acquire 'public' tag: {e}")
 
