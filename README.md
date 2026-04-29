@@ -268,6 +268,8 @@ From here, improving your score comes down to three levers:
 2. **Model and regularization** — early stopping, tree depth, learning rate, and subsampling to keep variance in check.
 3. **Maximizing out-of-sample metrics** — the evaluation suite (DA, Pearson $r$, WRMSE, CZAR) is the scorecard, not in-sample loss. A higher grade means better generalization and a higher expected score on the Allora network.
 
+For methodology on each of these levers, see [`allora_research_model_skills/`](allora_research_model_skills/README.md) — three Claude Code skills covering hypothesis-driven, signal-discovery, and robustness-first approaches to model design.
+
 ---
 
 ## Evaluation metrics
@@ -313,6 +315,7 @@ From here, improving your score comes down to three levers:
 | `allora_forge_builder_kit/worker_manager.py` | Wallet creation, key management, process lifecycle |
 | `allora_forge_builder_kit/worker_monitor.py` | On-chain event tracking |
 | `allora_forge_builder_kit/web_dashboard.py` | Web monitoring UI |
+| `allora_research_model_skills/` | Methodology skills for building generalizable financial models (hypothesis-driven, signal-discovery, robustness-first) |
 
 ---
 
