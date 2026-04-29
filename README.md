@@ -269,13 +269,7 @@ From here, improving your score comes down to three levers:
 2. **Model and regularization** — early stopping, tree depth, learning rate, and subsampling to keep variance in check.
 3. **Maximizing out-of-sample metrics** — the evaluation suite (DA, Pearson $r$, WRMSE, CZAR) is the scorecard, not in-sample loss. A higher grade means better generalization and a higher expected score on the Allora network.
 
-For methodology guidance on each of these levers, the [`allora_research_model_skills/`](allora_research_model_skills/README.md) bundle contains three Claude Code skills, each entering model design from a different angle:
-
-- **`forge-hypothesis-driven`** — start from a theory about what moves markets, then build features to test it (deductive).
-- **`forge-signal-discovery`** — start from interesting data, then discover what is predictable in it (inductive).
-- **`forge-robustness-first`** — start from validation gates, then work backwards to a design that survives them (adversarial).
-
-All three produce a complete, runnable pipeline (data loader, feature engineering, model, validation, monitoring) and satisfy the same nine methodology principles. See the bundle's README for selection guidance.
+For structured methodology guidance on each of these levers, see the [Model creation skills](#model-creation-skills) section.
 
 ---
 
