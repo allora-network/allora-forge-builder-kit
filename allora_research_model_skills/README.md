@@ -48,7 +48,7 @@ These skills solve both problems:
 
 ## Prerequisites
 
-- **Python 3.9+**
+- **Python 3.10+** (matches the builder kit's `pyproject.toml`)
 - **ML libraries:** scikit-learn, XGBoost or LightGBM (or your preferred gradient boosting / modeling library)
 - **Data access:** Market data via a public API (exchange APIs, data aggregators) or your own data sources
 - **Development environment:** Claude Code or Codex with skill support
