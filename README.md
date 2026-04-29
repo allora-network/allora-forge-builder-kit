@@ -13,6 +13,7 @@ Build, evaluate, and deploy ML inference workers on the [Allora Network](https:/
 - [Python API (quick reference)](#python-api-quick-reference)
 - [The learning problem](#the-learning-problem)
 - [Evaluation metrics](#evaluation-metrics)
+- [Model creation skills](#model-creation-skills)
 - [File map](#file-map)
 - [Testing](#testing)
 - [Links](#links)
@@ -303,6 +304,20 @@ All three produce a complete, runnable pipeline (data loader, feature engineerin
 | 3 | C |
 | 2 | D |
 | ≤ 1 | F |
+
+---
+
+## Model creation skills
+
+The [`allora_research_model_skills/`](allora_research_model_skills/README.md) bundle contains three Claude Code skills for building financial prediction models. Each enters model design from a different angle:
+
+| Skill | Entry point |
+|-------|-------------|
+| `forge-hypothesis-driven` | Start from a theory about what moves markets (deductive) |
+| `forge-signal-discovery` | Start from interesting data, discover what is predictable (inductive) |
+| `forge-robustness-first` | Start from validation gates, work backwards to a design that survives them (adversarial) |
+
+All three produce a complete, runnable pipeline and satisfy the same nine methodology principles. See [`allora_research_model_skills/README.md`](allora_research_model_skills/README.md) for selection guidance.
 
 ---
 
