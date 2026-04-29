@@ -13,6 +13,7 @@ Build, evaluate, and deploy ML inference workers on the [Allora Network](https:/
 - [Python API (quick reference)](#python-api-quick-reference)
 - [The learning problem](#the-learning-problem)
 - [Evaluation metrics](#evaluation-metrics)
+- [Model creation skills](#model-creation-skills)
 - [File map](#file-map)
 - [Testing](#testing)
 - [Links](#links)
@@ -268,6 +269,8 @@ From here, improving your score comes down to three levers:
 2. **Model and regularization** — early stopping, tree depth, learning rate, and subsampling to keep variance in check.
 3. **Maximizing out-of-sample metrics** — the evaluation suite (DA, Pearson $r$, WRMSE, CZAR) is the scorecard, not in-sample loss. A higher grade means better generalization and a higher expected score on the Allora network.
 
+For structured methodology guidance on each of these levers, see the [Model creation skills](#model-creation-skills) section.
+
 ---
 
 ## Evaluation metrics
@@ -298,6 +301,20 @@ From here, improving your score comes down to three levers:
 
 ---
 
+## Model creation skills
+
+The [`allora_research_model_skills/`](allora_research_model_skills/README.md) bundle contains three Claude Code skills for building financial prediction models. Each enters model design from a different angle:
+
+| Skill | Entry point |
+|-------|-------------|
+| `forge-hypothesis-driven` | Start from a theory about what moves markets (deductive) |
+| `forge-signal-discovery` | Start from interesting data, discover what is predictable (inductive) |
+| `forge-robustness-first` | Start from validation gates, work backwards to a design that survives them (adversarial) |
+
+All three produce a complete, runnable pipeline and satisfy the same nine methodology principles. See [`allora_research_model_skills/README.md`](allora_research_model_skills/README.md) for selection guidance.
+
+---
+
 ## File map
 
 | Path | Purpose |
@@ -313,6 +330,7 @@ From here, improving your score comes down to three levers:
 | `allora_forge_builder_kit/worker_manager.py` | Wallet creation, key management, process lifecycle |
 | `allora_forge_builder_kit/worker_monitor.py` | On-chain event tracking |
 | `allora_forge_builder_kit/web_dashboard.py` | Web monitoring UI |
+| `allora_research_model_skills/` | Methodology skills for building generalizable financial models (hypothesis-driven, signal-discovery, robustness-first) |
 
 ---
 
