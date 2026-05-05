@@ -120,6 +120,38 @@ worker = AlloraWorker(
   Pearson p-value, WRMSE improvement, CZAR improvement) scored out of 7.
 - For **price topics**, return an absolute price.
   For **log-return topics**, return the log return.
+- For **volatility topics**, return the predicted std of 1-minute log returns
+  over the horizon (a non-negative float). Use `target_type="volatility"`.
+
+## Volatility target workflow
+
+For topics that predict realised volatility (e.g. Topic 79):
+
+```python
+workflow = AlloraMLWorkflow(
+    tickers=["btcusd"],
+    number_of_input_bars=15,   # 15 minutes of 1-min bars
+    target_bars=15,            # 15-minute volatility horizon
+    interval="1m",             # base data interval
+    target_type="volatility",  # std of log returns over horizon
+    data_source="allora",
+    api_key="UP-...",
+)
+```
+
+The target is defined as:
+```
+r_i = log(close[t+i] / close[t+i-1])  for i in 1..target_bars
+target[t] = std(r_1, ..., r_{target_bars})
+```
+
+The predict function returns the volatility directly (no price conversion):
+```python
+def predict(nonce=None):
+    features = workflow.get_live_features("btcusd")
+    vol = model.predict(features[feature_cols].values.reshape(1, -1))[0]
+    return float(max(0.0, vol))  # volatility is non-negative
+```
 
 ## Base feature normalization
 

@@ -39,8 +39,9 @@ In one working session, get a user from clone to live worker submissions with vi
 Run one of the whitelist-free examples to train + evaluate + save `predict.pkl`:
 
 ```bash
-python notebooks/example_topic_69_bitcoin_walkthrough.py
-python notebooks/example_topic_77_bitcoin_5min_walkthrough.py
+python notebooks/example_topic_69_bitcoin_walkthrough.py   # price prediction (1h bars)
+python notebooks/example_topic_77_bitcoin_5min_walkthrough.py  # price prediction (5m bars)
+python notebooks/example_topic_79_btc_volatility_walkthrough.py  # volatility prediction (1m bars)
 ```
 
 Then deploy. The deploy scripts use `WorkerManager` internally — wallet creation,
@@ -108,6 +109,7 @@ All base features are therefore **ratios**, not raw prices. Any additional engin
 Before deployment, verify topic prediction format:
 - **Price topic** → absolute price prediction
 - **Log-return topic** → `log(future/current)` prediction
+- **Volatility topic** → std of 1-minute log returns over the horizon (non-negative float)
 
 ## Repo hygiene rules
 - Never commit secrets or keys.

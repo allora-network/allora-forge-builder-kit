@@ -12,7 +12,7 @@ Comprehensive test suite for the data manager architecture and ML workflow.
 - ✅ AtlasDataManager initialization
 - ✅ Data format parsing
 - ✅ Storage separation
-- ✅ Workflow integration
+- ✅ Workflow integration (log-return and volatility target types)
 
 ### Integration Tests (Requires network + API keys)
 - ✅ Binance backfill and load
