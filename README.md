@@ -191,7 +191,7 @@ Mainnet topics and their testnet equivalents:
 
 | Mainnet ID | Mainnet Name | Testnet ID | Testnet Name |
 |-----------|-------------|-----------|-------------|
-| 1  | BTC/USD - Log Returns - 8h  | 64 | 8h BTC/USD Log-Return (5min updates) |
+| 1  | BTC/USD - Log Returns - 8h  | 65 | 8h BTC/USD Log-Return (5min updates) |
 | 2  | ETH/USD - Log Returns - 8h  | — | Missing |
 | 3  | SOL/USD - Log Returns - 8h  | 57 | 8h SOL/USD Log-Return *(inactive)* |
 | 9  | ETH/USD - Price Prediction - 8h | 41 | ETH/USD - 8h Price Prediction |
