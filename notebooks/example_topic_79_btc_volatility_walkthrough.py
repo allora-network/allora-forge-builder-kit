@@ -29,9 +29,10 @@ import json
 from datetime import datetime, timedelta, timezone
 from sklearn.model_selection import TimeSeriesSplit
 from lightgbm import LGBMRegressor
+from scipy.stats import pearsonr, spearmanr
 import matplotlib.pyplot as plt
 import cloudpickle
-from allora_forge_builder_kit import AlloraMLWorkflow, PerformanceEvaluator
+from allora_forge_builder_kit import AlloraMLWorkflow
 
 # =============================================================================
 # EXPERIMENT CONFIGURATION
@@ -87,6 +88,61 @@ def _to_serializable(obj):
     return obj
 
 
+# =============================================================================
+# VOLATILITY-SPECIFIC METRICS
+# =============================================================================
+def vol_metrics(y_true, y_pred):
+    """
+    Compute volatility-specific evaluation metrics.
+
+    These replace the standard log-return metrics (DA, CZAR) which are not
+    meaningful for volatility prediction.
+    """
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+    r, _ = pearsonr(y_true, y_pred)
+    rho, _ = spearmanr(y_true, y_pred)
+    mse = np.mean((y_true - y_pred) ** 2)
+    rmse = np.sqrt(mse)
+    mae = np.mean(np.abs(y_true - y_pred))
+    ss_res = np.sum((y_true - y_pred) ** 2)
+    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+    r2 = 1 - ss_res / ss_tot
+    rel_mae = mae / np.mean(y_true)
+    # QLIKE: quasi-likelihood loss (standard for volatility forecasting)
+    mask = y_pred > 0
+    if mask.sum() > 0:
+        ratio = y_true[mask] / y_pred[mask]
+        qlike = np.mean(ratio - np.log(ratio) - 1)
+    else:
+        qlike = float("inf")
+    return {
+        "pearson_r": r,
+        "spearman_rho": rho,
+        "r2": r2,
+        "rmse": rmse,
+        "mae": mae,
+        "rel_mae": rel_mae,
+        "qlike": qlike,
+    }
+
+
+def print_vol_metrics(metrics, label=""):
+    """Pretty-print volatility metrics."""
+    print(f"\n  {'─' * 50}")
+    if label:
+        print(f"  {label}")
+        print(f"  {'─' * 50}")
+    print(f"  Pearson r:   {metrics['pearson_r']:.4f}")
+    print(f"  Spearman ρ:  {metrics['spearman_rho']:.4f}")
+    print(f"  R²:          {metrics['r2']:.4f}")
+    print(f"  RMSE:        {metrics['rmse']:.6f}")
+    print(f"  MAE:         {metrics['mae']:.6f}")
+    print(f"  Rel MAE:     {metrics['rel_mae']*100:.2f}%")
+    print(f"  QLIKE:       {metrics['qlike']:.6f}")
+    print(f"  {'─' * 50}")
+
+
 def save_run_artifacts(df_eval, best_result, best_params, run_dir, feature_cols):
     """Persist config/metrics/predictions and basic diagnostic plots."""
     os.makedirs(run_dir, exist_ok=True)
@@ -113,15 +169,7 @@ def save_run_artifacts(df_eval, best_result, best_params, run_dir, feature_cols)
         json.dump(_to_serializable(config), f, indent=2)
 
     # 2) Metrics
-    metrics_payload = {
-        "score": best_result["score"],
-        "grade": best_result["grade"],
-        "num_passed": best_result["num_passed"],
-        "num_primary_metrics": best_result.get("num_primary_metrics"),
-        "thresholds": best_result.get("thresholds", {}),
-        "passed": best_result.get("passed", {}),
-        "metrics": best_result.get("metrics", {}),
-    }
+    metrics_payload = {k: v for k, v in best_result.items() if k != "predictions"}
     with open(os.path.join(run_dir, "metrics.json"), "w") as f:
         json.dump(_to_serializable(metrics_payload), f, indent=2)
 
@@ -155,12 +203,11 @@ def save_run_artifacts(df_eval, best_result, best_params, run_dir, feature_cols)
         f.write("Allora Topic 79 Run Report\n")
         f.write("BTC/USD 15-Minute Volatility Prediction\n")
         f.write("=" * 40 + "\n")
-        f.write(f"Score: {best_result['score']:.1%} ({best_result['num_passed']}/7)\n")
-        f.write(f"Grade: {best_result['grade']}\n")
         f.write(f"Best params: {best_params}\n\n")
-        f.write("Primary metric pass/fail:\n")
-        for metric_name, did_pass in best_result.get("passed", {}).items():
-            f.write(f"- {metric_name}: {'PASS' if did_pass else 'FAIL'}\n")
+        f.write("Volatility Metrics:\n")
+        for key in ["pearson_r", "spearman_rho", "r2", "rmse", "mae", "rel_mae", "qlike"]:
+            if key in best_result:
+                f.write(f"  {key}: {best_result[key]:.6f}\n")
 
     return {
         "run_dir": run_dir,
@@ -313,7 +360,6 @@ for fold_idx, (train_idx, test_idx) in enumerate(tscv.split(df_all)):
 print("\n[4/6] Running grid search...")
 
 results = []
-evaluator = PerformanceEvaluator()
 config_num = 0
 
 for lr in LEARNING_RATES:
@@ -348,12 +394,11 @@ for lr in LEARNING_RATES:
                     preds = lgb.predict(X_test, num_iteration=n_est)
                     df_all.iloc[test_idx, df_all.columns.get_loc("pred")] = preds
 
-                # Evaluate
+                # Evaluate with volatility-specific metrics
                 valid_mask = ~df_all["pred"].isna()
-                metrics = evaluator.evaluate(
-                    y_true=df_all.loc[valid_mask, "target"],
-                    y_pred=df_all.loc[valid_mask, "pred"],
-                )
+                y_true_cv = df_all.loc[valid_mask, "target"].values
+                y_pred_cv = np.maximum(df_all.loc[valid_mask, "pred"].values, 0)
+                metrics = vol_metrics(y_true_cv, y_pred_cv)
 
                 # Store results
                 results.append(
@@ -371,14 +416,15 @@ for lr in LEARNING_RATES:
                 print(
                     f"   [{config_num:2d}] n={n_est:4d}, lr={lr:.2f}, "
                     f"d={depth}, l={leaves:2d} -> "
-                    f"{metrics['num_passed']}/7 ({metrics['score']:.1%} - {metrics['grade']})"
+                    f"r={metrics['pearson_r']:.4f} R²={metrics['r2']:.4f} "
+                    f"QLIKE={metrics['qlike']:.4f}"
                 )
 
-# Analyze results
+# Analyze results — rank by R² (primary), then QLIKE (secondary, lower=better)
 results_df = pd.DataFrame(
     [{k: v for k, v in r.items() if k != "predictions"} for r in results]
 )
-results_df = results_df.sort_values(["num_passed", "score"], ascending=[False, False])
+results_df = results_df.sort_values(["r2", "qlike"], ascending=[False, True])
 
 print(f"\n✅ Tested {len(results)} configurations")
 print("\n   Top 5 models:")
@@ -388,10 +434,11 @@ top5_cols = [
     "learning_rate",
     "max_depth",
     "num_leaves",
-    "num_passed",
-    "score",
+    "pearson_r",
+    "r2",
+    "qlike",
 ]
-print(results_df[top5_cols].head().to_string(index=False))
+print(results_df[top5_cols].head().to_string(index=False, float_format="%.4f"))
 
 # Select best model
 best_result = results[results_df.iloc[0]["config_num"] - 1]
@@ -402,7 +449,8 @@ best_params = {
 
 print(f"\nBest: Config #{best_result['config_num']}")
 print(
-    f"   {best_result['num_passed']}/7 points ({best_result['score']:.1%}) | "
+    f"   r={best_result['pearson_r']:.4f} R²={best_result['r2']:.4f} "
+    f"QLIKE={best_result['qlike']:.4f} | "
     f"n={best_params['n_estimators']}, lr={best_params['learning_rate']}, "
     f"d={best_params['max_depth']}, l={best_params['num_leaves']}"
 )
@@ -411,9 +459,7 @@ print(
 # STEP 5: Evaluate Best Model
 # =============================================================================
 print("\n[5/6] Detailed evaluation...")
-print("=" * 80)
-evaluator.print_report(best_result, detailed=False)
-print("=" * 80)
+print_vol_metrics(best_result, "BEST MODEL — Volatility Metrics")
 
 # Save reproducibility artifacts + diagnostic plot
 run_timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -494,7 +540,8 @@ print("COMPLETE!")
 print("=" * 80)
 print(
     f"{len(feature_cols)} features | "
-    f"{best_result['num_passed']}/7 points ({best_result['score']:.1%})"
+    f"r={best_result['pearson_r']:.4f} | R²={best_result['r2']:.4f} | "
+    f"QLIKE={best_result['qlike']:.4f}"
 )
 print(f"\nTo deploy this worker:")
 print(f"  TOPIC_ID=79 python notebooks/deploy_worker_raw.py")
