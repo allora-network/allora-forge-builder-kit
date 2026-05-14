@@ -190,6 +190,9 @@ Playground topics (testnet only) are the recommended starting point — no white
 | **69** | BTC/USD - 1 Day Price Prediction | Price | Playground — example walkthroughs use this |
 | **77** | BTC/USD - 5 Min Price Prediction | Price | Playground Fast |
 | **79** | BTC/USD - 15 Min Volatility Prediction | Volatility | Std of 1-min log returns over 15-min horizon |
+| **80** | ETH/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, ETH pair |
+| **81** | XRP/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, XRP pair |
+| **82** | SOL/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, SOL pair |
 
 Mainnet topics and their testnet equivalents:
 
@@ -342,10 +345,13 @@ All three produce a complete, runnable pipeline and satisfy the same nine method
 |------|---------|
 | `notebooks/example_topic_69_bitcoin_walkthrough.py` | End-to-end example for topic 69: data → features → model → artifact |
 | `notebooks/example_topic_77_bitcoin_5min_walkthrough.py` | End-to-end example for topic 77: 5-min BTC prediction |
-| `notebooks/example_topic_79_btc_volatility_walkthrough.py` | End-to-end example for topic 79: 15-min BTC volatility prediction |
-| `notebooks/deploy_worker.py` | Deploy any topic with WorkerManager (`TOPIC_ID=N python deploy_worker.py`) |
-| `notebooks/deploy_worker_raw.py` | Minimal SDK-only deployment reference (no WorkerManager) |
-| `notebooks/feature_engineering_example.py` | Standalone feature engineering reference |
+| `notebooks/topic_79_btc_vol/` | Topic 79 BTC/USD volatility: example + models A/B/D/E |
+| `notebooks/topic_80_eth_vol/` | Topic 80 ETH/USD volatility: models A/B/D/E |
+| `notebooks/topic_81_xrp_vol/` | Topic 81 XRP/USD volatility: model E |
+| `notebooks/topic_82_sol_vol/` | Topic 82 SOL/USD volatility: model E |
+| `notebooks/shared/deploy_worker.py` | Deploy any topic with WorkerManager (`TOPIC_ID=N python deploy_worker.py`) |
+| `notebooks/shared/deploy_worker_raw.py` | Minimal SDK-only deployment reference (no WorkerManager) |
+| `notebooks/shared/feature_engineering_example.py` | Standalone feature engineering reference |
 | `allora_forge_builder_kit/workflow.py` | Data + feature pipeline |
 | `allora_forge_builder_kit/evaluation.py` | Model scoring (7 primary metrics + grading) |
 | `allora_forge_builder_kit/topic_discovery.py` | Query live topics on testnet/mainnet |

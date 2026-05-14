@@ -153,6 +153,32 @@ def predict(nonce=None):
     return float(max(0.0, vol))  # volatility is non-negative
 ```
 
+### Best-performing approach: log-space prediction
+
+Predicting `log(vol)` and transforming back with bias correction produces
+better calibrated predictions that match the target distribution:
+
+```python
+import numpy as np
+
+# Train in log-space
+y_train_log = np.log(y_train + 1e-10)
+model.fit(X_train, y_train_log)
+
+# Bias correction: exp(E[log(x)]) underestimates E[x]
+residuals = y_train_log - model.predict(X_train)
+bias_correction = np.exp(0.5 * np.var(residuals))
+
+def predict(nonce=None):
+    features = workflow.get_live_features("btcusd")
+    log_pred = model.predict(features[feature_cols].values.reshape(1, -1))[0]
+    vol = np.exp(log_pred) * bias_correction
+    return float(max(0.0, vol))
+```
+
+Volatility topics: 79 (BTC), 80 (ETH), 81 (XRP), 82 (SOL).
+See `notebooks/topic_79_btc_vol/topic_79_model_e_calibrated.py` for the full implementation.
+
 ## Base feature normalization
 
 Features from `get_full_feature_target_dataframe()` are **not raw prices** — they are normalized ratios:

@@ -141,7 +141,7 @@ print("\n[1/5] Initializing workflow...")
 from allora_forge_builder_kit.utils import get_api_key
 
 api_key = get_api_key(
-    api_key_file=os.path.join(os.path.dirname(__file__), ".allora_api_key")
+    api_key_file=os.path.join(os.path.dirname(__file__), "..", ".allora_api_key")
 )
 
 workflow = AlloraMLWorkflow(

@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-Topic 79 — Model B: Multi-Scale Regime Detection
-=================================================
+Topic 79 — Model A: Deep Lookback + Rich Volatility Features
+=============================================================
 
-Strategy: Use a 30-bar (30-min) lookback with features designed to capture
-volatility clustering (GARCH-like persistence), intraday seasonality proxies,
-and multi-scale decomposition of price action. Emphasizes regime transitions
-and mean-reversion in volatility.
+Strategy: Use a 60-bar (1-hour) lookback window with extensive volatility-
+predictive features including multi-horizon realised vol, return autocorrelation,
+Parkinson/Garman-Klass estimators, and volume-volatility interaction.
 
 Trained on 2+ years of 1-minute BTC/USD data.
 """
@@ -26,19 +25,19 @@ from allora_forge_builder_kit import AlloraMLWorkflow, PerformanceEvaluator
 TICKERS = ["btcusd"]
 DAYS_OF_HISTORY = 800  # ~2.2 years
 INTERVAL = "1m"
-NUMBER_OF_INPUT_BARS = 30  # 30 minutes of 1-min bars
+NUMBER_OF_INPUT_BARS = 60  # 1 hour of 1-min bars
 TARGET_BARS = 15
 TARGET_TYPE = "volatility"
 
 N_SPLITS = 5
-N_ESTIMATORS_MAX = 1500
-N_ESTIMATORS_CHECKPOINTS = [300, 600, 1000, 1500]
-LEARNING_RATES = [0.005, 0.02]
-MAX_DEPTHS = [4, 6]
-NUM_LEAVES = [15, 31]
+N_ESTIMATORS_MAX = 1000
+N_ESTIMATORS_CHECKPOINTS = [200, 500, 800, 1000]
+LEARNING_RATES = [0.01, 0.03]
+MAX_DEPTHS = [5, 7]
+NUM_LEAVES = [31, 63]
 
 print("=" * 80)
-print("Topic 79 — Model B: Multi-Scale Regime (30-bar, 2+ years)")
+print("Topic 79 — Model A: Deep Lookback (60-bar, 2+ years)")
 print("=" * 80)
 
 # =============================================================================
@@ -48,7 +47,7 @@ print("\n[1/5] Initializing workflow...")
 from allora_forge_builder_kit.utils import get_api_key
 
 api_key = get_api_key(
-    api_key_file=os.path.join(os.path.dirname(__file__), ".allora_api_key")
+    api_key_file=os.path.join(os.path.dirname(__file__), "..", ".allora_api_key")
 )
 
 workflow = AlloraMLWorkflow(
@@ -76,8 +75,8 @@ df_all = workflow.get_full_feature_target_dataframe(start_date=start_date).reset
 base_feature_cols = [col for col in df_all.columns if col.startswith("feature_")]
 
 
-def engineer_multiscale_features(row):
-    """Multi-scale regime features from 30-bar lookback."""
+def engineer_deep_vol_features(row):
+    """Rich volatility features from 60-bar lookback."""
     n = NUMBER_OF_INPUT_BARS
     closes = np.array([row[f"feature_close_{i}"] for i in range(n)])
     highs = np.array([row[f"feature_high_{i}"] for i in range(n)])
@@ -85,101 +84,82 @@ def engineer_multiscale_features(row):
     volumes = np.array([row[f"feature_volume_{i}"] for i in range(n)])
 
     log_rets = np.diff(np.log(closes + 1e-12))
-    abs_rets = np.abs(log_rets)
     features = {}
 
-    # --- Realised vol at multiple scales ---
+    # --- Multi-horizon realised volatility ---
     features["vol_5m"] = np.std(log_rets[-5:], ddof=1) if len(log_rets) >= 5 else 0.0
     features["vol_10m"] = np.std(log_rets[-10:], ddof=1) if len(log_rets) >= 10 else 0.0
     features["vol_15m"] = np.std(log_rets[-15:], ddof=1) if len(log_rets) >= 15 else 0.0
-    features["vol_30m"] = np.std(log_rets, ddof=1) if len(log_rets) >= 2 else 0.0
+    features["vol_30m"] = np.std(log_rets[-30:], ddof=1) if len(log_rets) >= 30 else 0.0
+    features["vol_60m"] = np.std(log_rets, ddof=1) if len(log_rets) >= 2 else 0.0
 
-    # --- Vol persistence (GARCH-like) ---
-    # Exponentially weighted vol (lambda=0.94, like RiskMetrics)
-    lam = 0.94
-    sq_rets = log_rets ** 2
-    ewma_var = sq_rets[0]
-    for r2 in sq_rets[1:]:
-        ewma_var = lam * ewma_var + (1 - lam) * r2
-    features["ewma_vol"] = np.sqrt(ewma_var)
-    features["ewma_vs_realized"] = features["ewma_vol"] / (features["vol_30m"] + 1e-12)
-
-    # --- Vol of vol (second-order clustering) ---
-    if len(abs_rets) >= 10:
-        rolling_vols = [np.std(abs_rets[i : i + 5], ddof=1) for i in range(len(abs_rets) - 5)]
-        if len(rolling_vols) >= 2:
-            features["vol_of_vol"] = np.std(rolling_vols, ddof=1)
-        else:
-            features["vol_of_vol"] = 0.0
-    else:
-        features["vol_of_vol"] = 0.0
-
-    # --- Regime indicators ---
-    # Vol ratio (short/long) — high = vol expanding, low = vol contracting
+    # --- Vol ratios (regime detection) ---
+    features["vol_ratio_5_60"] = features["vol_5m"] / (features["vol_60m"] + 1e-12)
+    features["vol_ratio_15_60"] = features["vol_15m"] / (features["vol_60m"] + 1e-12)
     features["vol_ratio_5_30"] = features["vol_5m"] / (features["vol_30m"] + 1e-12)
-    features["vol_ratio_10_30"] = features["vol_10m"] / (features["vol_30m"] + 1e-12)
 
-    # Vol percentile within the window (where are we in the local distribution?)
-    if len(abs_rets) >= 15:
-        recent_vol = features["vol_5m"]
-        rolling_5m_vols = [np.std(log_rets[i : i + 5], ddof=1) for i in range(len(log_rets) - 5)]
-        if len(rolling_5m_vols) > 0:
-            features["vol_percentile"] = np.mean([1 for v in rolling_5m_vols if v <= recent_vol])
-        else:
-            features["vol_percentile"] = 0.5
+    # --- Return autocorrelation (vol clustering signal) ---
+    if len(log_rets) >= 10:
+        features["ret_autocorr_1"] = np.corrcoef(log_rets[1:], log_rets[:-1])[0, 1]
+        abs_rets = np.abs(log_rets)
+        features["absret_autocorr_1"] = np.corrcoef(abs_rets[1:], abs_rets[:-1])[0, 1]
     else:
-        features["vol_percentile"] = 0.5
+        features["ret_autocorr_1"] = 0.0
+        features["absret_autocorr_1"] = 0.0
 
-    # --- Mean reversion signal ---
-    # Distance from "normal" vol (z-score of current vol)
-    if len(abs_rets) >= 20:
-        rolling_vols = [np.std(log_rets[i : i + 5], ddof=1) for i in range(len(log_rets) - 5)]
-        if len(rolling_vols) >= 5:
-            vol_mean = np.mean(rolling_vols)
-            vol_std = np.std(rolling_vols, ddof=1)
-            features["vol_zscore"] = (features["vol_5m"] - vol_mean) / (vol_std + 1e-12)
-        else:
-            features["vol_zscore"] = 0.0
-    else:
-        features["vol_zscore"] = 0.0
+    # Handle NaN from corrcoef
+    for k in ["ret_autocorr_1", "absret_autocorr_1"]:
+        if not np.isfinite(features[k]):
+            features[k] = 0.0
 
-    # --- Directional features ---
-    features["signed_ret_5m"] = np.sum(log_rets[-5:])
-    features["signed_ret_15m"] = np.sum(log_rets[-15:]) if len(log_rets) >= 15 else np.sum(log_rets)
-    features["abs_ret_5m"] = np.sum(abs_rets[-5:])
-
-    # Efficiency ratio: |net move| / sum(|moves|) — 1 = trending, 0 = choppy
-    net_move = abs(features["signed_ret_15m"])
-    total_path = np.sum(abs_rets[-15:]) if len(abs_rets) >= 15 else np.sum(abs_rets)
-    features["efficiency_ratio"] = net_move / (total_path + 1e-12)
-
-    # --- High-low based estimators ---
+    # --- Parkinson volatility estimator (uses high-low) ---
     hl_log = np.log(highs + 1e-12) - np.log(lows + 1e-12)
-    features["parkinson_5m"] = np.sqrt(np.mean(hl_log[-5:] ** 2) / (4 * np.log(2)))
-    features["parkinson_15m"] = np.sqrt(np.mean(hl_log[-15:] ** 2) / (4 * np.log(2)))
-    features["parkinson_ratio"] = features["parkinson_5m"] / (features["parkinson_15m"] + 1e-12)
+    features["parkinson_vol_15m"] = np.sqrt(np.mean(hl_log[-15:] ** 2) / (4 * np.log(2)))
+    features["parkinson_vol_60m"] = np.sqrt(np.mean(hl_log ** 2) / (4 * np.log(2)))
+    features["parkinson_ratio"] = features["parkinson_vol_15m"] / (features["parkinson_vol_60m"] + 1e-12)
 
-    # --- Volume dynamics ---
-    features["volume_trend"] = np.mean(volumes[-5:]) / (np.mean(volumes[-15:]) + 1e-12)
-    features["volume_spike_ratio"] = np.max(volumes[-5:]) / (np.mean(volumes) + 1e-12)
+    # --- High-low range features ---
+    hl_range = highs - lows
+    features["hl_range_mean"] = np.mean(hl_range)
+    features["hl_range_5m"] = np.mean(hl_range[-5:])
+    features["hl_range_ratio"] = features["hl_range_5m"] / (features["hl_range_mean"] + 1e-12)
+    features["hl_range_max"] = np.max(hl_range[-15:])
 
-    # --- Autocorrelation of absolute returns (persistence) ---
-    if len(abs_rets) >= 6:
-        features["absret_autocorr"] = np.corrcoef(abs_rets[1:], abs_rets[:-1])[0, 1]
-        if not np.isfinite(features["absret_autocorr"]):
-            features["absret_autocorr"] = 0.0
+    # --- Absolute returns (magnitude) ---
+    abs_rets = np.abs(log_rets)
+    features["abs_ret_mean_5m"] = np.mean(abs_rets[-5:])
+    features["abs_ret_mean_15m"] = np.mean(abs_rets[-15:])
+    features["abs_ret_max_15m"] = np.max(abs_rets[-15:])
+    features["abs_ret_mean_60m"] = np.mean(abs_rets)
+
+    # --- Volume-volatility interaction ---
+    features["volume_mean_ratio"] = np.mean(volumes[-5:]) / (np.mean(volumes) + 1e-12)
+    features["volume_spike"] = np.max(volumes[-5:]) / (np.mean(volumes) + 1e-12)
+
+    # Volume-weighted volatility
+    vol_weights = volumes[1:] / (np.sum(volumes[1:]) + 1e-12)
+    features["vol_weighted_absret"] = np.sum(abs_rets * vol_weights)
+
+    # --- Trend strength (directional move vs vol) ---
+    net_return = log_rets[-15:].sum() if len(log_rets) >= 15 else 0.0
+    features["trend_vs_vol"] = abs(net_return) / (features["vol_15m"] + 1e-12)
+
+    # --- Kurtosis (tail risk) ---
+    if len(log_rets) >= 20:
+        mean_r = np.mean(log_rets[-30:])
+        std_r = np.std(log_rets[-30:], ddof=1)
+        if std_r > 1e-12:
+            features["kurtosis_30m"] = np.mean(((log_rets[-30:] - mean_r) / std_r) ** 4)
+        else:
+            features["kurtosis_30m"] = 3.0
     else:
-        features["absret_autocorr"] = 0.0
-
-    # --- Recent extreme moves ---
-    features["max_abs_ret_5m"] = np.max(abs_rets[-5:])
-    features["max_abs_ret_15m"] = np.max(abs_rets[-15:]) if len(abs_rets) >= 15 else np.max(abs_rets)
+        features["kurtosis_30m"] = 3.0
 
     return pd.Series(features)
 
 
-print("   Engineering multi-scale regime features...")
-engineered = df_all.apply(engineer_multiscale_features, axis=1)
+print("   Engineering deep volatility features...")
+engineered = df_all.apply(engineer_deep_vol_features, axis=1)
 df_all = pd.concat([df_all, engineered], axis=1)
 
 feature_cols = base_feature_cols + list(engineered.columns)
@@ -207,12 +187,11 @@ for lr in LEARNING_RATES:
                     learning_rate=lr,
                     max_depth=depth,
                     num_leaves=leaves,
-                    subsample=0.7,
-                    colsample_bytree=0.7,
-                    min_child_samples=50,
-                    reg_alpha=0.5,
-                    reg_lambda=2.0,
-                    random_state=123,
+                    subsample=0.8,
+                    colsample_bytree=0.8,
+                    reg_alpha=0.1,
+                    reg_lambda=1.0,
+                    random_state=42,
                     verbose=-1,
                 )
                 lgb.fit(df_all.iloc[train_idx][feature_cols], df_all.iloc[train_idx]["target"])
@@ -231,7 +210,7 @@ for lr in LEARNING_RATES:
                     y_pred=df_all.loc[valid_mask, "pred"],
                 )
                 results.append({"config_num": config_num, "n_est": n_est, "lr": lr, "depth": depth, "leaves": leaves, **metrics})
-                print(f"   [{config_num:2d}] n={n_est:4d} lr={lr:.3f} d={depth} l={leaves:2d} → {metrics['score']:.1%} ({metrics['grade']})")
+                print(f"   [{config_num:2d}] n={n_est:4d} lr={lr:.2f} d={depth} l={leaves:2d} → {metrics['score']:.1%} ({metrics['grade']})")
 
 results_df = pd.DataFrame(results).sort_values(["num_passed", "score"], ascending=[False, False])
 best = results_df.iloc[0]
@@ -246,12 +225,11 @@ final_model = LGBMRegressor(
     learning_rate=best["lr"],
     max_depth=int(best["depth"]),
     num_leaves=int(best["leaves"]),
-    subsample=0.7,
-    colsample_bytree=0.7,
-    min_child_samples=50,
-    reg_alpha=0.5,
-    reg_lambda=2.0,
-    random_state=123,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    reg_alpha=0.1,
+    reg_lambda=1.0,
+    random_state=42,
     verbose=-1,
 )
 final_model.fit(df_all[feature_cols], df_all["target"])
@@ -262,19 +240,19 @@ def predict(nonce=None):
     live_row = workflow.get_live_features(ticker=TICKERS[0])
     if live_row is None or len(live_row) == 0:
         raise ValueError("Could not get live features")
-    live_eng = engineer_multiscale_features(live_row.iloc[0])
+    live_eng = engineer_deep_vol_features(live_row.iloc[0])
     live_features = pd.concat([live_row[base_feature_cols].iloc[0], live_eng])
     vol = final_model.predict(live_features[feature_cols].values.reshape(1, -1))[0]
     vol = max(0.0, float(vol))
-    print(f"\nModel B prediction: {vol:.6f} (15-min vol)")
+    print(f"\nModel A prediction: {vol:.6f} (15-min vol)")
     return vol
 
 
 print("\n🧪 Testing...")
 test_pred = predict()
 
-with open("predict_79_model_b.pkl", "wb") as f:
+with open("predict_79_model_a.pkl", "wb") as f:
     cloudpickle.dump(predict, f)
 
-print(f"\n✅ Saved predict_79_model_b.pkl")
+print(f"\n✅ Saved predict_79_model_a.pkl")
 print(f"   Score: {best['score']:.1%} | Features: {len(feature_cols)}")

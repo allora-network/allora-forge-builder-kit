@@ -41,7 +41,12 @@ Run one of the whitelist-free examples to train + evaluate + save `predict.pkl`:
 ```bash
 python notebooks/example_topic_69_bitcoin_walkthrough.py   # price prediction (1h bars)
 python notebooks/example_topic_77_bitcoin_5min_walkthrough.py  # price prediction (5m bars)
-python notebooks/example_topic_79_btc_volatility_walkthrough.py  # volatility prediction (1m bars)
+
+# Volatility topics (1m bars, std of log returns over 15-min horizon)
+python notebooks/topic_79_btc_vol/topic_79_model_e_calibrated.py  # BTC best model
+python notebooks/topic_80_eth_vol/topic_80_model_e_calibrated.py  # ETH
+python notebooks/topic_81_xrp_vol/topic_81_model_e_calibrated.py  # XRP
+python notebooks/topic_82_sol_vol/topic_82_model_e_calibrated.py  # SOL
 ```
 
 Then deploy. The deploy scripts use `WorkerManager` internally — wallet creation,
@@ -110,6 +115,11 @@ Before deployment, verify topic prediction format:
 - **Price topic** → absolute price prediction
 - **Log-return topic** → `log(future/current)` prediction
 - **Volatility topic** → std of 1-minute log returns over the horizon (non-negative float)
+
+## Volatility topics
+Topics 79–82 predict 15-minute realised volatility for BTC, ETH, XRP, SOL.
+Best model architecture: Model E (log-space prediction + bias correction + GARCH features).
+Scripts are organized in `notebooks/topic_{id}_{asset}_vol/` subdirectories.
 
 ## Repo hygiene rules
 - Never commit secrets or keys.
