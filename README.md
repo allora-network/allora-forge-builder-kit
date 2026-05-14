@@ -99,6 +99,9 @@ python example_topic_69_bitcoin_walkthrough.py
 
 # Topic 77 — 5-min BTC/USD price prediction (5m bars, ~2 min)
 python example_topic_77_bitcoin_5min_walkthrough.py
+
+# Topic 79 — 15-min BTC/USD volatility prediction (1m bars, ~5 min)
+python example_topic_79_btc_volatility_walkthrough.py
 ```
 
 Each script backfills historical data, engineers features, trains and evaluates a model, and saves a `predict.pkl` artifact.
@@ -182,10 +185,14 @@ for t in d.get_all_topics():
 
 Playground topics (testnet only) are the recommended starting point — no whitelist required.
 
-| Testnet ID | Name | Notes |
-|-----------|------|-------|
-| **69** | BTC/USD - 1 Day Price Prediction | Playground — example walkthroughs use this |
-| **77** | BTC/USD - 5 Min Price Prediction | Playground Fast |
+| Testnet ID | Name | Target type | Notes |
+|-----------|------|-------------|-------|
+| **69** | BTC/USD - 1 Day Price Prediction | Price | Playground — example walkthroughs use this |
+| **77** | BTC/USD - 5 Min Price Prediction | Price | Playground Fast |
+| **79** | BTC/USD - 15 Min Volatility Prediction | Volatility | Std of 1-min log returns over 15-min horizon |
+| **80** | ETH/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, ETH pair |
+| **81** | XRP/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, XRP pair |
+| **82** | SOL/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, SOL pair |
 
 Mainnet topics and their testnet equivalents:
 
@@ -210,21 +217,33 @@ Mainnet topics and their testnet equivalents:
 ```python
 from allora_forge_builder_kit import AlloraMLWorkflow
 
-# Build a training dataset
+# Build a training dataset (log-return target — default)
 workflow = AlloraMLWorkflow(
     tickers=["btcusd"],
-    topic_id=69,
+    number_of_input_bars=48,
+    target_bars=24,
     interval="1h",
-    n_input_bars=48,
-    n_target_bars=24,
+    data_source="allora",
+    api_key="UP-...",
 )
 workflow.backfill(days=500)
 df = workflow.get_full_feature_target_dataframe()
 
+# Volatility target (std of 1-min log returns over the horizon)
+vol_workflow = AlloraMLWorkflow(
+    tickers=["btcusd"],
+    number_of_input_bars=15,
+    target_bars=15,           # 15-minute volatility window
+    interval="1m",
+    target_type="volatility", # NEW: "log_return" (default) or "volatility"
+    data_source="allora",
+    api_key="UP-...",
+)
+
 # Evaluate a predict function
 from allora_forge_builder_kit import PerformanceEvaluator
-evaluator = PerformanceEvaluator(workflow)
-grade = evaluator.evaluate(predict_fn)
+evaluator = PerformanceEvaluator()
+report = evaluator.evaluate(y_true, y_pred)
 ```
 
 ---
@@ -233,7 +252,12 @@ grade = evaluator.evaluate(predict_fn)
 
 ### Framing forecasting as supervised learning
 
-At any point in time $t$, the model observes a window of $N$ past bars as input features $\mathbf{x} \in \mathbb{R}^d$ and predicts a future outcome $y$ — a price or log return over the next $H$ bars. By sliding this window across the full history, a single time series becomes thousands of labeled examples $(\mathbf{x}_i, y_i)$, turning forecasting into a standard supervised learning problem.
+At any point in time $t$, the model observes a window of $N$ past bars as input features $\mathbf{x} \in \mathbb{R}^d$ and predicts a future outcome $y$ over the next $H$ bars. The target $y$ depends on the topic type:
+
+- **Price / log-return topics** — $y = \log(p_{t+H} / p_t)$ or the absolute price $p_{t+H}$
+- **Volatility topics** — $y = \text{std}(r_1, \ldots, r_H)$ where $r_i = \log(p_{t+i} / p_{t+i-1})$ are consecutive 1-minute log returns over the horizon
+
+By sliding this window across the full history, a single time series becomes thousands of labeled examples $(\mathbf{x}_i, y_i)$, turning forecasting into a standard supervised learning problem.
 
 The `AlloraMLWorkflow` handles this construction: `backfill()` fetches historical data, `get_full_feature_target_dataframe()` builds the feature matrix and target vector, ready for any scikit-learn compatible model.
 
@@ -321,9 +345,13 @@ All three produce a complete, runnable pipeline and satisfy the same nine method
 |------|---------|
 | `notebooks/example_topic_69_bitcoin_walkthrough.py` | End-to-end example for topic 69: data → features → model → artifact |
 | `notebooks/example_topic_77_bitcoin_5min_walkthrough.py` | End-to-end example for topic 77: 5-min BTC prediction |
-| `notebooks/deploy_worker.py` | Deploy any topic with WorkerManager (`TOPIC_ID=N python deploy_worker.py`) |
-| `notebooks/deploy_worker_raw.py` | Minimal SDK-only deployment reference (no WorkerManager) |
-| `notebooks/feature_engineering_example.py` | Standalone feature engineering reference |
+| `notebooks/topic_79_btc_vol/` | Topic 79 BTC/USD volatility: example + models A/B/D/E |
+| `notebooks/topic_80_eth_vol/` | Topic 80 ETH/USD volatility: models A/B/D/E |
+| `notebooks/topic_81_xrp_vol/` | Topic 81 XRP/USD volatility: model E |
+| `notebooks/topic_82_sol_vol/` | Topic 82 SOL/USD volatility: model E |
+| `notebooks/shared/deploy_worker.py` | Deploy any topic with WorkerManager (`TOPIC_ID=N python deploy_worker.py`) |
+| `notebooks/shared/deploy_worker_raw.py` | Minimal SDK-only deployment reference (no WorkerManager) |
+| `notebooks/shared/feature_engineering_example.py` | Standalone feature engineering reference |
 | `allora_forge_builder_kit/workflow.py` | Data + feature pipeline |
 | `allora_forge_builder_kit/evaluation.py` | Model scoring (7 primary metrics + grading) |
 | `allora_forge_builder_kit/topic_discovery.py` | Query live topics on testnet/mainnet |

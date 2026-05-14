@@ -120,6 +120,64 @@ worker = AlloraWorker(
   Pearson p-value, WRMSE improvement, CZAR improvement) scored out of 7.
 - For **price topics**, return an absolute price.
   For **log-return topics**, return the log return.
+- For **volatility topics**, return the predicted std of 1-minute log returns
+  over the horizon (a non-negative float). Use `target_type="volatility"`.
+
+## Volatility target workflow
+
+For topics that predict realised volatility (e.g. Topic 79):
+
+```python
+workflow = AlloraMLWorkflow(
+    tickers=["btcusd"],
+    number_of_input_bars=15,   # 15 minutes of 1-min bars
+    target_bars=15,            # 15-minute volatility horizon
+    interval="1m",             # base data interval
+    target_type="volatility",  # std of log returns over horizon
+    data_source="allora",
+    api_key="UP-...",
+)
+```
+
+The target is defined as:
+```
+r_i = log(close[t+i] / close[t+i-1])  for i in 1..target_bars
+target[t] = std(r_1, ..., r_{target_bars})
+```
+
+The predict function returns the volatility directly (no price conversion):
+```python
+def predict(nonce=None):
+    features = workflow.get_live_features("btcusd")
+    vol = model.predict(features[feature_cols].values.reshape(1, -1))[0]
+    return float(max(0.0, vol))  # volatility is non-negative
+```
+
+### Best-performing approach: log-space prediction
+
+Predicting `log(vol)` and transforming back with bias correction produces
+better calibrated predictions that match the target distribution:
+
+```python
+import numpy as np
+
+# Train in log-space
+y_train_log = np.log(y_train + 1e-10)
+model.fit(X_train, y_train_log)
+
+# Bias correction: exp(E[log(x)]) underestimates E[x]
+residuals = y_train_log - model.predict(X_train)
+bias_correction = np.exp(0.5 * np.var(residuals))
+
+def predict(nonce=None):
+    features = workflow.get_live_features("btcusd")
+    log_pred = model.predict(features[feature_cols].values.reshape(1, -1))[0]
+    vol = np.exp(log_pred) * bias_correction
+    return float(max(0.0, vol))
+```
+
+Volatility topics: 79 (BTC), 80 (ETH), 81 (XRP), 82 (SOL).
+See `notebooks/topic_79_btc_vol/topic_79_model_e_calibrated.py` for the full implementation.
 
 ## Base feature normalization
 
