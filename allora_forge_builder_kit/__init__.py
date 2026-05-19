@@ -10,6 +10,7 @@ from .evaluation import PerformanceEvaluator
 from .topic_discovery import AlloraTopicDiscovery, TopicInfo
 from .worker_manager import WorkerManager, WorkerSpec, DeployResult, Identity, build_topic_desc_resolver
 from .worker_monitor import WorkerMonitor, MonitorTarget, AlloraSDKEventFetcher
+from .czar_loss import czar_loss, czar_gradient, czar_hessian, make_czar_objective
 
 __all__ = [
     "__version__",
@@ -31,6 +32,10 @@ __all__ = [
     "WorkerMonitor",
     "MonitorTarget",
     "AlloraSDKEventFetcher",
+    "czar_loss",
+    "czar_gradient",
+    "czar_hessian",
+    "make_czar_objective",
 ]
 
 

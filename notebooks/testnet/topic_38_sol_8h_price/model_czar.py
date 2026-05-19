@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Topic 42 — BTC/USD 8h Price — v3 (CZAR Loss)
+Topic 38 — SOL/USD 8h Price — v3 (CZAR Loss)
 =============================================
 
 Uses CZAR loss instead of MSE/Huber. CZAR penalizes wrong-sign predictions
 heavily, softens near-zero returns, and normalizes by local volatility.
-This should help BTC where the signal is weak — CZAR won't waste capacity
+This should help SOL where the signal is weak — CZAR won't waste capacity
 fitting noise on near-zero returns.
 
 Combined with the directional features from v2.
@@ -30,7 +30,7 @@ from allora_forge_builder_kit import make_czar_objective
 # =============================================================================
 # CONFIG
 # =============================================================================
-TICKERS = ["btcusd"]
+TICKERS = ["solusd"]
 DAYS_OF_HISTORY = 1825
 INTERVAL = "1h"
 NUMBER_OF_INPUT_BARS = 48
@@ -46,7 +46,7 @@ NUM_LEAVES = [15, 31]
 CZAR_ALPHAS = [0.3, 0.5, 0.7, 1.0]  # CZAR alpha param (MSE curvature)
 
 print("=" * 70)
-print("Topic 42 — BTC/USD 8h Price — v3 (CZAR Loss)")
+print("Topic 38 — SOL/USD 8h Price — v3 (CZAR Loss)")
 print("=" * 70)
 
 # =============================================================================
@@ -302,13 +302,14 @@ for rank_idx, (_, row) in enumerate(top3.iterrows()):
           f"(a={row['czar_alpha']:.1f} r={row['pearson']:+.4f} DA={row['da']:.3f})")
 
 print(f"\n[5/5] Saving...")
-# For pickling: use the raw booster for prediction (avoids serializing CZAR objective)
 for rank_idx, (cfg, model, row) in enumerate(trained):
     def _make_predict(m):
         # Serialize booster to string — avoids pickling czar_loss module
         _model_str = m.booster_.model_to_string()
         _feature_cols = feature_cols[:]
         _tickers = TICKERS[:]
+        _n_input = NUMBER_OF_INPUT_BARS
+        # Capture feature engineering as a standalone function
         _eng_fn = engineer_directional_features
         _wf = workflow
         def predict(nonce=None):
@@ -329,7 +330,7 @@ for rank_idx, (cfg, model, row) in enumerate(trained):
         return predict
 
     fn = _make_predict(model)
-    pkl = f"predict_42_czar_rank{rank_idx+1}.pkl"
+    pkl = f"predict_38_czar_rank{rank_idx+1}.pkl"
     try:
         price = fn()
         print(f"   Model {rank_idx+1} (#{cfg}): ${price:,.2f} → {pkl}")
