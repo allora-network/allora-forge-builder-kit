@@ -81,6 +81,7 @@ class AlloraMLWorkflow:
         number_of_input_bars,
         target_bars,
         interval="5m",
+        target_type="log_return",
         data_source="binance",  # Simple string API
         data_manager=None,  # Advanced: explicit instance
         **data_manager_kwargs  # Pass through to data manager (market, api_key, etc.)
@@ -93,6 +94,11 @@ class AlloraMLWorkflow:
             number_of_input_bars: Number of resampled bars to use as features (at the specified interval)
             target_bars: Number of bars ahead to predict (at the specified interval)
             interval: Bar interval (e.g. "5m", "1h")
+            target_type: Type of prediction target. One of:
+                - "log_return" (default): log(close[t+H] / close[t])
+                - "volatility": std of 1-minute log returns over the target horizon.
+                  For volatility targets, interval should be "1m" and target_bars
+                  defines the horizon window in minutes.
             data_source: Data source string ("binance" or "allora") - simple API
             data_manager: Optional pre-configured data manager instance - advanced API
             **data_manager_kwargs: Arguments passed to DataManager factory:
@@ -120,13 +126,31 @@ class AlloraMLWorkflow:
                 api_key="your-key"  # Allora-specific param
             )
             
+            # Volatility target - 15-minute BTC/USD volatility (Topic 79)
+            workflow = AlloraMLWorkflow(
+                tickers=["btcusd"],
+                number_of_input_bars=15,
+                target_bars=15,  # 15-minute horizon
+                interval="1m",
+                target_type="volatility",
+                data_source="allora",
+                api_key="your-key"
+            )
+            
             # Advanced API - explicit instance
             dm = DataManager(source="binance", interval="5m", market="futures")
             workflow = AlloraMLWorkflow(..., data_manager=dm)
         """
+        _valid_target_types = ("log_return", "volatility")
+        if target_type not in _valid_target_types:
+            raise ValueError(
+                f"target_type must be one of {_valid_target_types}, got {target_type!r}"
+            )
+
         self.tickers = tickers
         self.number_of_input_bars = number_of_input_bars
         self.target_bars = target_bars
+        self.target_type = target_type
         self.test_targets = None
         self.interval = interval
 
@@ -328,7 +352,12 @@ class AlloraMLWorkflow:
                 continue
 
             df = self.stand_alone_features_from_1min_bars(df, live_mode=False)
-            df = self.compute_target_polars(df, self.target_bars)
+
+            if self.target_type == "volatility":
+                df = self.compute_volatility_target_polars(df, self.target_bars)
+            else:
+                df = self.compute_target_polars(df, self.target_bars)
+
             df = df.with_columns([pl.lit(t).alias("ticker")])
             datasets.append(df)
 
@@ -439,6 +468,51 @@ class AlloraMLWorkflow:
         df = df.with_columns([
             (pl.col("future_close").log() - pl.col("close").log()).alias("target")
         ])
+        return df
+
+    def compute_volatility_target_polars(
+        self, df: pl.DataFrame, target_bars: int
+    ) -> pl.DataFrame:
+        """
+        Compute realised volatility target: the standard deviation of consecutive
+        1-minute log returns over the next *target_bars* bars.
+
+        Definition:
+            For each row at time t, let r_i = log(close[t+i] / close[t+i-1])
+            for i in 1..target_bars.  target[t] = std(r_1, ..., r_{target_bars}).
+
+        This matches the ground-truth definition used by the Allora volatility
+        reputer (allora-reputer-volatility-prediction).
+
+        Args:
+            df: Polars DataFrame with OHLCV data sorted by time.  Must be at
+                1-minute resolution for the result to be meaningful.
+            target_bars: Number of forward bars defining the volatility window.
+
+        Returns:
+            Polars DataFrame with 'target' column added.  Rows where the full
+            forward window is unavailable will have null targets.
+        """
+        # Compute per-bar log returns: log(close[t] / close[t-1])
+        log_returns = (pl.col("close").log() - pl.col("close").shift(1).log()).alias(
+            "_log_return"
+        )
+        df = df.with_columns([log_returns])
+
+        # Rolling std over the *next* target_bars log returns.
+        # Strategy: shift the log_return column backwards by 1 so that row t
+        # sees returns from t+1..t+target_bars, then apply a forward-looking
+        # rolling window.  Polars rolling_std is backward-looking, so we reverse
+        # the column, apply rolling_std, then reverse back.
+        lr = df["_log_return"].shift(-1)  # align: row t now holds return at t+1
+
+        # Reverse, apply backward rolling std, reverse back → forward rolling std
+        lr_reversed = lr.reverse()
+        vol_reversed = lr_reversed.rolling_std(window_size=target_bars, min_samples=target_bars)
+        vol = vol_reversed.reverse()
+
+        df = df.with_columns([vol.alias("target")])
+        df = df.drop("_log_return")
         return df
     
     def extract_features_polars(
