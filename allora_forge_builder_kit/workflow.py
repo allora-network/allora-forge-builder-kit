@@ -475,14 +475,20 @@ class AlloraMLWorkflow:
     ) -> pl.DataFrame:
         """
         Compute realised volatility target: the standard deviation of consecutive
-        1-minute log returns over the next *target_bars* bars.
+        1-minute log returns over the next *target_bars* bars, scaled to the
+        full-horizon volatility using the square-root-of-time rule.
 
         Definition:
             For each row at time t, let r_i = log(close[t+i] / close[t+i-1])
-            for i in 1..target_bars.  target[t] = std(r_1, ..., r_{target_bars}).
+            for i in 1..target_bars.
+            target[t] = std(r_1, ..., r_{target_bars}) × √target_bars
 
-        This matches the ground-truth definition used by the Allora volatility
-        reputer (allora-reputer-volatility-prediction).
+        The √target_bars scaling converts the per-bar (1-minute) return std
+        into the volatility of the full horizon return.  If 1-minute returns
+        have std σ₁, the std of the T-minute return is σ₁·√T (assuming
+        uncorrelated returns).  This matches the ground-truth definition used
+        by the Allora volatility reputer (domain/volatility.py), which applies
+        ``standardization_ratio = √(timeframe / frequency)``.
 
         Args:
             df: Polars DataFrame with OHLCV data sorted by time.  Must be at
@@ -493,6 +499,8 @@ class AlloraMLWorkflow:
             Polars DataFrame with 'target' column added.  Rows where the full
             forward window is unavailable will have null targets.
         """
+        import math
+
         # Compute per-bar log returns: log(close[t] / close[t-1])
         log_returns = (pl.col("close").log() - pl.col("close").shift(1).log()).alias(
             "_log_return"
@@ -511,7 +519,10 @@ class AlloraMLWorkflow:
         vol_reversed = lr_reversed.rolling_std(window_size=target_bars, min_samples=target_bars)
         vol = vol_reversed.reverse()
 
-        df = df.with_columns([vol.alias("target")])
+        # Scale by √target_bars to convert per-bar std to horizon volatility.
+        # This matches the reputer's standardization_ratio = √(timeframe/frequency).
+        scaling = math.sqrt(target_bars)
+        df = df.with_columns([(vol * scaling).alias("target")])
         df = df.drop("_log_return")
         return df
     

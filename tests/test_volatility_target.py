@@ -53,10 +53,12 @@ class TestVolatilityTargetComputation:
 
         result = wf.compute_volatility_target_polars(df, target_bars=target_bars)
 
+        import math
+        scaling = math.sqrt(target_bars)
         for row_idx in range(len(prices) - target_bars):
             window_prices = prices[row_idx : row_idx + target_bars + 1]
             log_rets = np.diff(np.log(window_prices))
-            expected = np.std(log_rets, ddof=1)
+            expected = np.std(log_rets, ddof=1) * scaling
             computed = result["target"][row_idx]
             assert np.isclose(expected, computed, rtol=1e-6), (
                 f"Row {row_idx}: expected={expected:.10f}, got={computed:.10f}"
@@ -85,6 +87,7 @@ class TestVolatilityTargetComputation:
         """Verify correctness with different target_bars values."""
         df, prices = synthetic_ohlcv
 
+        import math
         for target_bars in [3, 5, 10, 20]:
             wf = _make_workflow(target_bars)
             result = wf.compute_volatility_target_polars(df, target_bars=target_bars)
@@ -93,7 +96,7 @@ class TestVolatilityTargetComputation:
             if len(prices) > target_bars:
                 window_prices = prices[0 : target_bars + 1]
                 log_rets = np.diff(np.log(window_prices))
-                expected = np.std(log_rets, ddof=1)
+                expected = np.std(log_rets, ddof=1) * math.sqrt(target_bars)
                 computed = result["target"][0]
                 assert np.isclose(expected, computed, rtol=1e-6), (
                     f"target_bars={target_bars}: expected={expected}, got={computed}"
