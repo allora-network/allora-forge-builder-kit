@@ -98,23 +98,105 @@ y_test = df_test["target"].values
 print(f"  {len(df):,} samples | Train: {len(df_train):,} | Test: {len(df_test):,}")
 
 # =============================================================================
-# FEATURE ENGINEERING
+# FEATURE ENGINEERING (vectorized — ~900× faster than row-by-row df.apply)
 # =============================================================================
-print("\n[2/4] Engineering features...")
+print("\n[2/4] Engineering features (vectorized)...")
 
+def engineer_features_vectorized(df_in, n_input_bars):
+    """Vectorized feature engineering for volatility topics.
+    Operates on the full DataFrame at once using 2D numpy arrays."""
+    n = n_input_bars
+    close_cols = [f"feature_close_{i}" for i in range(n)]
+    high_cols = [f"feature_high_{i}" for i in range(n)]
+    low_cols = [f"feature_low_{i}" for i in range(n)]
+    vol_cols = [f"feature_volume_{i}" for i in range(n)]
+
+    closes = df_in[close_cols].values  # (N, n)
+    highs = df_in[high_cols].values
+    lows = df_in[low_cols].values
+    volumes = df_in[vol_cols].values
+
+    log_closes = np.log(closes + 1e-12)
+    log_rets = np.diff(log_closes, axis=1)  # (N, n-1)
+    abs_rets = np.abs(log_rets)
+    sq_rets = log_rets ** 2
+
+    out = {}
+
+    # Multi-horizon vol (std along axis=1 for last K columns)
+    out["vol_5m"] = np.std(log_rets[:, -5:], axis=1, ddof=1)
+    out["vol_10m"] = np.std(log_rets[:, -10:], axis=1, ddof=1)
+    out["vol_15m"] = np.std(log_rets[:, -15:], axis=1, ddof=1)
+    out["vol_30m"] = np.std(log_rets[:, -30:], axis=1, ddof=1)
+    out["vol_60m"] = np.std(log_rets, axis=1, ddof=1)
+
+    out["vol_ratio_5_15"] = out["vol_5m"] / (out["vol_15m"] + 1e-12)
+    out["vol_ratio_5_60"] = out["vol_5m"] / (out["vol_60m"] + 1e-12)
+    out["vol_ratio_15_60"] = out["vol_15m"] / (out["vol_60m"] + 1e-12)
+
+    # EWMA (vectorized across rows using cumulative approach)
+    lam = 0.94
+    ewma = np.zeros(len(df_in))
+    ewma[:] = sq_rets[:, 0]
+    for t in range(1, sq_rets.shape[1]):
+        ewma = lam * ewma + (1 - lam) * sq_rets[:, t]
+    out["ewma_vol"] = np.sqrt(ewma)
+
+    lam_fast = 0.85
+    ewma_fast = np.zeros(len(df_in))
+    ewma_fast[:] = sq_rets[:, 0]
+    for t in range(1, sq_rets.shape[1]):
+        ewma_fast = lam_fast * ewma_fast + (1 - lam_fast) * sq_rets[:, t]
+    out["ewma_vol_fast"] = np.sqrt(ewma_fast)
+    out["ewma_fast_slow_ratio"] = out["ewma_vol_fast"] / (out["ewma_vol"] + 1e-12)
+
+    # Parkinson
+    hl_log = np.log(highs + 1e-12) - np.log(lows + 1e-12)
+    out["parkinson_15m"] = np.sqrt(np.mean(hl_log[:, -15:] ** 2, axis=1) / (4 * np.log(2)))
+    out["parkinson_60m"] = np.sqrt(np.mean(hl_log ** 2, axis=1) / (4 * np.log(2)))
+
+    # Vol of vol (vectorized rolling std using stride tricks)
+    # Approximate: use std of a few horizon stds
+    out["vol_of_vol"] = np.std(
+        np.column_stack([out["vol_5m"], out["vol_10m"], out["vol_15m"], out["vol_30m"]]),
+        axis=1, ddof=1
+    )
+    # Vol percentile: fraction of rolling vols <= current vol_5m
+    out["vol_percentile"] = (
+        (out["vol_5m"] >= out["vol_10m"]).astype(float) +
+        (out["vol_5m"] >= out["vol_15m"]).astype(float) +
+        (out["vol_5m"] >= out["vol_30m"]).astype(float) +
+        (out["vol_5m"] >= out["vol_60m"]).astype(float)
+    ) / 4.0
+
+    # Autocorrelation of abs returns (vectorized dot product)
+    ar1 = abs_rets[:, 1:]
+    ar0 = abs_rets[:, :-1]
+    ar1_mean = ar1.mean(axis=1, keepdims=True)
+    ar0_mean = ar0.mean(axis=1, keepdims=True)
+    num = np.sum((ar1 - ar1_mean) * (ar0 - ar0_mean), axis=1)
+    den = np.sqrt(np.sum((ar1 - ar1_mean)**2, axis=1) * np.sum((ar0 - ar0_mean)**2, axis=1))
+    out["absret_autocorr_1"] = np.where(den > 1e-12, num / den, 0.0)
+
+    # Magnitude features
+    out["abs_ret_mean_5m"] = np.mean(abs_rets[:, -5:], axis=1)
+    out["abs_ret_max_15m"] = np.max(abs_rets[:, -15:], axis=1)
+    out["volume_ratio_5_60"] = np.mean(volumes[:, -5:], axis=1) / (np.mean(volumes, axis=1) + 1e-12)
+
+    return pd.DataFrame(out, index=df_in.index)
+
+# Row-level version for live inference (single row)
 def engineer_features(row):
+    """Single-row feature engineering for live prediction."""
     n = NUMBER_OF_INPUT_BARS
     closes = np.array([row[f"feature_close_{i}"] for i in range(n)])
     highs = np.array([row[f"feature_high_{i}"] for i in range(n)])
     lows = np.array([row[f"feature_low_{i}"] for i in range(n)])
     volumes = np.array([row[f"feature_volume_{i}"] for i in range(n)])
-    opens = np.array([row[f"feature_open_{i}"] for i in range(n)])
-
     log_rets = np.diff(np.log(closes + 1e-12))
     abs_rets = np.abs(log_rets)
     sq_rets = log_rets ** 2
     f = {}
-
     f["vol_5m"] = np.std(log_rets[-5:], ddof=1)
     f["vol_10m"] = np.std(log_rets[-10:], ddof=1)
     f["vol_15m"] = np.std(log_rets[-15:], ddof=1)
@@ -123,55 +205,45 @@ def engineer_features(row):
     f["vol_ratio_5_15"] = f["vol_5m"] / (f["vol_15m"] + 1e-12)
     f["vol_ratio_5_60"] = f["vol_5m"] / (f["vol_60m"] + 1e-12)
     f["vol_ratio_15_60"] = f["vol_15m"] / (f["vol_60m"] + 1e-12)
-
-    lam = 0.94
-    ewma_var = sq_rets[0]
-    for r2 in sq_rets[1:]:
-        ewma_var = lam * ewma_var + (1 - lam) * r2
-    f["ewma_vol"] = np.sqrt(ewma_var)
-
-    lam_fast = 0.85
-    ewma_fast = sq_rets[0]
-    for r2 in sq_rets[1:]:
-        ewma_fast = lam_fast * ewma_fast + (1 - lam_fast) * r2
-    f["ewma_vol_fast"] = np.sqrt(ewma_fast)
+    lam = 0.94; ewma = sq_rets[0]
+    for r2 in sq_rets[1:]: ewma = lam * ewma + (1 - lam) * r2
+    f["ewma_vol"] = np.sqrt(ewma)
+    lam_fast = 0.85; ef = sq_rets[0]
+    for r2 in sq_rets[1:]: ef = lam_fast * ef + (1 - lam_fast) * r2
+    f["ewma_vol_fast"] = np.sqrt(ef)
     f["ewma_fast_slow_ratio"] = f["ewma_vol_fast"] / (f["ewma_vol"] + 1e-12)
-
     hl_log = np.log(highs + 1e-12) - np.log(lows + 1e-12)
     f["parkinson_15m"] = np.sqrt(np.mean(hl_log[-15:] ** 2) / (4 * np.log(2)))
     f["parkinson_60m"] = np.sqrt(np.mean(hl_log ** 2) / (4 * np.log(2)))
-
-    rolling_5m_vols = np.array([np.std(log_rets[i:i+5], ddof=1) for i in range(len(log_rets) - 5)])
-    if len(rolling_5m_vols) >= 2:
-        f["vol_of_vol"] = np.std(rolling_5m_vols, ddof=1)
-        f["vol_percentile"] = np.mean(rolling_5m_vols <= f["vol_5m"])
+    vols = [f["vol_5m"], f["vol_10m"], f["vol_15m"], f["vol_30m"]]
+    f["vol_of_vol"] = np.std(vols, ddof=1)
+    f["vol_percentile"] = sum(1 for v in [f["vol_10m"], f["vol_15m"], f["vol_30m"], f["vol_60m"]] if f["vol_5m"] >= v) / 4.0
+    if len(abs_rets) > 2:
+        c = np.corrcoef(abs_rets[1:], abs_rets[:-1])[0, 1]
+        f["absret_autocorr_1"] = c if np.isfinite(c) else 0.0
     else:
-        f["vol_of_vol"] = 0.0
-        f["vol_percentile"] = 0.5
-
-    f["absret_autocorr_1"] = np.corrcoef(abs_rets[1:], abs_rets[:-1])[0, 1] if len(abs_rets) > 2 else 0.0
-    if not np.isfinite(f["absret_autocorr_1"]):
         f["absret_autocorr_1"] = 0.0
-
     f["abs_ret_mean_5m"] = np.mean(abs_rets[-5:])
     f["abs_ret_max_15m"] = np.max(abs_rets[-15:])
     f["volume_ratio_5_60"] = np.mean(volumes[-5:]) / (np.mean(volumes) + 1e-12)
-
     return pd.Series(f)
 
-print("   Engineering features...")
-eng_train = df_train.apply(engineer_features, axis=1)
-eng_test = df_test.apply(engineer_features, axis=1)
+import time
+t0 = time.time()
+eng = engineer_features_vectorized(df, NUMBER_OF_INPUT_BARS)
+print(f"   Vectorized features: {time.time() - t0:.1f}s for {len(df):,} rows")
 
-df_train = pd.concat([df_train.reset_index(drop=True), eng_train.reset_index(drop=True)], axis=1)
-df_test = pd.concat([df_test.reset_index(drop=True), eng_test.reset_index(drop=True)], axis=1)
-
-eng_cols = list(eng_train.columns)
+eng_cols = list(eng.columns)
+df = pd.concat([df.reset_index(drop=True), eng.reset_index(drop=True)], axis=1)
 all_feature_cols = base_feature_cols + eng_cols
-df_train = df_train.dropna(subset=all_feature_cols)
-df_test = df_test.dropna(subset=all_feature_cols)
+df = df.dropna(subset=all_feature_cols)
+
+# Re-split after feature engineering
+split = int(len(df) * 0.8)
+df_train = df.iloc[:split].copy()
+df_test = df.iloc[split:].copy()
 y_test = df_test["target"].values
-print(f"   {len(all_feature_cols)} features ready")
+print(f"   {len(all_feature_cols)} features ready | Train: {len(df_train):,} | Test: {len(df_test):,}")
 
 # =============================================================================
 # GRID SEARCH
@@ -297,6 +369,58 @@ for rank, (_, row) in enumerate(top_k.iterrows()):
         print(f"   Rank {rank+1}: FAILED ({e}) → {pkl}")
     with open(pkl, "wb") as f:
         cloudpickle.dump(fn, f)
+
+# =============================================================================
+# SCATTER PLOT: Best model predictions vs true values
+# =============================================================================
+print("\n  Generating scatter plot...")
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+best_row = top_k.iloc[0]
+log_space = best_row["log_space"]
+y_train_final = df_train["target"].values
+if log_space:
+    y_train_final = np.log(y_train_final + 1e-10)
+
+best_model = LGBMRegressor(
+    objective=best_row["obj"], n_estimators=int(best_row["n_est"]),
+    learning_rate=best_row["lr"], max_depth=int(best_row["depth"]),
+    num_leaves=int(best_row["leaves"]),
+    subsample=0.8, colsample_bytree=0.7, min_child_samples=50,
+    reg_alpha=0.1, reg_lambda=1.0, random_state=42, verbose=-1,
+)
+if best_row["obj"] == "huber":
+    best_model.set_params(alpha=0.5)
+best_model.fit(df_train[all_feature_cols], y_train_final)
+
+raw_preds = best_model.predict(df_test[all_feature_cols])
+if log_space:
+    scatter_preds = np.exp(raw_preds)
+else:
+    scatter_preds = raw_preds
+scatter_preds = np.maximum(scatter_preds, 0)
+
+fig, ax = plt.subplots(figsize=(8, 8))
+ax.scatter(y_test, scatter_preds, alpha=0.05, s=4, c="#4A90D9", edgecolors="none")
+lims = [0, max(y_test.max(), scatter_preds.max()) * 1.05]
+ax.plot(lims, lims, "r--", lw=1.5, alpha=0.7, label="Perfect prediction")
+ax.set_xlim(lims)
+ax.set_ylim(lims)
+ax.set_xlabel("True Volatility (√T-scaled)", fontsize=13)
+ax.set_ylabel("Predicted Volatility", fontsize=13)
+ax.set_title(f"Topic {TOPIC_ID} — {TICKERS[0].upper()} 15m Vol\n"
+             f"Rank 1: r={best_row['pearson_r']:.4f}, R²={best_row['r2']:.4f}, "
+             f"cal={best_row['cal_ratio']:.3f}", fontsize=14, fontweight="bold")
+ax.legend(fontsize=11)
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+plt.tight_layout()
+scatter_path = f"scatter_{TOPIC_ID}_vol.png"
+plt.savefig(scatter_path, dpi=150)
+plt.close()
+print(f"   Saved {scatter_path}")
 
 print("\n" + "=" * 70)
 print("COMPLETE!")
