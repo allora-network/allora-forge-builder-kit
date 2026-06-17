@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from .worker_manager import WorkerManager
 from .worker_monitor import WorkerMonitor, AlloraSDKEventFetcher
+from .wallet_link import DEFAULT_FORGE_URL, run_link
 
 
 def _make_manager(
@@ -75,12 +76,26 @@ def main() -> None:
     sub.add_parser("start-all", help="Start all enabled workers")
     sub.add_parser("stop-all", help="Stop running workers")
 
+    p_link = sub.add_parser("link", help="Link local worker wallets to your Allora Forge account")
+    p_link.add_argument("--forge-url", default=DEFAULT_FORGE_URL, help="Forge base URL")
+    p_link.add_argument("--address", action="append", dest="addresses",
+                        help="Limit to specific allo1... address(es); repeatable. Default: all local keys.")
+    p_link.add_argument("--no-browser", action="store_true", help="Do not auto-open a browser")
+
     args = parser.parse_args()
     mgr_kwargs = dict(db_path=args.db_path, secrets_path=args.secrets_path, network=args.network)
 
     if args.cmd == "dashboard":
         cmd_dashboard(with_monitor=not args.no_monitor, running_only=not args.all, **mgr_kwargs)
         return
+
+    if args.cmd == "link":
+        raise SystemExit(run_link(
+            forge_url=args.forge_url,
+            secrets_path=args.secrets_path,
+            addresses=args.addresses,
+            open_browser=not args.no_browser,
+        ))
 
     wm, _ = _make_manager(with_monitor=False, **mgr_kwargs)
     if args.cmd == "reconcile":
