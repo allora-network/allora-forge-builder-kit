@@ -195,6 +195,7 @@ Playground topics (testnet only) are the recommended starting point — no white
 | **82** | SOL/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, SOL pair |
 | **83** | BTC/USD - 8h Log-Return Prediction | Log-return | 8h BTC/USD log return — testnet equivalent of mainnet topic 1 |
 | **84** | ETH/USD - 8h Log-Return Prediction | Log-return | 8h ETH/USD log return — testnet equivalent of mainnet topic 2 |
+| **85** | ETH/USD - 4h Volatility Prediction | Volatility | Std of 1-min log returns over 4-hour horizon |
 
 Mainnet topics and their testnet equivalents:
 
