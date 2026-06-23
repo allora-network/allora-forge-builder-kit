@@ -42,3 +42,12 @@ Homepage = "https://github.com/allora-network/allora-forge-builder-kit"
 
 [tool.setuptools.packages.find]
 include = ["allora_forge_builder_kit"]
+
+# --- LOCAL-DEV PIN for ENGN-8646 (managed-wallet auto-provision) testing ONLY ---
+# Points allora-sdk at the local branch worktree, which carries the unreleased
+# provision / topic-bound auto-provision changes (plus its generated protobuf code).
+# uv picks this up on `uv sync` / `uv run`. REMOVE this block and bump the
+# `allora-sdk` version in [project].dependencies once the SDK release with ENGN-8646
+# ships; the relative path assumes the allora-sdk-py worktree is a sibling directory.
+[tool.uv.sources]
+allora-sdk = { path = "../allora-sdk-py", editable = true }

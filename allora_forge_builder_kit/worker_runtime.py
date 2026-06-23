@@ -46,12 +46,15 @@ async def _run(
     no_faucet: bool = False,
     debug: bool = False,
     reject_zero: bool = False,
+    custody: str = "local",
 ) -> None:
     with open(artifact_path, "rb") as f:
         raw_fn = cloudpickle.load(f)
 
-    def run_fn(nonce: int):
-        value = raw_fn(nonce)
+    def run_fn(ctx):
+        # The branch SDK invokes the inferer fn with a RunContext; the pickled model fn
+        # still takes the integer nonce, so adapt via ctx.nonce.
+        value = raw_fn(ctx.nonce)
         try:
             v = float(value)
         except Exception as e:
@@ -62,9 +65,23 @@ async def _run(
             raise RuntimeError("Invalid inference output: zero value rejected for price topic")
         return v
 
-    wallet_cfg = AlloraWalletConfig(mnemonic_file=mnemonic_file) if mnemonic_file else None
+    if custody == "managed":
+        # Privy-managed custody: from_env() reads FORGE_API_KEY (+ optional FEE_GRANTER) and,
+        # with no FORGE_SIGNING_WALLET_ID, defers wallet provisioning to the worker — which
+        # get-or-creates a managed wallet bound to this topic at startup (ENGN-8646). No local
+        # key file is created.
+        wallet_cfg = AlloraWalletConfig.from_env()
+    else:
+        wallet_cfg = AlloraWalletConfig(mnemonic_file=mnemonic_file) if mnemonic_file else None
     net_cfg = _build_network(network, no_faucet)
-    worker = AlloraWorker(run=run_fn, topic_id=topic_id, api_key=api_key, wallet=wallet_cfg, network=net_cfg, debug=debug)
+    worker = AlloraWorker.inferer(
+        run=run_fn,
+        wallet=wallet_cfg,
+        network=net_cfg,
+        api_key=api_key,
+        topic_id=topic_id,
+        debug=debug,
+    )
     async for _ in worker.run():
         pass
 
@@ -77,6 +94,13 @@ def main() -> None:
     parser.add_argument("--mnemonic-file", default=None, help="Path to wallet key file (managed by WorkerManager)")
     parser.add_argument("--network", default="testnet", choices=["testnet", "mainnet"])
     parser.add_argument("--no-faucet", action="store_true", help="Skip SDK faucet checks (use when already funded)")
+    parser.add_argument(
+        "--custody",
+        choices=["local", "managed"],
+        default="local",
+        help="Wallet custody: 'local' (self-custodial key file) or 'managed' (Privy-managed; "
+        "provisions a wallet bound to the topic via FORGE_API_KEY, no local key)",
+    )
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--reject-zero", action="store_true")
     args = parser.parse_args()
@@ -91,6 +115,7 @@ def main() -> None:
         no_faucet=args.no_faucet,
         debug=args.debug,
         reject_zero=args.reject_zero,
+        custody=args.custody,
     ))
 
 
