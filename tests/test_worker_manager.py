@@ -1,9 +1,42 @@
 from pathlib import Path
+from types import SimpleNamespace
 import sqlite3
 
 import pytest
 
 from allora_forge_builder_kit.worker_manager import WorkerManager, WorkerSpec
+
+
+class _FakeForgeClient:
+    """Stand-in for allora_sdk's ForgeBackendClient. Idempotent get-or-create by topic:
+    the same topic always yields the same address/id, mirroring the backend's one-wallet-
+    per-(user, topic) contract."""
+
+    def __init__(self):
+        self.provisioned: list[tuple[int, str | None]] = []
+        self.cleared: list[str] = []
+
+    def provision_wallet(self, topic_id: int, label: str | None = None):
+        self.provisioned.append((topic_id, label))
+        return SimpleNamespace(
+            id=f"wallet-{topic_id}",
+            address=f"allo1managed{topic_id:04d}",
+            pubkey="ab" * 33,
+        )
+
+    def clear_association(self, wallet_id: str) -> None:
+        self.cleared.append(wallet_id)
+
+
+def _managed_manager(tmp_path: Path, client, **kwargs) -> WorkerManager:
+    return WorkerManager(
+        db_path=tmp_path / "state.db",
+        secrets_path=tmp_path / "secrets.json",
+        identity_creator=lambda: ("unused", "unused", "unused"),
+        forge_client=client,
+        reconcile_on_start=False,
+        **kwargs,
+    )
 
 
 def _new_manager(tmp_path: Path) -> WorkerManager:
@@ -193,3 +226,125 @@ def test_status_all_with_logs_returns_tail_and_artifact_path(tmp_path: Path):
 
     assert row["artifact_path"].endswith(".pkl")
     assert row["log_tail"] == ["l3", "l4"]
+
+
+# ----------------------------
+# Managed custody (ENGN-8646)
+# ----------------------------
+def test_deploy_managed_provisions_and_registers(tmp_path: Path):
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+
+    result = manager.deploy_worker(topic_id=42, artifact_path=artifact, custody="managed")
+
+    assert result.action == "created"
+    assert result.address_assigned == "allo1managed0042"
+    # Provisioned exactly once, get-or-create by topic with a display label.
+    assert client.provisioned == [(42, "worker-topic-42")]
+
+    status = manager.status_worker(topic_id=42, address="allo1managed0042")
+    assert status["custody"] == "managed"
+    assert status["signing_wallet_id"] == "wallet-42"
+    assert status["artifact_path"].endswith(".pkl")
+
+
+def test_deploy_managed_redeploy_reuses_same_wallet(tmp_path: Path):
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    v1 = tmp_path / "v1.pkl"
+    v2 = tmp_path / "v2.pkl"
+    v1.write_text("v1")
+    v2.write_text("v2")
+
+    manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed")
+    result = manager.deploy_worker(topic_id=8, artifact_path=v2, custody="managed", replace=True)
+
+    assert result.action == "replaced"
+    assert result.address_assigned == "allo1managed0008"
+    # One worker per topic — no second worker row was created.
+    assert len([w for w in manager.status_all() if w["topic_id"] == 8]) == 1
+
+
+def test_build_run_command_managed_injects_forge_env_and_no_keyfile(tmp_path: Path):
+    client = _FakeForgeClient()
+    manager = _managed_manager(
+        tmp_path,
+        client,
+        forge_api_key="forge_sk_test",
+        forge_backend_url="http://localhost:8080",
+    )
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+    manager.deploy_worker(topic_id=7, artifact_path=artifact, custody="managed")
+
+    status = manager.status_worker(topic_id=7, address="allo1managed0007")
+    cmd, env = manager._build_run_command(7, "allo1managed0007", status)
+
+    assert "--custody" in cmd
+    assert cmd[cmd.index("--custody") + 1] == "managed"
+    assert "--mnemonic-file" not in cmd
+    assert env is not None
+    assert env["FORGE_API_KEY"] == "forge_sk_test"
+    assert env["FORGE_BACKEND_URL"] == "http://localhost:8080"
+
+
+def test_remove_managed_worker_clears_association(tmp_path: Path):
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+    manager.deploy_worker(topic_id=9, artifact_path=artifact, custody="managed")
+
+    manager.remove_worker(topic_id=9, address="allo1managed0009")
+
+    assert client.cleared == ["wallet-9"]
+    with pytest.raises(KeyError):
+        manager.status_worker(topic_id=9, address="allo1managed0009")
+
+
+def test_remove_managed_worker_tolerates_clear_failure(tmp_path: Path):
+    class _FailingClient(_FakeForgeClient):
+        def clear_association(self, wallet_id: str) -> None:
+            raise RuntimeError("backend down")
+
+    client = _FailingClient()
+    manager = _managed_manager(tmp_path, client)
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+    manager.deploy_worker(topic_id=5, artifact_path=artifact, custody="managed")
+
+    # Decommission cleanup must never raise — the worker is still removed locally.
+    manager.remove_worker(topic_id=5, address="allo1managed0005")
+    with pytest.raises(KeyError):
+        manager.status_worker(topic_id=5, address="allo1managed0005")
+
+
+def test_remove_local_worker_does_not_clear(tmp_path: Path):
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    ident = manager.ensure_identity(alias="alpha")
+    artifact = tmp_path / "l.pkl"
+    artifact.write_text("l")
+    manager.deploy_worker(topic_id=3, artifact_path=artifact, address=ident.address)
+
+    manager.remove_worker(topic_id=3, address=ident.address)
+
+    assert client.cleared == []
+
+
+def test_deploy_managed_requires_forge_credentials(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("FORGE_API_KEY", raising=False)
+    monkeypatch.delenv("FORGE_BACKEND_URL", raising=False)
+    manager = WorkerManager(
+        db_path=tmp_path / "state.db",
+        secrets_path=tmp_path / "secrets.json",
+        identity_creator=lambda: ("unused", "unused", "unused"),
+        reconcile_on_start=False,
+    )
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+
+    with pytest.raises(ValueError, match="managed custody requires"):
+        manager.deploy_worker(topic_id=1, artifact_path=artifact, custody="managed")

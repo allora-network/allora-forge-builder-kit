@@ -36,6 +36,10 @@ class WorkerSpec:
     identity_ref: str
     enabled: bool = True
     reject_zero: bool = False
+    # custody: "local" (self-custodial key file on disk) or "managed" (Privy-managed
+    # wallet provisioned by the Forge backend; signing_wallet_id is the backend wallet id).
+    custody: str = "local"
+    signing_wallet_id: Optional[str] = None
 
 
 @dataclass
@@ -67,6 +71,9 @@ class WorkerManager:
         network: str = "testnet",
         no_faucet: bool = False,
         reconcile_on_start: bool = True,
+        forge_api_key: Optional[str] = None,
+        forge_backend_url: Optional[str] = None,
+        forge_client: Optional[Any] = None,
     ):
         """Initialise the worker manager.
 
@@ -92,6 +99,13 @@ class WorkerManager:
                 :meth:`reconcile` during construction, which spawns
                 subprocesses for every enabled worker.  Set to *False* for
                 unit tests or when deferred startup is desired.
+            forge_api_key: Forge API key (``forge_sk_…``) used to provision /
+                release managed (Privy) wallets. Defaults to ``$FORGE_API_KEY``.
+            forge_backend_url: Forge backend base URL for managed custody.
+                Defaults to ``$FORGE_BACKEND_URL``.
+            forge_client: Pre-built Forge backend client (must expose
+                ``provision_wallet`` and ``clear_association``). Injected in tests;
+                in production it is built lazily from the api key + url.
         """
         self.db_path = Path(db_path)
         self.secrets_path = Path(secrets_path)
@@ -107,11 +121,36 @@ class WorkerManager:
         self.key_dir.mkdir(parents=True, exist_ok=True)
         self._network = network
         self._no_faucet = no_faucet
+        self._forge_api_key = forge_api_key or os.environ.get("FORGE_API_KEY")
+        self._forge_backend_url = forge_backend_url or os.environ.get("FORGE_BACKEND_URL")
+        self._forge_client_obj = forge_client
         self._lock = threading.RLock()
         self._runners: dict[tuple[int, str], dict] = {}
         self._init_db()
         if reconcile_on_start:
             self.reconcile()
+
+    # ----------------------------
+    # Managed custody (Privy via Forge backend)
+    # ----------------------------
+    def _forge_client(self):
+        """Return the Forge backend client for managed custody, building it lazily.
+
+        Raises ``ValueError`` if the api key / backend url are missing, so a misconfigured
+        managed deploy fails loudly instead of silently falling back to local custody.
+        """
+        if self._forge_client_obj is not None:
+            return self._forge_client_obj
+        if not self._forge_api_key or not self._forge_backend_url:
+            raise ValueError(
+                "managed custody requires a Forge API key and backend URL; set "
+                "$FORGE_API_KEY and $FORGE_BACKEND_URL or pass forge_api_key/forge_backend_url"
+            )
+        # Imported lazily: local-custody installs need not import the SDK signing client.
+        from allora_sdk.rpc_client.remote_signer import ForgeBackendClient
+
+        self._forge_client_obj = ForgeBackendClient(self._forge_backend_url, self._forge_api_key)
+        return self._forge_client_obj
 
     # ----------------------------
     # Identity handling
@@ -152,8 +191,8 @@ class WorkerManager:
             try:
                 conn.execute(
                     """
-                    INSERT INTO workers(topic_id, topic_desc, address, artifact_path, identity_ref, enabled, status, reject_zero, deployed_at, updated_at)
-                    VALUES(?, ?, ?, ?, ?, ?, 'stopped', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    INSERT INTO workers(topic_id, topic_desc, address, artifact_path, identity_ref, enabled, status, reject_zero, custody, signing_wallet_id, deployed_at, updated_at)
+                    VALUES(?, ?, ?, ?, ?, ?, 'stopped', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     """,
                     (
                         spec.topic_id,
@@ -163,6 +202,8 @@ class WorkerManager:
                         spec.identity_ref,
                         1 if spec.enabled else 0,
                         1 if spec.reject_zero else 0,
+                        spec.custody,
+                        spec.signing_wallet_id,
                     ),
                 )
                 conn.commit()
@@ -175,18 +216,34 @@ class WorkerManager:
     def remove_worker(self, topic_id: int, address: str, force: bool = False) -> None:
         if force:
             self.stop_worker(topic_id, address)
+        custody, signing_wallet_id = self._get_custody(topic_id, address)
         self._archive_active_deployment(topic_id, address)
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("DELETE FROM workers WHERE topic_id=? AND address=?", (topic_id, address))
             conn.commit()
         self._monitor_disable(topic_id, address)
+        # Managed custody: release the (user, topic) binding on the backend so the topic slot is
+        # freed. Best-effort — the worker is already gone locally, and the backend get-or-create is
+        # idempotent, so a stale binding is simply reused on the next deploy rather than leaking.
+        if custody == "managed" and signing_wallet_id:
+            try:
+                self._forge_client().clear_association(signing_wallet_id)
+                logger.info("released managed wallet %s topic binding (topic %s)", signing_wallet_id, topic_id)
+            except Exception as e:  # noqa: BLE001 - decommission cleanup must never raise
+                logger.warning(
+                    "clear-association failed for managed wallet %s (topic %s): %s; removed locally anyway",
+                    signing_wallet_id,
+                    topic_id,
+                    e,
+                )
 
     def status_worker(self, topic_id: int, address: str) -> dict:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
                 """
                 SELECT topic_id, COALESCE(topic_desc, ''), address, artifact_path, identity_ref, enabled, status,
-                       COALESCE(last_error, ''), deployed_at, updated_at, last_pid, last_started_at, last_stopped_at, last_exit_code
+                       COALESCE(last_error, ''), deployed_at, updated_at, last_pid, last_started_at, last_stopped_at, last_exit_code,
+                       COALESCE(custody, 'local'), signing_wallet_id
                 FROM workers WHERE topic_id=? AND address=?
                 """,
                 (topic_id, address),
@@ -208,6 +265,8 @@ class WorkerManager:
             "last_started_at": row[11],
             "last_stopped_at": row[12],
             "last_exit_code": row[13],
+            "custody": row[14],
+            "signing_wallet_id": row[15],
         }
 
     def status_all(self, include_desc: bool = True) -> list[dict]:
@@ -276,6 +335,7 @@ class WorkerManager:
         replace: bool = False,
         mode: str = "auto",
         reject_zero: bool = False,
+        custody: str = "local",
     ) -> DeployResult:
         artifact = Path(artifact_path)
         if not artifact.exists():
@@ -284,6 +344,14 @@ class WorkerManager:
 
         if mode not in {"auto", "strict"}:
             raise ValueError("mode must be 'auto' or 'strict'")
+        if custody not in {"local", "managed"}:
+            raise ValueError("custody must be 'local' or 'managed'")
+
+        # Managed custody: the address is not chosen locally — the backend get-or-creates a
+        # Privy wallet bound to (user, topic) and returns its address (ENGN-8646 / one-worker =
+        # one-topic). `address`/`mnemonic`/`identity_alias` are local-custody inputs and ignored.
+        if custody == "managed":
+            return self._deploy_managed_worker(topic_id, artifact, topic_desc, replace, mode, reject_zero)
 
         # Explicit address path
         if address:
@@ -343,18 +411,69 @@ class WorkerManager:
             message=f"Deployed worker for topic {topic_id} with address {ident.address}",
         )
 
+    def _deploy_managed_worker(
+        self,
+        topic_id: int,
+        artifact: Path,
+        topic_desc: str | None,
+        replace: bool,
+        mode: str,
+        reject_zero: bool,
+    ) -> DeployResult:
+        """Provision (idempotent get-or-create) a managed Privy wallet bound to ``topic_id`` and
+        register a managed worker against its backend-assigned address. One wallet per topic, so a
+        re-deploy refreshes the artifact against the same wallet rather than allocating a new one.
+        """
+        client = self._forge_client()
+        label = topic_desc or f"worker-topic-{topic_id}"
+        info = client.provision_wallet(topic_id, label=label)
+        address = info.address
+
+        if self._worker_exists(topic_id, address):
+            if not replace and mode == "strict":
+                raise ValueError(f"Managed worker already exists for topic={topic_id} address={address}")
+            self._update_worker(topic_id, address, artifact, topic_desc)
+            current_artifact = Path(self.status_worker(topic_id, address)["artifact_path"])
+            deployment_id = self._rotate_deployment(topic_id, address, current_artifact)
+            self._monitor_register(topic_id, address, deployment_id=deployment_id)
+            return DeployResult(
+                topic_id=topic_id,
+                address_assigned=address,
+                artifact_path=str(artifact),
+                action="replaced" if replace else "reused",
+                message=f"Updated managed worker for topic {topic_id} (wallet {address})",
+            )
+
+        spec = WorkerSpec(
+            topic_id,
+            topic_desc,
+            address,
+            artifact,
+            info.id,
+            reject_zero=reject_zero,
+            custody="managed",
+            signing_wallet_id=info.id,
+        )
+        self.add_worker(spec)
+        return DeployResult(
+            topic_id=topic_id,
+            address_assigned=address,
+            artifact_path=str(artifact),
+            action="created",
+            message=f"Provisioned managed wallet {address} for topic {topic_id}",
+        )
+
     # ----------------------------
     # Lifecycle (persistent managed process runner)
     # ----------------------------
-    def start_worker(self, topic_id: int, address: str) -> None:
-        status = self.status_worker(topic_id, address)
-        pid = status.get("last_pid")
-        if pid and self._is_pid_alive(pid):
-            self._set_worker_status(topic_id, address, status="running", last_error=None)
-            return
+    def _build_run_command(self, topic_id: int, address: str, status: dict) -> tuple[list[str], Optional[dict[str, str]]]:
+        """Build the ``worker_runtime`` argv (and subprocess env) for a worker slot.
 
-        log_path = self.runtime_log_dir / f"worker_{topic_id}_{address}.log"
-        log_f = open(log_path, "ab")
+        Local custody passes the on-disk key file via ``--mnemonic-file``. Managed custody passes
+        ``--custody managed`` and injects the Forge credentials into the env so the SDK provisions
+        and signs against the backend with no local key. Returns ``(argv, env)``; ``env`` is None
+        for local custody (inherit the parent environment unchanged).
+        """
         cmd = [
             sys.executable,
             "-m",
@@ -364,22 +483,44 @@ class WorkerManager:
             "--artifact",
             str(status["artifact_path"]),
         ]
-
-        key_file = self._get_key_file_for_address(address)
-        if not key_file:
-            log_f.close()
-            raise FileNotFoundError(
-                f"No key file found for address {address}. "
-                f"Check worker_secrets.json and worker_keys/ directory."
-            )
-        cmd.extend(["--mnemonic-file", str(key_file)])
+        env: Optional[dict[str, str]] = None
+        if status.get("custody") == "managed":
+            cmd.extend(["--custody", "managed"])
+            env = os.environ.copy()
+            if self._forge_api_key:
+                env["FORGE_API_KEY"] = self._forge_api_key
+            if self._forge_backend_url:
+                env["FORGE_BACKEND_URL"] = self._forge_backend_url
+        else:
+            key_file = self._get_key_file_for_address(address)
+            if not key_file:
+                raise FileNotFoundError(
+                    f"No key file found for address {address}. "
+                    f"Check worker_secrets.json and worker_keys/ directory."
+                )
+            cmd.extend(["--mnemonic-file", str(key_file)])
         cmd.extend(["--network", self._network])
-
         if self._no_faucet:
             cmd.append("--no-faucet")
         if status.get("reject_zero"):
             cmd.append("--reject-zero")
-        proc = subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT, cwd=str(Path.cwd()))
+        return cmd, env
+
+    def start_worker(self, topic_id: int, address: str) -> None:
+        status = self.status_worker(topic_id, address)
+        pid = status.get("last_pid")
+        if pid and self._is_pid_alive(pid):
+            self._set_worker_status(topic_id, address, status="running", last_error=None)
+            return
+
+        log_path = self.runtime_log_dir / f"worker_{topic_id}_{address}.log"
+        log_f = open(log_path, "ab")
+        try:
+            cmd, env = self._build_run_command(topic_id, address, status)
+        except Exception:
+            log_f.close()
+            raise
+        proc = subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT, cwd=str(Path.cwd()), env=env)
         key = (topic_id, address)
         self._runners[key] = {"proc": proc, "log": log_f}
 
@@ -563,6 +704,8 @@ class WorkerManager:
                     last_stopped_at TEXT,
                     last_exit_code INTEGER,
                     reject_zero INTEGER NOT NULL DEFAULT 0,
+                    custody TEXT NOT NULL DEFAULT 'local',
+                    signing_wallet_id TEXT,
                     UNIQUE(topic_id, address)
                 )
                 """
@@ -596,6 +739,10 @@ class WorkerManager:
                 conn.execute("ALTER TABLE workers ADD COLUMN last_exit_code INTEGER")
             if "reject_zero" not in cols:
                 conn.execute("ALTER TABLE workers ADD COLUMN reject_zero INTEGER NOT NULL DEFAULT 0")
+            if "custody" not in cols:
+                conn.execute("ALTER TABLE workers ADD COLUMN custody TEXT NOT NULL DEFAULT 'local'")
+            if "signing_wallet_id" not in cols:
+                conn.execute("ALTER TABLE workers ADD COLUMN signing_wallet_id TEXT")
             conn.commit()
         if not self.secrets_path.exists():
             self.secrets_path.write_text("{}")
@@ -712,6 +859,17 @@ class WorkerManager:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute("SELECT 1 FROM workers WHERE topic_id=? AND address=?", (topic_id, address)).fetchone()
         return row is not None
+
+    def _get_custody(self, topic_id: int, address: str) -> tuple[str, Optional[str]]:
+        """Return ``(custody, signing_wallet_id)`` for a worker; ``("local", None)`` if absent."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT custody, signing_wallet_id FROM workers WHERE topic_id=? AND address=?",
+                (topic_id, address),
+            ).fetchone()
+        if not row:
+            return ("local", None)
+        return (row[0] or "local", row[1])
 
     def _address_has_other_topics(self, address: str) -> bool:
         with sqlite3.connect(self.db_path) as conn:
