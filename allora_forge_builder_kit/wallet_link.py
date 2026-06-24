@@ -34,6 +34,7 @@ from urllib.parse import urlparse
 DEFAULT_FORGE_URL = "https://forge.allora.network"
 DEFAULT_SECRETS_PATH = "worker_secrets.json"
 _POLL_TIMEOUT_SECONDS = 600
+_MAX_RESPONSE_BYTES = 512 * 1024
 
 
 # A single discovered worker key entry from worker_secrets.json.
@@ -120,9 +121,9 @@ def _post_json(url: str, payload: dict[str, Any], timeout: float = 15.0) -> dict
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            return json.loads(resp.read(_MAX_RESPONSE_BYTES).decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", "replace")
+        detail = exc.read(_MAX_RESPONSE_BYTES).decode("utf-8", "replace")
         raise SystemExit(f"request to {url} failed ({exc.code}): {detail}") from exc
     except urllib.error.URLError as exc:
         raise SystemExit(f"could not reach {url}: {exc.reason}") from exc
