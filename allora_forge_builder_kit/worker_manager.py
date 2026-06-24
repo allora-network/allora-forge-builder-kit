@@ -170,18 +170,21 @@ class WorkerManager:
         Raises ``ValueError`` if the api key / backend url are missing, so a misconfigured
         managed deploy fails loudly instead of silently falling back to local custody.
         """
-        if self._forge_client_obj is not None:
-            return self._forge_client_obj
-        if not self._forge_api_key or not self._forge_backend_url:
-            raise ValueError(
-                "managed custody requires a Forge API key and backend URL; set "
-                "$FORGE_API_KEY and $FORGE_BACKEND_URL or pass forge_api_key/forge_backend_url"
-            )
-        # Imported lazily: local-custody installs need not import the SDK signing client.
-        from allora_sdk.rpc_client.remote_signer import ForgeBackendClient
+        # Build under the manager lock (reentrant RLock) so two concurrent managed deploys cannot
+        # both construct a client and leak the loser's requests.Session.
+        with self._lock:
+            if self._forge_client_obj is not None:
+                return self._forge_client_obj
+            if not self._forge_api_key or not self._forge_backend_url:
+                raise ValueError(
+                    "managed custody requires a Forge API key and backend URL; set "
+                    "$FORGE_API_KEY and $FORGE_BACKEND_URL or pass forge_api_key/forge_backend_url"
+                )
+            # Imported lazily: local-custody installs need not import the SDK signing client.
+            from allora_sdk.rpc_client.remote_signer import ForgeBackendClient
 
-        self._forge_client_obj = ForgeBackendClient(self._forge_backend_url, self._forge_api_key)
-        return self._forge_client_obj
+            self._forge_client_obj = ForgeBackendClient(self._forge_backend_url, self._forge_api_key)
+            return self._forge_client_obj
 
     # ----------------------------
     # Identity handling
