@@ -78,6 +78,10 @@ def main() -> None:
 
     p_link = sub.add_parser("link", help="Link local worker wallets to your Allora Forge account")
     p_link.add_argument("--forge-url", default=DEFAULT_FORGE_URL, help="Forge base URL")
+    # SUPPRESS so the subcommand flag doesn't clobber a top-level --secrets-path
+    # given before the subcommand, while still appearing in `link --help`.
+    p_link.add_argument("--secrets-path", default=argparse.SUPPRESS,
+                        help="WorkerManager secrets file (default: worker_secrets.json)")
     p_link.add_argument("--address", action="append", dest="addresses",
                         help="Limit to specific allo1... address(es); repeatable. Default: all local keys.")
     p_link.add_argument("--no-browser", action="store_true", help="Do not auto-open a browser")
