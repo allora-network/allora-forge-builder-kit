@@ -29,7 +29,7 @@ import urllib.error
 import urllib.request
 import webbrowser
 from pathlib import Path
-from typing import Any, Optional, TypedDict
+from typing import Any, TypedDict
 from urllib.parse import urlparse
 
 DEFAULT_FORGE_URL = "https://forge.allora.network"
@@ -129,17 +129,18 @@ def discover_keys(secrets_path: str | Path) -> dict[str, _KeyEntry]:
         print(f"could not read worker secrets at {secrets_path}: {exc}", file=sys.stderr)
         return {}
     base = os.path.dirname(os.path.abspath(path))
-    out: dict[str, _KeyEntry] = {}
-    for alias, entry in raw.items():
-        if isinstance(entry, dict) and entry.get("address") and entry.get("key_file"):
-            out[entry["address"]] = {
-                "alias": alias,
-                "key_file": _checked_key_file(base, entry["address"], entry["key_file"]),
-            }
-    return out
+    return {
+        entry["address"]: {
+            "alias": alias,
+            "key_file": _checked_key_file(base, entry["address"], entry["key_file"]),
+        }
+        for alias, entry in raw.items()
+        if isinstance(entry, dict) and entry.get("address") and entry.get("key_file")
+    }
 
 
 def _post_json(url: str, payload: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
+    """POST JSON payload to url; raises SystemExit on HTTP/network errors."""
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url, data=body, headers={"Content-Type": "application/json"}, method="POST"
@@ -162,7 +163,7 @@ def _printable(text: str) -> str:
 def run_link(
     forge_url: str = DEFAULT_FORGE_URL,
     secrets_path: str = DEFAULT_SECRETS_PATH,
-    addresses: Optional[list[str]] = None,
+    addresses: list[str] | None = None,
     open_browser: bool = True,
     insecure: bool = False,
 ) -> int:
@@ -315,7 +316,7 @@ def run_link(
     return 1
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="allora-forge-link",
         description="Prove ownership of local worker wallets and link them to Allora Forge.",
