@@ -27,12 +27,18 @@ import urllib.error
 import urllib.request
 import webbrowser
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TypedDict
 from urllib.parse import urlparse
 
 DEFAULT_FORGE_URL = "https://forge.allora.network"
 DEFAULT_SECRETS_PATH = "worker_secrets.json"
 _POLL_TIMEOUT_SECONDS = 600
+
+
+# A single discovered worker key entry from worker_secrets.json.
+class _KeyEntry(TypedDict):
+    alias: str
+    key_file: str
 
 
 def build_adr036_sign_doc(signer: str, message: str) -> bytes:
@@ -83,7 +89,7 @@ def sign_challenge(mnemonic: str, address: str, message: str) -> tuple[str, str]
     return pubkey_b64, signature_b64
 
 
-def discover_keys(secrets_path: str | Path) -> dict[str, dict]:
+def discover_keys(secrets_path: str | Path) -> dict[str, _KeyEntry]:
     """Load WorkerManager secrets: {address: {"alias", "key_file"}}."""
     path = Path(secrets_path)
     if not path.exists():
@@ -92,7 +98,7 @@ def discover_keys(secrets_path: str | Path) -> dict[str, dict]:
         raw = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
         return {}
-    out: dict[str, dict] = {}
+    out: dict[str, _KeyEntry] = {}
     for alias, entry in raw.items():
         if isinstance(entry, dict) and entry.get("address") and entry.get("key_file"):
             out[entry["address"]] = {"alias": alias, "key_file": entry["key_file"]}
