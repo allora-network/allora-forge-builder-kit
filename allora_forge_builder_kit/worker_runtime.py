@@ -5,7 +5,7 @@ import asyncio
 import inspect
 import math
 import os
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Literal
 
 import cloudpickle
 
@@ -43,7 +43,9 @@ def _build_network(network: str, no_faucet: bool) -> AlloraNetworkConfig:
     return cfg
 
 
-def _resolve_wallet_cfg(custody: str, mnemonic_file: str | None) -> AlloraWalletConfig | None:
+def _resolve_wallet_cfg(
+    custody: Literal["local", "managed"], mnemonic_file: str | None
+) -> AlloraWalletConfig | None:
     """Resolve the signing-wallet config for the chosen custody mode.
 
     Managed custody runs ``AlloraWalletConfig.from_env()``, which performs a blocking wallet-info
