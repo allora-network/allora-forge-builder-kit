@@ -37,16 +37,28 @@ def _build_network(network: str, no_faucet: bool) -> AlloraNetworkConfig:
     return cfg
 
 
+def _resolve_wallet_cfg(custody: str, mnemonic_file: str | None) -> AlloraWalletConfig | None:
+    """Resolve the signing-wallet config for the chosen custody mode.
+
+    Managed custody runs ``AlloraWalletConfig.from_env()``, which performs a blocking wallet-info
+    fetch. It is resolved here in sync code (called from ``main`` before the event loop starts) so
+    the blocking I/O and any startup failure surface before ``asyncio.run`` rather than stalling
+    the running event loop.
+    """
+    if custody == "managed":
+        return AlloraWalletConfig.from_env()
+    return AlloraWalletConfig(mnemonic_file=mnemonic_file) if mnemonic_file else None
+
+
 async def _run(
     topic_id: int,
     artifact_path: str,
     api_key: str,
-    mnemonic_file: str | None = None,
+    wallet_cfg: AlloraWalletConfig | None = None,
     network: str = "testnet",
     no_faucet: bool = False,
     debug: bool = False,
     reject_zero: bool = False,
-    custody: str = "local",
 ) -> None:
     with open(artifact_path, "rb") as f:
         raw_fn = cloudpickle.load(f)
@@ -65,14 +77,6 @@ async def _run(
             raise RuntimeError("Invalid inference output: zero value rejected for price topic")
         return v
 
-    if custody == "managed":
-        # Privy-managed custody: from_env() reads FORGE_API_KEY (+ optional FEE_GRANTER) and,
-        # with no FORGE_SIGNING_WALLET_ID, defers wallet provisioning to the worker — which
-        # get-or-creates a managed wallet bound to this topic at startup (ENGN-8646). No local
-        # key file is created.
-        wallet_cfg = AlloraWalletConfig.from_env()
-    else:
-        wallet_cfg = AlloraWalletConfig(mnemonic_file=mnemonic_file) if mnemonic_file else None
     net_cfg = _build_network(network, no_faucet)
     worker = AlloraWorker.inferer(
         run=run_fn,
@@ -106,16 +110,16 @@ def main() -> None:
     args = parser.parse_args()
 
     api_key = _load_api_key(args.api_key)
+    wallet_cfg = _resolve_wallet_cfg(args.custody, args.mnemonic_file)
     asyncio.run(_run(
         topic_id=args.topic,
         artifact_path=args.artifact,
         api_key=api_key,
-        mnemonic_file=args.mnemonic_file,
+        wallet_cfg=wallet_cfg,
         network=args.network,
         no_faucet=args.no_faucet,
         debug=args.debug,
         reject_zero=args.reject_zero,
-        custody=args.custody,
     ))
 
 
