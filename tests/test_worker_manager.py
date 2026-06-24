@@ -370,3 +370,60 @@ def test_deploy_managed_requires_forge_credentials(tmp_path: Path, monkeypatch):
 
     with pytest.raises(ValueError, match="managed custody requires"):
         manager.deploy_worker(topic_id=1, artifact_path=artifact, custody="managed")
+
+
+# ----------------------------
+# Real-SDK contract tests (synth-001 / synth-003): exercise the actual allora_sdk surface
+# the managed lifecycle depends on, so a cross-repo contract break cannot hide behind the
+# _FakeForgeClient stub or an argv-only assertion.
+# ----------------------------
+def test_real_forge_backend_client_exposes_managed_custody_methods():
+    """The real ForgeBackendClient WorkerManager imports must expose the two methods the
+    lifecycle calls: provision_wallet (deploy) and clear_association (remove)."""
+    from allora_sdk.rpc_client.remote_signer import ForgeBackendClient
+
+    assert hasattr(ForgeBackendClient, "provision_wallet")
+    assert hasattr(ForgeBackendClient, "clear_association")
+
+
+def test_real_sdk_wallet_config_defers_for_managed_worker_without_crashing(monkeypatch):
+    """Refutes 'every managed worker crashes with No wallet credentials provided': with only
+    FORGE_API_KEY set (the deferred managed contract), the real AlloraWalletConfig.from_env()
+    returns a managed config instead of raising."""
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    monkeypatch.setenv("FORGE_API_KEY", "forge_sk_test")
+    monkeypatch.setenv("FORGE_BACKEND_URL", "http://localhost:8080")
+    for key in ("FORGE_SIGNING_WALLET_ID", "PRIVATE_KEY", "MNEMONIC", "MNEMONIC_FILE"):
+        monkeypatch.delenv(key, raising=False)
+
+    cfg = AlloraWalletConfig.from_env()
+    assert cfg.forge_api_key == "forge_sk_test"
+
+
+def test_managed_env_from_build_run_command_constructs_wallet_config(tmp_path: Path, monkeypatch):
+    """The exact env _build_run_command injects for a managed worker drives the real
+    AlloraWalletConfig.from_env() to a wallet-backed config without raising (HTTP mocked)."""
+    import allora_sdk.rpc_client.remote_signer as rs
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    client = _FakeForgeClient()
+    manager = _managed_manager(
+        tmp_path,
+        client,
+        forge_api_key="forge_sk_test",
+        forge_backend_url="http://localhost:8080",
+    )
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+    manager.deploy_worker(topic_id=7, artifact_path=artifact, custody="managed")
+    status = manager.status_worker(topic_id=7, address="allo1managed0007")
+    _, env = manager._build_run_command(7, "allo1managed0007", status)
+
+    fake_wallet = SimpleNamespace(address=lambda: "allo1managed0007")
+    monkeypatch.setattr(rs, "make_remote_wallet", lambda *a, **k: fake_wallet)
+    for key in ("FORGE_API_KEY", "FORGE_BACKEND_URL", "FORGE_SIGNING_WALLET_ID"):
+        monkeypatch.setenv(key, env[key])
+
+    cfg = AlloraWalletConfig.from_env()
+    assert cfg.wallet is fake_wallet
