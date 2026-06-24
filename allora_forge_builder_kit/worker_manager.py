@@ -14,7 +14,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional, Any
+from typing import Any, Callable, Optional, Protocol
 
 from .worker_monitor import MONITOR_TARGETS_DDL
 
@@ -51,6 +51,31 @@ class DeployResult:
     message: str
 
 
+class ProvisionedWallet(Protocol):
+    """Structural view of a Forge-provisioned wallet (the SDK's ``SigningWalletInfo``): the
+    non-secret id + address the managed lifecycle reads back after provisioning."""
+
+    id: str
+    address: str
+
+
+class ForgeClientProtocol(Protocol):
+    """Contract for the Forge backend client used by managed custody.
+
+    Implemented by ``allora_sdk``'s ``ForgeBackendClient`` and stubbed in tests. Captures only the
+    two calls :class:`WorkerManager` makes so local-custody installs need not import the SDK and the
+    injected client is checked at the boundary instead of being typed as ``Any``.
+    """
+
+    def provision_wallet(self, topic_id: int, label: Optional[str] = None) -> ProvisionedWallet:
+        """Idempotently get-or-create the managed wallet bound to ``topic_id``."""
+        ...
+
+    def clear_association(self, wallet_id: str) -> None:
+        """Release the wallet's (user, topic) binding on the backend."""
+        ...
+
+
 class WorkerManager:
     """Lightweight local worker registry + lifecycle manager.
 
@@ -73,7 +98,7 @@ class WorkerManager:
         reconcile_on_start: bool = True,
         forge_api_key: Optional[str] = None,
         forge_backend_url: Optional[str] = None,
-        forge_client: Optional[Any] = None,
+        forge_client: Optional[ForgeClientProtocol] = None,
     ):
         """Initialise the worker manager.
 
@@ -133,7 +158,7 @@ class WorkerManager:
     # ----------------------------
     # Managed custody (Privy via Forge backend)
     # ----------------------------
-    def _forge_client(self):
+    def _forge_client(self) -> ForgeClientProtocol:
         """Return the Forge backend client for managed custody, building it lazily.
 
         Raises ``ValueError`` if the api key / backend url are missing, so a misconfigured

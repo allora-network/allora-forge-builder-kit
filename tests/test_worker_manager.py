@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from allora_forge_builder_kit.worker_manager import WorkerManager, WorkerSpec
+from allora_forge_builder_kit.worker_manager import ForgeClientProtocol, WorkerManager, WorkerSpec
 
 
 class _FakeForgeClient:
@@ -28,7 +28,7 @@ class _FakeForgeClient:
         self.cleared.append(wallet_id)
 
 
-def _managed_manager(tmp_path: Path, client, **kwargs) -> WorkerManager:
+def _managed_manager(tmp_path: Path, client: ForgeClientProtocol, **kwargs) -> WorkerManager:
     return WorkerManager(
         db_path=tmp_path / "state.db",
         secrets_path=tmp_path / "secrets.json",
