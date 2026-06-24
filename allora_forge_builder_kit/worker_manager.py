@@ -351,8 +351,20 @@ class WorkerManager:
 
         # Managed custody: the address is not chosen locally — the backend get-or-creates a
         # Privy wallet bound to (user, topic) and returns its address (ENGN-8646 / one-worker =
-        # one-topic). `address`/`mnemonic`/`identity_alias` are local-custody inputs and ignored.
+        # one-topic). address/mnemonic/identity_alias are local-custody inputs; reject them
+        # loudly rather than silently dropping them — a silently-orphaned address or a leaked
+        # mnemonic is an operator footgun.
         if custody == "managed":
+            local_only = [
+                name
+                for name, value in (("address", address), ("mnemonic", mnemonic), ("identity_alias", identity_alias))
+                if value is not None
+            ]
+            if local_only:
+                raise ValueError(
+                    f"custody='managed' does not accept local-custody inputs {local_only}; the "
+                    "backend provisions a topic-bound wallet and assigns the address"
+                )
             return self._deploy_managed_worker(topic_id, artifact, topic_desc, replace, mode, reject_zero)
 
         # Explicit address path

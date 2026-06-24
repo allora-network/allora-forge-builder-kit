@@ -356,6 +356,17 @@ def test_remove_local_worker_does_not_clear(tmp_path: Path):
     assert client.cleared == []
 
 
+def test_deploy_managed_rejects_local_only_inputs(tmp_path: Path):
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+
+    for kwargs in ({"address": "allo1xxx"}, {"mnemonic": "abandon abandon"}, {"identity_alias": "alias"}):
+        with pytest.raises(ValueError, match="local-custody inputs"):
+            manager.deploy_worker(topic_id=1, artifact_path=artifact, custody="managed", **kwargs)
+
+
 def test_deploy_managed_requires_forge_credentials(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("FORGE_API_KEY", raising=False)
     monkeypatch.delenv("FORGE_BACKEND_URL", raising=False)
