@@ -146,6 +146,12 @@ def main() -> None:
     parser.add_argument("--reject-zero", action="store_true")
     args = parser.parse_args()
 
+    if args.custody == "managed" and args.mnemonic_file:
+        parser.error(
+            "--mnemonic-file is incompatible with --custody managed; managed custody uses "
+            "FORGE_API_KEY from the environment"
+        )
+
     api_key = _load_api_key(args.api_key)
     wallet_cfg = _resolve_wallet_cfg(args.custody, args.mnemonic_file)
     asyncio.run(_run(
