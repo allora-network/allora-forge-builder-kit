@@ -5,12 +5,15 @@ import asyncio
 import inspect
 import math
 import os
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import cloudpickle
 
 from allora_sdk.worker import AlloraWorker
 from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
+
+if TYPE_CHECKING:
+    from allora_sdk.worker.context import RunContext
 
 
 def _load_api_key(explicit: str | None) -> str:
@@ -95,7 +98,7 @@ async def _run(
         raw_fn = cloudpickle.load(f)
     expects_context = _artifact_expects_context(raw_fn)
 
-    def run_fn(ctx):
+    def run_fn(ctx: RunContext) -> float:
         # Legacy artifacts take the integer nonce (raw_fn(ctx.nonce)); newer artifacts take the
         # RunContext itself. The call shape is resolved once above to avoid per-nonce introspection.
         value = raw_fn(ctx) if expects_context else raw_fn(ctx.nonce)
