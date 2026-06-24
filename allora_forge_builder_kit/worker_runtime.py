@@ -5,6 +5,7 @@ import asyncio
 import inspect
 import math
 import os
+import warnings
 from typing import TYPE_CHECKING, Callable, Literal
 
 import cloudpickle
@@ -159,6 +160,13 @@ def main() -> None:
         parser.error(
             "--custody managed requires FORGE_API_KEY in the environment "
             "(the SDK provisions a topic-bound managed wallet from it)"
+        )
+
+    if args.custody == "managed" and not os.environ.get("FEE_GRANTER"):
+        warnings.warn(
+            "FEE_GRANTER is not set: a managed wallet holds no ALLO, so gasless submission needs "
+            "a fee granter — transactions may fail with 'insufficient fees' without one.",
+            stacklevel=2,
         )
 
     api_key = _load_api_key(args.api_key)
