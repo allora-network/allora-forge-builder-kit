@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import re
 import sys
 import time
@@ -95,6 +96,26 @@ def sign_challenge(mnemonic: str, address: str, message: str) -> tuple[str, str]
     return pubkey_b64, signature_b64
 
 
+def _checked_key_file(base: str, address: str, key_file: str) -> str:
+    """Warn (without rejecting) when a secrets key_file resolves outside the secrets dir."""
+    kf = Path(key_file).expanduser()
+    kf_abs = os.path.abspath(kf if kf.is_absolute() else Path(base) / kf)
+    try:
+        outside = os.path.commonpath((base, kf_abs)) != base
+    except ValueError:  # different drives / mixed path kinds
+        outside = True
+    if outside:
+        # The threat model already grants mnemonic access; this just surfaces a
+        # tampered worker_secrets.json that redirects a read outside the dir.
+        # We don't reject because legitimate absolute key_file paths are normal.
+        print(
+            f"warning: key_file for {address} resolves outside the secrets dir "
+            f"{base}; reading it anyway ({key_file})",
+            file=sys.stderr,
+        )
+    return key_file
+
+
 def discover_keys(secrets_path: str | Path) -> dict[str, _KeyEntry]:
     """Load WorkerManager secrets: {address: {"alias", "key_file"}}."""
     path = Path(secrets_path)
@@ -107,10 +128,14 @@ def discover_keys(secrets_path: str | Path) -> dict[str, _KeyEntry]:
         # instead of masking it as the "no worker keys, create one" case.
         print(f"could not read worker secrets at {secrets_path}: {exc}", file=sys.stderr)
         return {}
+    base = os.path.dirname(os.path.abspath(path))
     out: dict[str, _KeyEntry] = {}
     for alias, entry in raw.items():
         if isinstance(entry, dict) and entry.get("address") and entry.get("key_file"):
-            out[entry["address"]] = {"alias": alias, "key_file": entry["key_file"]}
+            out[entry["address"]] = {
+                "alias": alias,
+                "key_file": _checked_key_file(base, entry["address"], entry["key_file"]),
+            }
     return out
 
 
