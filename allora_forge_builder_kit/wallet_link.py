@@ -96,7 +96,10 @@ def discover_keys(secrets_path: str | Path) -> dict[str, _KeyEntry]:
         return {}
     try:
         raw = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as exc:
+        # Present-but-unreadable/corrupt is distinct from not-found: surface it
+        # instead of masking it as the "no worker keys, create one" case.
+        print(f"could not read worker secrets at {secrets_path}: {exc}", file=sys.stderr)
         return {}
     out: dict[str, _KeyEntry] = {}
     for alias, entry in raw.items():
