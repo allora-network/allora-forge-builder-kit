@@ -291,6 +291,20 @@ def test_managed_redeploy_syncs_reject_zero_into_db_and_command(tmp_path: Path):
     assert "--reject-zero" in cmd
 
 
+def test_managed_auto_redeploy_reports_replaced_not_reused(tmp_path: Path):
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    v1 = tmp_path / "v1.pkl"
+    v2 = tmp_path / "v2.pkl"
+    v1.write_text("v1")
+    v2.write_text("v2")
+
+    manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed")
+    # Auto mode (no replace=True) still rotates the artifact on the one-per-topic wallet.
+    result = manager.deploy_worker(topic_id=8, artifact_path=v2, custody="managed")
+    assert result.action == "replaced"
+
+
 def test_build_run_command_managed_injects_forge_env_and_no_keyfile(tmp_path: Path):
     client = _FakeForgeClient()
     manager = _managed_manager(

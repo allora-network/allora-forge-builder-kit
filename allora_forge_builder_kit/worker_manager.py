@@ -457,8 +457,11 @@ class WorkerManager:
                 topic_id=topic_id,
                 address_assigned=address,
                 artifact_path=str(artifact),
-                action="replaced" if replace else "reused",
-                message=f"Updated managed worker for topic {topic_id} (wallet {address})",
+                # A managed redeploy always rotates the artifact on the one-per-topic wallet, so
+                # report 'replaced' regardless of the replace flag — labelling it 'reused' would
+                # mislead callers that branch on action to fire notifications / downstream jobs.
+                action="replaced",
+                message=f"Replaced managed worker artifact for topic {topic_id} (wallet {address})",
             )
 
         spec = WorkerSpec(
