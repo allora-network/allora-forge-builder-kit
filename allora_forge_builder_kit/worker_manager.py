@@ -14,11 +14,17 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Callable, Literal, Optional, Protocol
 
 from .worker_monitor import MONITOR_TARGETS_DDL
 
 logger = logging.getLogger(__name__)
+
+# Wallet custody discriminant: 'local' (self-custodial key file on disk) or 'managed' (Privy
+# wallet provisioned by the Forge backend, keyed by signing_wallet_id). A Literal gives the
+# fixed two-value set type-checker coverage and IDE completion while staying a plain str on the
+# wire and in SQLite.
+CustodyMode = Literal["local", "managed"]
 
 
 @dataclass(frozen=True)
@@ -38,7 +44,7 @@ class WorkerSpec:
     reject_zero: bool = False
     # custody: "local" (self-custodial key file on disk) or "managed" (Privy-managed
     # wallet provisioned by the Forge backend; signing_wallet_id is the backend wallet id).
-    custody: str = "local"
+    custody: CustodyMode = "local"
     signing_wallet_id: Optional[str] = None
 
 
@@ -363,7 +369,7 @@ class WorkerManager:
         replace: bool = False,
         mode: str = "auto",
         reject_zero: bool = False,
-        custody: str = "local",
+        custody: CustodyMode = "local",
     ) -> DeployResult:
         artifact = Path(artifact_path)
         if not artifact.exists():
