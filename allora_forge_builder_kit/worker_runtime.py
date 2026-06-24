@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import math
 import os
+from typing import Callable
+
 import cloudpickle
 
 from allora_sdk.worker import AlloraWorker
@@ -50,6 +53,28 @@ def _resolve_wallet_cfg(custody: str, mnemonic_file: str | None) -> AlloraWallet
     return AlloraWalletConfig(mnemonic_file=mnemonic_file) if mnemonic_file else None
 
 
+def _artifact_expects_context(raw_fn: Callable[..., object]) -> bool:
+    """Return True when a pickled artifact follows the SDK's RunContext call contract.
+
+    Legacy kit artifacts are written as ``fn(nonce: int)``; the current SDK invokes the inferer
+    callback with a ``RunContext``. Default to the legacy nonce form and only pass the
+    ``RunContext`` when the artifact's single positional parameter is annotated as — or named
+    like — a context, preserving back-compat for the overwhelmingly common legacy artifacts.
+    """
+    try:
+        params = [
+            p
+            for p in inspect.signature(raw_fn).parameters.values()
+            if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        ]
+    except (TypeError, ValueError):
+        return False
+    if len(params) != 1:
+        return False
+    annotation = "" if params[0].annotation is inspect.Parameter.empty else str(params[0].annotation)
+    return "RunContext" in annotation or params[0].name in ("ctx", "context", "run_context")
+
+
 async def _run(
     topic_id: int,
     artifact_path: str,
@@ -60,13 +85,20 @@ async def _run(
     debug: bool = False,
     reject_zero: bool = False,
 ) -> None:
+    """Load the pickled inference artifact and drive the worker submission loop.
+
+    Artifact contract: the pickled callable is invoked as ``fn(nonce: int)`` and must return a
+    finite numeric value. Artifacts written to the newer SDK contract (``fn(ctx)`` taking a
+    ``RunContext``) are also supported; the call shape is detected once at load time.
+    """
     with open(artifact_path, "rb") as f:
         raw_fn = cloudpickle.load(f)
+    expects_context = _artifact_expects_context(raw_fn)
 
     def run_fn(ctx):
-        # The branch SDK invokes the inferer fn with a RunContext; the pickled model fn
-        # still takes the integer nonce, so adapt via ctx.nonce.
-        value = raw_fn(ctx.nonce)
+        # Legacy artifacts take the integer nonce (raw_fn(ctx.nonce)); newer artifacts take the
+        # RunContext itself. The call shape is resolved once above to avoid per-nonce introspection.
+        value = raw_fn(ctx) if expects_context else raw_fn(ctx.nonce)
         try:
             v = float(value)
         except Exception as e:
