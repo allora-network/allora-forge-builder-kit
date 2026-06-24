@@ -485,12 +485,27 @@ class WorkerManager:
         ]
         env: Optional[dict[str, str]] = None
         if status.get("custody") == "managed":
+            # Precheck the managed credentials before spawning so a misconfigured worker fails
+            # loudly here (start_worker/reconcile surface this) instead of the subprocess exiting
+            # right after the DB row is marked 'running'.
+            if not self._forge_api_key or not self._forge_backend_url:
+                raise ValueError(
+                    f"managed worker topic={topic_id} address={address} requires a Forge API key "
+                    "and backend URL; set $FORGE_API_KEY and $FORGE_BACKEND_URL"
+                )
+            signing_wallet_id = status.get("signing_wallet_id")
+            if not signing_wallet_id:
+                raise ValueError(
+                    f"managed worker topic={topic_id} address={address} is missing signing_wallet_id; "
+                    "re-deploy with custody='managed' to provision the backend wallet"
+                )
             cmd.extend(["--custody", "managed"])
             env = os.environ.copy()
-            if self._forge_api_key:
-                env["FORGE_API_KEY"] = self._forge_api_key
-            if self._forge_backend_url:
-                env["FORGE_BACKEND_URL"] = self._forge_backend_url
+            env["FORGE_API_KEY"] = self._forge_api_key
+            env["FORGE_BACKEND_URL"] = self._forge_backend_url
+            # Pin the exact provisioned wallet (the DB row already stores it) so the worker signs
+            # with that wallet deterministically instead of re-deriving one via topic get-or-create.
+            env["FORGE_SIGNING_WALLET_ID"] = signing_wallet_id
         else:
             key_file = self._get_key_file_for_address(address)
             if not key_file:

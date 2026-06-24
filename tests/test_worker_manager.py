@@ -288,6 +288,28 @@ def test_build_run_command_managed_injects_forge_env_and_no_keyfile(tmp_path: Pa
     assert env is not None
     assert env["FORGE_API_KEY"] == "forge_sk_test"
     assert env["FORGE_BACKEND_URL"] == "http://localhost:8080"
+    # The DB-stored signing wallet id is pinned into the env so the worker signs with the exact
+    # provisioned wallet (deterministic) rather than re-deriving via topic get-or-create.
+    assert env["FORGE_SIGNING_WALLET_ID"] == "wallet-7"
+
+
+def test_build_run_command_managed_without_signing_wallet_id_raises(tmp_path: Path):
+    client = _FakeForgeClient()
+    manager = _managed_manager(
+        tmp_path,
+        client,
+        forge_api_key="forge_sk_test",
+        forge_backend_url="http://localhost:8080",
+    )
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+    manager.deploy_worker(topic_id=7, artifact_path=artifact, custody="managed")
+    status = manager.status_worker(topic_id=7, address="allo1managed0007")
+    status["signing_wallet_id"] = None
+
+    # Fails loudly before spawning rather than letting the subprocess exit post-'running'.
+    with pytest.raises(ValueError, match="signing_wallet_id"):
+        manager._build_run_command(7, "allo1managed0007", status)
 
 
 def test_remove_managed_worker_clears_association(tmp_path: Path):
