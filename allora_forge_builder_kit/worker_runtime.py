@@ -48,10 +48,13 @@ def _resolve_wallet_cfg(
 ) -> AlloraWalletConfig | None:
     """Resolve the signing-wallet config for the chosen custody mode.
 
-    Managed custody runs ``AlloraWalletConfig.from_env()``, which performs a blocking wallet-info
-    fetch. It is resolved here in sync code (called from ``main`` before the event loop starts) so
-    the blocking I/O and any startup failure surface before ``asyncio.run`` rather than stalling
-    the running event loop.
+    Managed custody runs ``AlloraWalletConfig.from_env()``. With ``FORGE_API_KEY`` set and no
+    ``FORGE_SIGNING_WALLET_ID``, the SDK returns a deferred managed config (no local key) and the
+    worker get-or-creates a wallet bound to its topic at startup (ENGN-8646). The managed branch is
+    taken before any ``PRIVATE_KEY`` / ``MNEMONIC`` is read, so ``FORGE_API_KEY`` always takes
+    precedence — there is no silent local-key fallback. ``from_env()`` performs a blocking
+    wallet-info fetch, so it is resolved here in sync code (called from ``main`` before the event
+    loop starts) rather than inside the async worker.
     """
     if custody == "managed":
         return AlloraWalletConfig.from_env()
@@ -150,6 +153,12 @@ def main() -> None:
         parser.error(
             "--mnemonic-file is incompatible with --custody managed; managed custody uses "
             "FORGE_API_KEY from the environment"
+        )
+
+    if args.custody == "managed" and not os.environ.get("FORGE_API_KEY"):
+        parser.error(
+            "--custody managed requires FORGE_API_KEY in the environment "
+            "(the SDK provisions a topic-bound managed wallet from it)"
         )
 
     api_key = _load_api_key(args.api_key)
