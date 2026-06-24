@@ -500,7 +500,10 @@ class WorkerManager:
             topic_desc,
             address,
             artifact,
-            info.id,
+            # identity_ref is a local-identity alias keying the identities table for local custody;
+            # managed workers have no identities row, so use a sentinel rather than overloading it
+            # with the Privy wallet UUID. signing_wallet_id stays the canonical wallet identifier.
+            "managed",
             reject_zero=reject_zero,
             custody="managed",
             signing_wallet_id=info.id,

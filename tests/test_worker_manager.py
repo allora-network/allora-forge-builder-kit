@@ -248,6 +248,9 @@ def test_deploy_managed_provisions_and_registers(tmp_path: Path):
     assert status["custody"] == "managed"
     assert status["signing_wallet_id"] == "wallet-42"
     assert status["artifact_path"].endswith(".pkl")
+    # identity_ref is a sentinel for managed workers (no identities row); the canonical wallet id
+    # lives in signing_wallet_id, not overloaded into identity_ref.
+    assert status["identity_ref"] == "managed"
 
 
 def test_deploy_managed_redeploy_reuses_same_wallet(tmp_path: Path):
