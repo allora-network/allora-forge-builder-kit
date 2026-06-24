@@ -1,3 +1,14 @@
+"""Run an Allora worker from a pickled inference artifact.
+
+Two distinct API keys are used here and must not be confused:
+
+- ``ALLORA_API_KEY`` (``--api-key``): the Allora consumer/faucet key the kit uses for testnet
+  faucet drips and topic queries (see ``_load_api_key``).
+- ``FORGE_API_KEY``: the Forge backend key the SDK's ``AlloraWalletConfig.from_env()`` reads under
+  ``--custody managed`` to provision and sign with a Privy-managed wallet.
+
+They authenticate different backends; ``--custody managed`` consumes ``FORGE_API_KEY`` only.
+"""
 from __future__ import annotations
 
 import argparse
