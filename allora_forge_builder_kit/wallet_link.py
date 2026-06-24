@@ -70,8 +70,8 @@ def sign_challenge(mnemonic: str, address: str, message: str) -> tuple[str, str]
         from cosmpy.aerial.wallet import LocalWallet
     except ImportError as exc:  # pragma: no cover - environment guard
         raise SystemExit(
-            "cosmpy is required to sign. Install the builder kit deps "
-            "(pip install -e . / cosmpy==0.11.1)."
+            "cosmpy is required to sign. Install the wallet-link extra "
+            "(pip install 'allora-forge-builder-kit[wallet-link]') or cosmpy==0.11.1."
         ) from exc
 
     wallet = LocalWallet.from_mnemonic(mnemonic, "allo")
