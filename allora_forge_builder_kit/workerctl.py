@@ -81,6 +81,8 @@ def main() -> None:
     p_link.add_argument("--address", action="append", dest="addresses",
                         help="Limit to specific allo1... address(es); repeatable. Default: all local keys.")
     p_link.add_argument("--no-browser", action="store_true", help="Do not auto-open a browser")
+    p_link.add_argument("--insecure", action="store_true",
+                        help="Allow a plaintext http:// forge URL (local dev only)")
 
     args = parser.parse_args()
     mgr_kwargs = dict(db_path=args.db_path, secrets_path=args.secrets_path, network=args.network)
@@ -95,6 +97,7 @@ def main() -> None:
             secrets_path=args.secrets_path,
             addresses=args.addresses,
             open_browser=not args.no_browser,
+            insecure=args.insecure,
         ))
 
     wm, _ = _make_manager(with_monitor=False, **mgr_kwargs)

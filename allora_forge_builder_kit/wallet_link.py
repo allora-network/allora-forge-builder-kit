@@ -28,6 +28,7 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 DEFAULT_FORGE_URL = "https://forge.allora.network"
 DEFAULT_SECRETS_PATH = "worker_secrets.json"
@@ -118,9 +119,22 @@ def run_link(
     secrets_path: str = DEFAULT_SECRETS_PATH,
     addresses: Optional[list[str]] = None,
     open_browser: bool = True,
+    insecure: bool = False,
 ) -> int:
     """Drive the full device flow. Returns a process exit code."""
     forge_url = forge_url.rstrip("/")
+    parsed = urlparse(forge_url)
+    if (
+        parsed.scheme != "https"
+        and parsed.hostname not in ("localhost", "127.0.0.1")
+        and not insecure
+    ):
+        print(
+            f"refusing plaintext forge URL {forge_url} "
+            f"(use --insecure to override for local dev)",
+            file=sys.stderr,
+        )
+        return 1
     keys = discover_keys(secrets_path)
     if not keys:
         print(
@@ -241,12 +255,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--no-browser", action="store_true", help="Do not auto-open a browser"
     )
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Allow a plaintext http:// forge URL (local dev only)",
+    )
     args = parser.parse_args(argv)
     return run_link(
         forge_url=args.forge_url,
         secrets_path=args.secrets_path,
         addresses=args.addresses,
         open_browser=not args.no_browser,
+        insecure=args.insecure,
     )
 
 
