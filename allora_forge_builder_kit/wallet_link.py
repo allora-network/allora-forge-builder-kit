@@ -27,7 +27,7 @@ import urllib.error
 import urllib.request
 import webbrowser
 from pathlib import Path
-from typing import Optional, TypedDict
+from typing import Any, Optional, TypedDict
 from urllib.parse import urlparse
 
 DEFAULT_FORGE_URL = "https://forge.allora.network"
@@ -105,7 +105,7 @@ def discover_keys(secrets_path: str | Path) -> dict[str, _KeyEntry]:
     return out
 
 
-def _post_json(url: str, payload: dict, timeout: float = 15.0) -> dict:
+def _post_json(url: str, payload: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url, data=body, headers={"Content-Type": "application/json"}, method="POST"
