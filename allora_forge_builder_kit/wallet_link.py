@@ -123,6 +123,11 @@ def _post_json(url: str, payload: dict[str, Any], timeout: float = 15.0) -> dict
         raise SystemExit(f"could not reach {url}: {exc.reason}") from exc
 
 
+def _printable(text: str) -> str:
+    """Drop non-printable chars so server strings can't inject terminal escapes."""
+    return "".join(c for c in text if c.isprintable())
+
+
 def run_link(
     forge_url: str = DEFAULT_FORGE_URL,
     secrets_path: str = DEFAULT_SECRETS_PATH,
@@ -233,8 +238,8 @@ def run_link(
 
     # 3. Hand off to the browser for the logged-in user to approve.
     print()
-    print(f"  First copy your one-time code: {user_code}")
-    print(f"  Then approve the link at: {verification_uri_complete}")
+    print(f"  First copy your one-time code: {_printable(user_code)}")
+    print(f"  Then approve the link at: {_printable(verification_uri_complete)}")
     print()
     if open_browser:
         try:
