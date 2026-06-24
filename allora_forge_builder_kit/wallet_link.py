@@ -285,8 +285,15 @@ def run_link(
     else:
         print("Waiting for approval...")
 
-    # 4. Poll until the user approves/denies or the session expires.
-    deadline = time.time() + _POLL_TIMEOUT_SECONDS
+    # 4. Poll until the user approves/denies or the session expires. Honor the
+    # server-advertised expires_in (clamped) so the client deadline tracks the
+    # real session TTL instead of a fixed local constant.
+    try:
+        timeout = int(start.get("expires_in", _POLL_TIMEOUT_SECONDS))
+    except (TypeError, ValueError):
+        timeout = _POLL_TIMEOUT_SECONDS
+    timeout = max(1, min(timeout, _POLL_TIMEOUT_SECONDS))
+    deadline = time.time() + timeout
     while time.time() < deadline:
         time.sleep(max(1, interval))
         try:
