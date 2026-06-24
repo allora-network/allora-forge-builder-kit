@@ -184,9 +184,15 @@ def run_link(
     deadline = time.time() + _POLL_TIMEOUT_SECONDS
     while time.time() < deadline:
         time.sleep(max(1, interval))
-        poll = _post_json(
-            f"{forge_url}/api/v1/wallet-link/device/poll", {"device_code": device_code}
-        )
+        try:
+            poll = _post_json(
+                f"{forge_url}/api/v1/wallet-link/device/poll", {"device_code": device_code}
+            )
+        except SystemExit as exc:
+            # Transient HTTP/network error (502/503/429, DNS blip): keep polling
+            # until our wall-clock deadline instead of aborting the whole flow.
+            print(f"  (poll error: {exc}; retrying...)", file=sys.stderr)
+            continue
         status = poll.get("status")
         if status == "approved":
             linked = poll.get("linked", [])
