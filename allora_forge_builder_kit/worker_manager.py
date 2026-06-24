@@ -275,7 +275,7 @@ class WorkerManager:
                 """
                 SELECT topic_id, COALESCE(topic_desc, ''), address, artifact_path, identity_ref, enabled, status,
                        COALESCE(last_error, ''), deployed_at, updated_at, last_pid, last_started_at, last_stopped_at, last_exit_code,
-                       reject_zero
+                       reject_zero, COALESCE(custody, 'local'), signing_wallet_id
                 FROM workers ORDER BY topic_id, address
                 """
             ).fetchall()
@@ -296,6 +296,8 @@ class WorkerManager:
                 "last_stopped_at": row[12],
                 "last_exit_code": row[13],
                 "reject_zero": bool(row[14]) if row[14] is not None else False,
+                "custody": row[15],
+                "signing_wallet_id": row[16],
             }
             if include_desc:
                 item["topic_desc"] = row[1]

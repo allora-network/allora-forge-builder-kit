@@ -427,3 +427,20 @@ def test_managed_env_from_build_run_command_constructs_wallet_config(tmp_path: P
 
     cfg = AlloraWalletConfig.from_env()
     assert cfg.wallet is fake_wallet
+
+
+def test_status_all_includes_custody_and_signing_wallet_id(tmp_path: Path):
+    """status_all() exposes the same custody/signing_wallet_id contract as status_worker(), so
+    a dashboard iterating status_all() can tell managed from local without an N+1 round-trip."""
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+    manager.deploy_worker(topic_id=42, artifact_path=artifact, custody="managed")
+
+    row = [w for w in manager.status_all() if w["topic_id"] == 42][0]
+    assert row["custody"] == "managed"
+    assert row["signing_wallet_id"] == "wallet-42"
+
+    worker = manager.status_worker(topic_id=42, address="allo1managed0042")
+    assert {"custody", "signing_wallet_id"} <= (set(row) & set(worker))
