@@ -91,7 +91,7 @@ def sign_challenge(mnemonic: str, address: str, message: str) -> tuple[str, str]
     signer = wallet.signer()
     doc = build_adr036_sign_doc(address, message)
     signature = signer.sign(doc)
-    pubkey_b64 = base64.standard_b64encode(signer.public_key_bytes).decode("ascii")
+    pubkey_b64 = base64.standard_b64encode(signer.public_key.public_key_bytes).decode("ascii")
     signature_b64 = base64.standard_b64encode(signature).decode("ascii")
     return pubkey_b64, signature_b64
 
