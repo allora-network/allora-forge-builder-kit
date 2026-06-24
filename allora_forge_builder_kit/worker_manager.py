@@ -480,7 +480,9 @@ class WorkerManager:
         re-deploy refreshes the artifact against the same wallet rather than allocating a new one.
         """
         client = self._forge_client()
-        label = topic_desc or f"worker-topic-{topic_id}"
+        # Prefer a resolved topic name (same source the rest of the registry uses) over the bare
+        # topic_id fallback so the backend wallet label is human-meaningful.
+        label = self._resolve_topic_desc(topic_id, topic_desc) or f"worker-topic-{topic_id}"
         info = client.provision_wallet(topic_id, label=label)
         if not getattr(info, "address", None) or not getattr(info, "id", None):
             raise RuntimeError(
