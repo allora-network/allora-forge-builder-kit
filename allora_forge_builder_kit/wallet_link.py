@@ -150,6 +150,16 @@ def run_link(
         print(f"No local key for: {', '.join(missing)}", file=sys.stderr)
         return 1
 
+    # Validate key files up front so a stale secrets entry fails before we
+    # open a server-side device session that would otherwise be orphaned.
+    unreadable = [a for a in selected if not Path(keys[a]["key_file"]).is_file()]
+    if unreadable:
+        print(
+            f"key file missing for: {', '.join(unreadable)} (stale {secrets_path}?)",
+            file=sys.stderr,
+        )
+        return 1
+
     print(f"Linking {len(selected)} worker address(es) to Allora Forge at {forge_url}")
 
     # 1. Start the device session.
@@ -197,8 +207,12 @@ def run_link(
         if message is None:
             print(f"Server returned no challenge for {address}", file=sys.stderr)
             return 1
-        mnemonic = Path(keys[address]["key_file"]).read_text().strip()
-        pubkey_b64, signature_b64 = sign_challenge(mnemonic, address, message)
+        try:
+            mnemonic = Path(keys[address]["key_file"]).read_text().strip()
+            pubkey_b64, signature_b64 = sign_challenge(mnemonic, address, message)
+        except (ValueError, OSError) as exc:
+            print(f"failed to sign challenge for {address}: {exc}", file=sys.stderr)
+            return 1
         signatures.append(
             {"address": address, "pubkey": pubkey_b64, "signature": signature_b64}
         )
