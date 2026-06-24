@@ -174,6 +174,22 @@ def run_link(
         if isinstance(c, dict) and c.get("address") and c.get("message")
     }
 
+    # Pin the server-returned approval URL to the forge origin and a safe
+    # scheme so a compromised server can't phish via a different host or hand
+    # a file://, javascript:, or app-launcher URI to the OS handler.
+    verification = urlparse(verification_uri_complete)
+    same_host = verification.hostname == parsed.hostname
+    safe_scheme = verification.scheme == "https" or (
+        verification.scheme == "http"
+        and (verification.hostname in ("localhost", "127.0.0.1") or insecure)
+    )
+    if not (same_host and safe_scheme):
+        print(
+            f"refusing to open untrusted verification URL: {verification_uri_complete}",
+            file=sys.stderr,
+        )
+        return 1
+
     # 2. Sign each challenge locally and submit the signatures.
     signatures = []
     for address in selected:
