@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -47,6 +48,10 @@ def build_adr036_sign_doc(signer: str, message: str) -> bytes:
     Must match the Go verifier and Keplr byte-for-byte: keys sorted alphabetically
     at every level, no whitespace, ``data`` = standard-base64 of the raw message.
     """
+    # signer is concatenated unescaped; restrict it to the bech32 grammar so a
+    # stray quote/backslash/control byte can't corrupt or inject into the JSON.
+    if not re.fullmatch(r"[a-z0-9]+", signer):
+        raise ValueError(f"invalid bech32 signer: {signer!r}")
     data = base64.standard_b64encode(message.encode("utf-8")).decode("ascii")
     return (
         '{"account_number":"0","chain_id":"","fee":{"amount":[],"gas":"0"},'
