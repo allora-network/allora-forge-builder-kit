@@ -482,6 +482,10 @@ class WorkerManager:
         client = self._forge_client()
         label = topic_desc or f"worker-topic-{topic_id}"
         info = client.provision_wallet(topic_id, label=label)
+        if not getattr(info, "address", None) or not getattr(info, "id", None):
+            raise RuntimeError(
+                f"Forge backend returned a malformed wallet for topic {topic_id}: {info!r}"
+            )
         address = info.address
 
         if self._worker_exists(topic_id, address):

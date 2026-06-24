@@ -397,6 +397,20 @@ def test_remove_local_worker_does_not_clear(tmp_path: Path):
     assert client.cleared == []
 
 
+def test_deploy_managed_rejects_malformed_backend_wallet(tmp_path: Path):
+    class _BadClient(_FakeForgeClient):
+        def provision_wallet(self, topic_id: int, label: str | None = None):
+            return SimpleNamespace(id="", address="", pubkey="")
+
+    client = _BadClient()
+    manager = _managed_manager(tmp_path, client)
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+
+    with pytest.raises(RuntimeError, match="malformed wallet"):
+        manager.deploy_worker(topic_id=1, artifact_path=artifact, custody="managed")
+
+
 def test_deploy_managed_rejects_local_only_inputs(tmp_path: Path):
     client = _FakeForgeClient()
     manager = _managed_manager(tmp_path, client)
