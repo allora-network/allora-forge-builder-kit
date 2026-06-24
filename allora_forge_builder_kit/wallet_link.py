@@ -215,9 +215,12 @@ def run_link(
     print()
     if open_browser:
         try:
-            webbrowser.open(verification_uri_complete)
+            opened = webbrowser.open(verification_uri_complete)
+        except Exception:  # pragma: no cover - some platforms raise instead of returning False
+            opened = False
+        if opened:
             print("Opened your browser. Waiting for approval...")
-        except Exception:  # pragma: no cover - headless / no browser
+        else:
             print("Could not open a browser; open the URL above. Waiting...")
     else:
         print("Waiting for approval...")
