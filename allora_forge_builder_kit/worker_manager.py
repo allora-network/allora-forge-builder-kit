@@ -181,7 +181,14 @@ class WorkerManager:
                     "$FORGE_API_KEY and $FORGE_BACKEND_URL or pass forge_api_key/forge_backend_url"
                 )
             # Imported lazily: local-custody installs need not import the SDK signing client.
-            from allora_sdk.rpc_client.remote_signer import ForgeBackendClient
+            try:
+                from allora_sdk.rpc_client.remote_signer import ForgeBackendClient
+            except ImportError as e:
+                raise ValueError(
+                    "managed custody requires the 'allora-sdk' package "
+                    "(allora_sdk.rpc_client.remote_signer.ForgeBackendClient); install it to deploy "
+                    "managed workers"
+                ) from e
 
             self._forge_client_obj = ForgeBackendClient(self._forge_backend_url, self._forge_api_key)
             return self._forge_client_obj
