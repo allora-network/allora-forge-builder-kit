@@ -142,6 +142,10 @@ def run_link(
     start = _post_json(
         f"{forge_url}/api/v1/wallet-link/device/start", {"addresses": selected}
     )
+    for field in ("device_code", "user_code", "verification_uri_complete"):
+        if not start.get(field):
+            print(f"server response missing required field: {field}", file=sys.stderr)
+            return 1
     device_code = start["device_code"]
     user_code = start["user_code"]
     verification_uri_complete = start["verification_uri_complete"]
@@ -150,7 +154,11 @@ def run_link(
     except (TypeError, ValueError):
         interval = 5
     interval = max(1, min(interval, 60))
-    challenges = {c["address"]: c["message"] for c in start.get("challenges", [])}
+    challenges = {
+        c["address"]: c["message"]
+        for c in start.get("challenges", [])
+        if isinstance(c, dict) and c.get("address") and c.get("message")
+    }
 
     # 2. Sign each challenge locally and submit the signatures.
     signatures = []
