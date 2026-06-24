@@ -267,6 +267,30 @@ def test_deploy_managed_redeploy_reuses_same_wallet(tmp_path: Path):
     assert len([w for w in manager.status_all() if w["topic_id"] == 8]) == 1
 
 
+def test_managed_redeploy_syncs_reject_zero_into_db_and_command(tmp_path: Path):
+    client = _FakeForgeClient()
+    manager = _managed_manager(
+        tmp_path,
+        client,
+        forge_api_key="forge_sk_test",
+        forge_backend_url="http://localhost:8080",
+    )
+    v1 = tmp_path / "v1.pkl"
+    v2 = tmp_path / "v2.pkl"
+    v1.write_text("v1")
+    v2.write_text("v2")
+
+    manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed", reject_zero=False)
+    manager.deploy_worker(topic_id=8, artifact_path=v2, custody="managed", replace=True, reject_zero=True)
+
+    row = [w for w in manager.status_all() if w["topic_id"] == 8][0]
+    assert row["reject_zero"] is True
+
+    status = manager.status_worker(topic_id=8, address="allo1managed0008")
+    cmd, _ = manager._build_run_command(8, "allo1managed0008", status)
+    assert "--reject-zero" in cmd
+
+
 def test_build_run_command_managed_injects_forge_env_and_no_keyfile(tmp_path: Path):
     client = _FakeForgeClient()
     manager = _managed_manager(

@@ -243,7 +243,7 @@ class WorkerManager:
                 """
                 SELECT topic_id, COALESCE(topic_desc, ''), address, artifact_path, identity_ref, enabled, status,
                        COALESCE(last_error, ''), deployed_at, updated_at, last_pid, last_started_at, last_stopped_at, last_exit_code,
-                       COALESCE(custody, 'local'), signing_wallet_id
+                       COALESCE(custody, 'local'), signing_wallet_id, reject_zero
                 FROM workers WHERE topic_id=? AND address=?
                 """,
                 (topic_id, address),
@@ -267,6 +267,7 @@ class WorkerManager:
             "last_exit_code": row[13],
             "custody": row[14],
             "signing_wallet_id": row[15],
+            "reject_zero": bool(row[16]) if row[16] is not None else False,
         }
 
     def status_all(self, include_desc: bool = True) -> list[dict]:
@@ -371,8 +372,7 @@ class WorkerManager:
         if address:
             existing = self._worker_exists(topic_id, address)
             if existing and replace:
-                self._update_worker(topic_id, address, artifact, topic_desc)
-                current_artifact = Path(self.status_worker(topic_id, address)["artifact_path"])
+                current_artifact = self._update_worker(topic_id, address, artifact, topic_desc, reject_zero=reject_zero)
                 deployment_id = self._rotate_deployment(topic_id, address, current_artifact)
                 self._monitor_register(topic_id, address, deployment_id=deployment_id)
                 return DeployResult(
@@ -446,8 +446,11 @@ class WorkerManager:
         if self._worker_exists(topic_id, address):
             if not replace and mode == "strict":
                 raise ValueError(f"Managed worker already exists for topic={topic_id} address={address}")
-            self._update_worker(topic_id, address, artifact, topic_desc)
-            current_artifact = Path(self.status_worker(topic_id, address)["artifact_path"])
+            # Re-sync reject_zero and the freshly-provisioned wallet id so a redeploy cannot leave
+            # the row pointing at a stale flag or wallet binding.
+            current_artifact = self._update_worker(
+                topic_id, address, artifact, topic_desc, reject_zero=reject_zero, signing_wallet_id=info.id
+            )
             deployment_id = self._rotate_deployment(topic_id, address, current_artifact)
             self._monitor_register(topic_id, address, deployment_id=deployment_id)
             return DeployResult(
@@ -919,7 +922,22 @@ class WorkerManager:
         shutil.copy2(source_artifact, target_path)
         return target_path
 
-    def _update_worker(self, topic_id: int, address: str, artifact_path: Path, topic_desc: str | None) -> None:
+    def _update_worker(
+        self,
+        topic_id: int,
+        address: str,
+        artifact_path: Path,
+        topic_desc: str | None,
+        reject_zero: Optional[bool] = None,
+        signing_wallet_id: Optional[str] = None,
+    ) -> Path:
+        """Re-materialize the artifact, update the worker row, and return the new artifact path.
+
+        ``reject_zero`` and ``signing_wallet_id`` are written only when provided (non-None), so a
+        redeploy can re-sync flags that would otherwise drift while leaving them untouched when the
+        caller does not supply them. Returning the materialized path lets callers skip a redundant
+        status round-trip before rotating the deployment.
+        """
         resolved_desc = self._resolve_topic_desc(topic_id, topic_desc)
         managed_artifact = self._materialize_artifact(topic_id, address, artifact_path)
         with sqlite3.connect(self.db_path) as conn:
@@ -928,12 +946,22 @@ class WorkerManager:
                 UPDATE workers
                    SET artifact_path=?,
                        topic_desc=COALESCE(?, topic_desc),
+                       reject_zero=COALESCE(?, reject_zero),
+                       signing_wallet_id=COALESCE(?, signing_wallet_id),
                        updated_at=CURRENT_TIMESTAMP
                  WHERE topic_id=? AND address=?
                 """,
-                (str(managed_artifact), resolved_desc, topic_id, address),
+                (
+                    str(managed_artifact),
+                    resolved_desc,
+                    None if reject_zero is None else (1 if reject_zero else 0),
+                    signing_wallet_id,
+                    topic_id,
+                    address,
+                ),
             )
             conn.commit()
+        return managed_artifact
 
     def _validate_artifact_for_deploy(self, artifact_path: Path) -> None:
         """Block known-bad artifact variants from deployment.
