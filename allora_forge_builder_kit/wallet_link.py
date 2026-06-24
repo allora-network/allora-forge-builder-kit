@@ -145,7 +145,11 @@ def run_link(
     device_code = start["device_code"]
     user_code = start["user_code"]
     verification_uri_complete = start["verification_uri_complete"]
-    interval = int(start.get("interval", 5))
+    try:
+        interval = int(start.get("interval", 5))
+    except (TypeError, ValueError):
+        interval = 5
+    interval = max(1, min(interval, 60))
     challenges = {c["address"]: c["message"] for c in start.get("challenges", [])}
 
     # 2. Sign each challenge locally and submit the signatures.
