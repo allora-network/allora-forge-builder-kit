@@ -15,6 +15,7 @@ run fn), matching worker_runtime.py.
 
 import os
 import asyncio
+import math
 import traceback
 import cloudpickle
 from allora_sdk.worker import AlloraWorker
@@ -54,7 +55,16 @@ if not api_key:
 def _run_fn(ctx):
     # The branch SDK invokes the inferer callback with a RunContext; the pickled model fn
     # takes the integer nonce, so adapt via ctx.nonce.
-    return predict_fn(ctx.nonce)
+    value = predict_fn(ctx.nonce)
+    # Validate before returning so a NaN/Inf/non-numeric prediction fails loudly here instead of
+    # being silently submitted to the network (mirrors worker_runtime's production validation).
+    try:
+        v = float(value)
+    except (TypeError, ValueError) as e:
+        raise RuntimeError(f"Invalid inference output type: {value!r}") from e
+    if not math.isfinite(v):
+        raise RuntimeError(f"Invalid inference output (non-finite): {v}")
+    return v
 
 
 async def main():
