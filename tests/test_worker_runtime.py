@@ -3,11 +3,18 @@ import pytest
 from allora_forge_builder_kit import worker_runtime
 from allora_forge_builder_kit.worker_runtime import (
     _TESTNET_FAUCET_URL,
-    _artifact_expects_context,
+    _ArtifactCaller,
     _build_network,
     _resolve_wallet_cfg,
     main,
 )
+
+
+class _FakeCtx:
+    """Minimal stand-in for the SDK RunContext: only exposes the integer nonce."""
+
+    def __init__(self, nonce: int):
+        self.nonce = nonce
 
 
 def test_build_network_testnet_overrides_faucet_url():
@@ -101,33 +108,44 @@ def test_main_managed_without_forge_api_key_errors(monkeypatch):
         main()
 
 
-def test_artifact_expects_context_legacy_nonce():
+def test_artifact_caller_legacy_nonce_named_nonce():
     def legacy(nonce):
-        return 1.0
+        return float(nonce)
 
-    assert _artifact_expects_context(legacy) is False
+    assert _ArtifactCaller(legacy)(_FakeCtx(7)) == 7.0
 
 
-def test_artifact_expects_context_runcontext_by_name():
+def test_artifact_caller_legacy_nonce_named_ctx_is_not_misrouted():
+    # A legacy int-taking fn whose parameter is named `ctx` must still receive the nonce, not the
+    # RunContext object — the old name heuristic mis-routed exactly this case.
+    seen = {}
+
+    def legacy(ctx):
+        seen["arg"] = ctx
+        return float(ctx) + 1  # raises TypeError if handed a RunContext object
+
+    assert _ArtifactCaller(legacy)(_FakeCtx(4)) == 5.0
+    assert seen["arg"] == 4
+
+
+def test_artifact_caller_modern_runcontext_named_run_ctx():
+    # A modern fn that reads ctx.nonce, with a parameter name outside the old heuristic set.
+    def modern(run_ctx):
+        return float(run_ctx.nonce * 2)
+
+    assert _ArtifactCaller(modern)(_FakeCtx(3)) == 6.0
+
+
+def test_artifact_caller_caches_modern_shape_without_reprobe():
+    calls = []
+
     def modern(ctx):
-        return 1.0
+        calls.append(ctx.nonce)
+        return float(ctx.nonce)
 
-    assert _artifact_expects_context(modern) is True
-
-
-def test_artifact_expects_context_runcontext_by_annotation():
-    def modern(x: "RunContext"):  # noqa: F821 - forward ref string is the point
-        return 1.0
-
-    assert _artifact_expects_context(modern) is True
-
-
-def test_artifact_expects_context_multiarg_defaults_false():
-    def two(a, b):
-        return 1.0
-
-    assert _artifact_expects_context(two) is False
-
-
-def test_artifact_expects_context_uninspectable_defaults_false():
-    assert _artifact_expects_context(object()) is False
+    call = _ArtifactCaller(modern)
+    call(_FakeCtx(1))
+    call(_FakeCtx(2))
+    # The RunContext form succeeded on the first probe, so the shape is cached and the second
+    # call goes straight through — no fallback, each nonce seen exactly once.
+    assert calls == [1, 2]

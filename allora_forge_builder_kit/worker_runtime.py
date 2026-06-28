@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import inspect
 import math
 import os
 import warnings
@@ -73,26 +72,34 @@ def _resolve_wallet_cfg(
     return AlloraWalletConfig(mnemonic_file=mnemonic_file) if mnemonic_file else None
 
 
-def _artifact_expects_context(raw_fn: Callable[..., object]) -> bool:
-    """Return True when a pickled artifact follows the SDK's RunContext call contract.
+class _ArtifactCaller:
+    """Resolve and cache how a pickled inference artifact wants to be invoked.
 
-    Legacy kit artifacts are written as ``fn(nonce: int)``; the current SDK invokes the inferer
-    callback with a ``RunContext``. Default to the legacy nonce form and only pass the
-    ``RunContext`` when the artifact's single positional parameter is annotated as — or named
-    like — a context, preserving back-compat for the overwhelmingly common legacy artifacts.
+    The current SDK calls the inferer callback with a ``RunContext``; legacy kit artifacts are
+    written as ``fn(nonce: int)``. Rather than guess from the parameter name — which silently
+    mis-routes an artifact whose nonce argument happens to be named ``ctx`` (a common idiom), or
+    a modern artifact whose context argument is named something else — probe the actual call
+    contract: try the ``RunContext`` form first (a legacy int-taking function raises ``TypeError``
+    when handed a ``RunContext`` object), then fall back to the nonce form. The winning shape is
+    cached so the contract is resolved once, on the first invocation, not on every nonce.
     """
-    try:
-        params = [
-            p
-            for p in inspect.signature(raw_fn).parameters.values()
-            if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-        ]
-    except (TypeError, ValueError):
-        return False
-    if len(params) != 1:
-        return False
-    annotation = "" if params[0].annotation is inspect.Parameter.empty else str(params[0].annotation)
-    return "RunContext" in annotation or params[0].name in ("ctx", "context", "run_context")
+
+    def __init__(self, raw_fn: Callable[..., object]) -> None:
+        self._raw_fn = raw_fn
+        self._expects_context: bool | None = None
+
+    def __call__(self, ctx: RunContext) -> object:
+        if self._expects_context is True:
+            return self._raw_fn(ctx)
+        if self._expects_context is False:
+            return self._raw_fn(ctx.nonce)
+        try:
+            value = self._raw_fn(ctx)
+        except TypeError:
+            self._expects_context = False
+            return self._raw_fn(ctx.nonce)
+        self._expects_context = True
+        return value
 
 
 async def _run(
@@ -109,16 +116,14 @@ async def _run(
 
     Artifact contract: the pickled callable is invoked as ``fn(nonce: int)`` and must return a
     finite numeric value. Artifacts written to the newer SDK contract (``fn(ctx)`` taking a
-    ``RunContext``) are also supported; the call shape is detected once at load time.
+    ``RunContext``) are also supported; the call shape is probed and cached on the first invocation.
     """
     with open(artifact_path, "rb") as f:
         raw_fn = cloudpickle.load(f)
-    expects_context = _artifact_expects_context(raw_fn)
+    call_artifact = _ArtifactCaller(raw_fn)
 
     def run_fn(ctx: RunContext) -> float:
-        # Legacy artifacts take the integer nonce (raw_fn(ctx.nonce)); newer artifacts take the
-        # RunContext itself. The call shape is resolved once above to avoid per-nonce introspection.
-        value = raw_fn(ctx) if expects_context else raw_fn(ctx.nonce)
+        value = call_artifact(ctx)
         try:
             v = float(value)
         except Exception as e:
