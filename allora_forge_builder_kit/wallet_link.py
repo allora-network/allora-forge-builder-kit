@@ -172,7 +172,9 @@ def _post_json(url: str, payload: dict[str, Any], timeout: float = 15.0) -> dict
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read(_MAX_RESPONSE_BYTES).decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        detail = exc.read(_MAX_RESPONSE_BYTES).decode("utf-8", "replace")
+        # Filter the server-supplied error body so it can't inject terminal escapes (matches the
+        # _printable() treatment of user_code / verification_uri_complete on the success path).
+        detail = _printable(exc.read(_MAX_RESPONSE_BYTES).decode("utf-8", "replace"))
         raise SystemExit(f"request to {url} failed ({exc.code}): {detail}") from exc
     except urllib.error.URLError as exc:
         raise SystemExit(f"could not reach {url}: {exc.reason}") from exc
@@ -333,7 +335,10 @@ def run_link(
             linked = poll.get("linked", [])
             print(f"\nLinked {len(linked)} verified worker(s):")
             for addr in linked:
-                print(f"  + {addr}")
+                # Server-controlled: filter terminal escapes so a malicious 'linked' entry can't
+                # render a clickable OSC-8 hyperlink disguised as a bech32 address.
+                if isinstance(addr, str):
+                    print(f"  + {_printable(addr)}")
             return 0
         if status == "denied":
             print("\nLink request was denied in the browser.", file=sys.stderr)
