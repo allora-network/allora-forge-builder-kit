@@ -36,6 +36,9 @@ dev = [
 binance = [
     "websocket-client",
 ]
+wallet-link = [
+    "cosmpy==0.11.1",
+]
 
 [project.urls]
 Homepage = "https://github.com/allora-network/allora-forge-builder-kit"
