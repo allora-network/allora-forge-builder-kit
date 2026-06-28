@@ -557,6 +557,17 @@ class WorkerManager:
     # ----------------------------
     # Lifecycle (persistent managed process runner)
     # ----------------------------
+    @staticmethod
+    def _allora_api_key_present() -> bool:
+        """True when ALLORA_API_KEY is resolvable, mirroring worker_runtime._load_api_key.
+
+        Checks the environment first, then the ``.allora_api_key`` file fallbacks the runtime reads,
+        so this precheck matches exactly what the spawned subprocess will look for.
+        """
+        if os.environ.get("ALLORA_API_KEY"):
+            return True
+        return any(os.path.exists(p) for p in ("notebooks/.allora_api_key", ".allora_api_key"))
+
     def _build_run_command(self, topic_id: int, address: str, status: dict) -> tuple[list[str], Optional[dict[str, str]]]:
         """Build the ``worker_runtime`` argv (and subprocess env) for a worker slot.
 
@@ -575,6 +586,16 @@ class WorkerManager:
             str(status["artifact_path"]),
         ]
         env: Optional[dict[str, str]] = None
+        # ALLORA_API_KEY is required by the worker_runtime subprocess (faucet drips + topic
+        # queries). Pre-check it for both custody modes so a missing key fails loudly here —
+        # surfaced by start_worker/reconcile — instead of the subprocess raising
+        # "ALLORA_API_KEY not found" right after the DB row is marked 'running', defeating the
+        # same fail-before-running guarantee the Forge-credential prechecks provide.
+        if not self._allora_api_key_present():
+            raise ValueError(
+                f"worker topic={topic_id} address={address} requires ALLORA_API_KEY; set it in the "
+                "environment or create a .allora_api_key file before starting the worker"
+            )
         if status.get("custody") == "managed":
             # Precheck the managed credentials before spawning so a misconfigured worker fails
             # loudly here (start_worker/reconcile surface this) instead of the subprocess exiting

@@ -270,7 +270,8 @@ def test_deploy_managed_redeploy_reuses_same_wallet(tmp_path: Path):
     assert len([w for w in manager.status_all() if w["topic_id"] == 8]) == 1
 
 
-def test_managed_redeploy_syncs_reject_zero_into_db_and_command(tmp_path: Path):
+def test_managed_redeploy_syncs_reject_zero_into_db_and_command(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ALLORA_API_KEY", "test-allora-key")
     client = _FakeForgeClient()
     manager = _managed_manager(
         tmp_path,
@@ -308,7 +309,8 @@ def test_managed_auto_redeploy_reports_replaced_not_reused(tmp_path: Path):
     assert result.action == "replaced"
 
 
-def test_build_run_command_managed_injects_forge_env_and_no_keyfile(tmp_path: Path):
+def test_build_run_command_managed_injects_forge_env_and_no_keyfile(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ALLORA_API_KEY", "test-allora-key")
     client = _FakeForgeClient()
     manager = _managed_manager(
         tmp_path,
@@ -334,7 +336,8 @@ def test_build_run_command_managed_injects_forge_env_and_no_keyfile(tmp_path: Pa
     assert env["FORGE_SIGNING_WALLET_ID"] == "wallet-7"
 
 
-def test_build_run_command_managed_without_signing_wallet_id_raises(tmp_path: Path):
+def test_build_run_command_managed_without_signing_wallet_id_raises(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ALLORA_API_KEY", "test-allora-key")
     client = _FakeForgeClient()
     manager = _managed_manager(
         tmp_path,
@@ -473,6 +476,7 @@ def test_managed_env_from_build_run_command_constructs_wallet_config(tmp_path: P
     import allora_sdk.rpc_client.remote_signer as rs
     from allora_sdk.rpc_client.config import AlloraWalletConfig
 
+    monkeypatch.setenv("ALLORA_API_KEY", "test-allora-key")
     client = _FakeForgeClient()
     manager = _managed_manager(
         tmp_path,
