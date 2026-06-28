@@ -571,6 +571,12 @@ class WorkerManager:
                 )
             cmd.extend(["--custody", "managed"])
             env = os.environ.copy()
+            # Strip inherited local-key env vars before injecting the Forge credentials: the
+            # sibling SDK's AlloraWalletConfig.from_env() hard-raises when FORGE_API_KEY +
+            # FORGE_SIGNING_WALLET_ID coexist with any of these, so a parent shell / systemd unit
+            # that still exports a local key would otherwise crash every managed worker at startup.
+            for _local_key_var in ("PRIVATE_KEY", "MNEMONIC", "MNEMONIC_FILE"):
+                env.pop(_local_key_var, None)
             env["FORGE_API_KEY"] = self._forge_api_key
             env["FORGE_BACKEND_URL"] = self._forge_backend_url
             # Pin the exact provisioned wallet (the DB row already stores it) so the worker signs
