@@ -255,9 +255,23 @@ class WorkerManager:
         self._monitor_register(spec.topic_id, spec.address, deployment_id=deployment_id)
 
     def remove_worker(self, topic_id: int, address: str, force: bool = False) -> None:
-        if force:
-            self.stop_worker(topic_id, address)
         custody, signing_wallet_id = self._get_custody(topic_id, address)
+        # Stop the running process before tearing down local state and the backend binding.
+        # Managed custody always stops first (best-effort): a still-running subprocess would
+        # otherwise keep submitting with a wallet we are about to unbind server-side, and a later
+        # redeploy could provision a second wallet for the same topic — two active workers. Local
+        # custody keeps its force-gated stop. The stop is best-effort so a dead/unknown process
+        # never blocks decommission.
+        if force or custody == "managed":
+            try:
+                self.stop_worker(topic_id, address)
+            except Exception as e:  # noqa: BLE001 - a dead/unknown process must not block removal
+                logger.warning(
+                    "stop before remove failed for topic=%s address=%s: %s; removing anyway",
+                    topic_id,
+                    address,
+                    e,
+                )
         self._archive_active_deployment(topic_id, address)
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("DELETE FROM workers WHERE topic_id=? AND address=?", (topic_id, address))
