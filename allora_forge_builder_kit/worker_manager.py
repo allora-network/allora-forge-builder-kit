@@ -378,7 +378,9 @@ class WorkerManager:
         topic_desc: str | None = None,
         replace: bool = False,
         mode: str = "auto",
-        reject_zero: bool = False,
+        # None = preserve the row's existing flag on redeploy; False/True = set it explicitly.
+        # New workers default to False (coerced at the WorkerSpec create sites below).
+        reject_zero: bool | None = None,
         custody: CustodyMode = "local",
     ) -> DeployResult:
         artifact = Path(artifact_path)
@@ -428,7 +430,7 @@ class WorkerManager:
                     raise ValueError(f"Worker already exists for topic={topic_id} address={address}")
                 # auto mode: allocate alternate identity/address
                 ident, _ = self._pick_or_create_identity_for_topic(topic_id)
-                spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias, reject_zero=reject_zero)
+                spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias, reject_zero=bool(reject_zero))
                 self.add_worker(spec)
                 return DeployResult(
                     topic_id=topic_id,
@@ -443,7 +445,7 @@ class WorkerManager:
 
             ident = self.ensure_identity(alias=identity_alias, address=address, mnemonic=mnemonic)
             action = "reused" if self._address_has_other_topics(ident.address) else "created"
-            spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias, reject_zero=reject_zero)
+            spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias, reject_zero=bool(reject_zero))
             self.add_worker(spec)
             return DeployResult(
                 topic_id=topic_id,
@@ -456,7 +458,7 @@ class WorkerManager:
         # Auto address path: reuse free identity first, else create new
         ident, created = self._pick_or_create_identity_for_topic(topic_id)
         action = "created" if created else "reused"
-        spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias, reject_zero=reject_zero)
+        spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias, reject_zero=bool(reject_zero))
         self.add_worker(spec)
         return DeployResult(
             topic_id=topic_id,
@@ -473,7 +475,7 @@ class WorkerManager:
         topic_desc: str | None,
         replace: bool,
         mode: str,
-        reject_zero: bool,
+        reject_zero: bool | None,
     ) -> DeployResult:
         """Provision (idempotent get-or-create) a managed Privy wallet bound to ``topic_id`` and
         register a managed worker against its backend-assigned address. One wallet per topic, so a
@@ -520,7 +522,7 @@ class WorkerManager:
             # managed workers have no identities row, so use a sentinel rather than overloading it
             # with the Privy wallet UUID. signing_wallet_id stays the canonical wallet identifier.
             "managed",
-            reject_zero=reject_zero,
+            reject_zero=bool(reject_zero),
             custody="managed",
             signing_wallet_id=info.id,
         )
