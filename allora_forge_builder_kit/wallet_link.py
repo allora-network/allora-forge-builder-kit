@@ -128,6 +128,14 @@ def discover_keys(secrets_path: str | Path) -> dict[str, _KeyEntry]:
         # instead of masking it as the "no worker keys, create one" case.
         print(f"could not read worker secrets at {secrets_path}: {exc}", file=sys.stderr)
         return {}
+    if not isinstance(raw, dict):
+        # Valid JSON whose root is a list/scalar would crash on raw.items(); treat a
+        # malformed-but-parseable secrets file as "no keys" rather than raising.
+        print(
+            f"worker secrets at {secrets_path} is not a JSON object; ignoring",
+            file=sys.stderr,
+        )
+        return {}
     base = os.path.dirname(os.path.abspath(path))
     return {
         entry["address"]: {
