@@ -167,7 +167,7 @@ def main() -> None:
             "FORGE_API_KEY from the environment"
         )
 
-    if args.custody == "managed" and not os.environ.get("FORGE_API_KEY"):
+    if args.custody == "managed" and not os.environ.get("FORGE_API_KEY", "").strip():
         parser.error(
             "--custody managed requires FORGE_API_KEY in the environment "
             "(the SDK provisions a topic-bound managed wallet from it)"
