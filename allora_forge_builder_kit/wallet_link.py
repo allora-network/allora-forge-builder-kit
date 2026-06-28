@@ -142,14 +142,24 @@ def discover_keys(secrets_path: str | Path) -> dict[str, _KeyEntry]:
         )
         return {}
     base = os.path.dirname(os.path.abspath(path))
-    return {
-        entry["address"]: {
+    # Keyed by address; warn (rather than silently overwrite) when two aliases share an address,
+    # since the second would otherwise win invisibly — a footgun combined with relative key_files.
+    keys: dict[str, _KeyEntry] = {}
+    for alias, entry in raw.items():
+        if not (isinstance(entry, dict) and entry.get("address") and entry.get("key_file")):
+            continue
+        address = entry["address"]
+        if address in keys:
+            print(
+                f"warning: duplicate address {address} in {secrets_path}; "
+                f"alias {alias!r} overrides {keys[address]['alias']!r}",
+                file=sys.stderr,
+            )
+        keys[address] = {
             "alias": alias,
-            "key_file": _checked_key_file(base, entry["address"], entry["key_file"]),
+            "key_file": _checked_key_file(base, address, entry["key_file"]),
         }
-        for alias, entry in raw.items()
-        if isinstance(entry, dict) and entry.get("address") and entry.get("key_file")
-    }
+    return keys
 
 
 def _post_json(url: str, payload: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
