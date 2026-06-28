@@ -154,7 +154,7 @@ class WorkerManager:
         self._no_faucet = no_faucet
         self._forge_api_key = forge_api_key or os.environ.get("FORGE_API_KEY")
         self._forge_backend_url = forge_backend_url or os.environ.get("FORGE_BACKEND_URL")
-        self._forge_client_obj = forge_client
+        self._forge_client_cache = forge_client
         self._lock = threading.RLock()
         self._runners: dict[tuple[int, str], dict] = {}
         self._init_db()
@@ -171,8 +171,8 @@ class WorkerManager:
         managed deploy fails loudly instead of silently falling back to local custody.
         """
         # Fast path: an already-built (or test-injected) client needs no lock.
-        if self._forge_client_obj is not None:
-            return self._forge_client_obj
+        if self._forge_client_cache is not None:
+            return self._forge_client_cache
         if not self._forge_api_key or not self._forge_backend_url:
             raise ValueError(
                 "managed custody requires a Forge API key and backend URL; set "
@@ -194,9 +194,9 @@ class WorkerManager:
         # loser (its Session is released on GC).
         client = ForgeBackendClient(self._forge_backend_url, self._forge_api_key)
         with self._lock:
-            if self._forge_client_obj is None:
-                self._forge_client_obj = client
-            return self._forge_client_obj
+            if self._forge_client_cache is None:
+                self._forge_client_cache = client
+            return self._forge_client_cache
 
     # ----------------------------
     # Identity handling
