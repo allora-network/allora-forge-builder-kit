@@ -97,7 +97,12 @@ def sign_challenge(mnemonic: str, address: str, message: str) -> tuple[str, str]
 
 
 def _checked_key_file(base: str, address: str, key_file: str) -> str:
-    """Warn (without rejecting) when a secrets key_file resolves outside the secrets dir."""
+    """Resolve a secrets key_file against the secrets dir, warning when it escapes that dir.
+
+    Returns the absolute path so a relative key_file is read against the secrets file's location
+    (not the caller's cwd); without this, a non-default ``--secrets-path`` would make wallet-link
+    read/check the wrong key file.
+    """
     kf = Path(key_file).expanduser()
     kf_abs = os.path.abspath(kf if kf.is_absolute() else Path(base) / kf)
     try:
@@ -113,7 +118,7 @@ def _checked_key_file(base: str, address: str, key_file: str) -> str:
             f"{base}; reading it anyway ({key_file})",
             file=sys.stderr,
         )
-    return key_file
+    return kf_abs
 
 
 def discover_keys(secrets_path: str | Path) -> dict[str, _KeyEntry]:
