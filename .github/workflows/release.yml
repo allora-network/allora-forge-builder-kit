@@ -24,7 +24,10 @@ jobs:
       - name: Guard against unreleased local SDK source
         run: |
           set -euo pipefail
-          if grep -qE '^[[:space:]]*\[tool\.uv\.sources' pyproject.toml; then
+          # Parse the TOML rather than grep for a header: a grep anchored on "[tool.uv.sources"
+          # misses semantically equivalent forms (inline "[tool.uv]" with a "sources = {...}" key,
+          # dotted/quoted keys, etc.) that would still redirect allora-sdk to the local worktree.
+          if python -c "import tomllib, sys; data = tomllib.load(open('pyproject.toml', 'rb')); sys.exit(0 if 'sources' in data.get('tool', {}).get('uv', {}) else 1)"; then
             echo "::error file=pyproject.toml::[tool.uv.sources] is still present; it pins allora-sdk to the local ../allora-sdk-py worktree and must be removed before publishing (gated on the allora-sdk PyPI release, ENGN-8646)."
             exit 1
           fi
