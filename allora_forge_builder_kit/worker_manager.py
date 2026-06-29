@@ -171,6 +171,9 @@ class WorkerManager:
         # a degraded backend makes each timed-out teardown leave a thread blocked on the SDK call, so
         # without a cap a batch teardown would accumulate unbounded stuck threads.
         self._cleanup_sem = threading.BoundedSemaphore(8)
+        # Same cap for in-flight provision daemon threads (see _provision_wallet_bounded). Kept
+        # separate from _cleanup_sem so teardown pressure can't fail deploys and vice-versa.
+        self._provision_sem = threading.BoundedSemaphore(8)
         self._runners: dict[tuple[int, str], dict] = {}
         self._init_db()
         if reconcile_on_start:
@@ -378,19 +381,37 @@ class WorkerManager:
         must not proceed without a wallet, so a timeout raises ``TimeoutError``. A background thread
         that completes after the timeout only leaves an idempotent get-or-create binding the next
         deploy reuses.
+
+        A ``BoundedSemaphore`` caps how many such timed-out-but-still-running threads can accumulate
+        against a degraded backend; once the cap is reached a further deploy raises ``TimeoutError``
+        rather than spawning yet another stuck thread.
         """
         result: dict[str, Any] = {}
+
+        if not self._provision_sem.acquire(blocking=False):
+            raise TimeoutError(
+                f"too many in-flight managed-wallet provisions; refusing to provision topic "
+                f"{topic_id} (the Forge backend may be degraded)"
+            )
 
         def _provision() -> None:
             try:
                 result["wallet"] = client.provision_wallet(topic_id, label=label)
             except BaseException as e:  # noqa: BLE001 - surfaced via result; must not escape the thread
                 result["error"] = e
+            finally:
+                self._provision_sem.release()
 
         worker = threading.Thread(
             target=_provision, name=f"provision-wallet-topic-{topic_id}", daemon=True
         )
-        worker.start()
+        try:
+            worker.start()
+        except BaseException:
+            # Thread.start() can raise (e.g. "can't start new thread" under resource exhaustion)
+            # before _provision runs, so release the slot here or it would leak permanently.
+            self._provision_sem.release()
+            raise
         worker.join(timeout)
         if worker.is_alive():
             raise TimeoutError(

@@ -335,6 +335,37 @@ def test_provision_wallet_bounded_propagates_backend_error(tmp_path: Path):
         manager._provision_wallet_bounded(client, 7, "label", timeout=5.0)
 
 
+def test_provision_wallet_bounded_releases_slot_on_success(tmp_path: Path):
+    # A successful provision releases its slot, so many sequential deploys never exhaust the cap.
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    for _ in range(20):  # > the BoundedSemaphore(8) cap
+        manager._provision_wallet_bounded(client, 7, "label", timeout=5.0)
+
+
+def test_provision_wallet_bounded_caps_in_flight_threads(tmp_path: Path):
+    # Once all slots are held by hung provisions, a further call is refused immediately rather than
+    # accumulating another uncancellable stuck thread.
+    import threading
+
+    release = threading.Event()
+
+    class _HangingClient(_FakeForgeClient):
+        def provision_wallet(self, topic_id: int, label: str | None = None):
+            release.wait(30)
+
+    client = _HangingClient()
+    manager = _managed_manager(tmp_path, client)
+    try:
+        for _ in range(8):  # saturate the cap with timed-out-but-still-running threads
+            with pytest.raises(TimeoutError):
+                manager._provision_wallet_bounded(client, 7, "label", timeout=0.05)
+        with pytest.raises(TimeoutError, match="too many in-flight"):
+            manager._provision_wallet_bounded(client, 7, "label", timeout=5.0)
+    finally:
+        release.set()  # let the hung daemon threads exit
+
+
 def test_artifact_sha256_streams_correctly(tmp_path: Path):
     # The streamed (chunked) digest must equal a one-shot hash over the full bytes, including a file
     # that spans multiple 64 KiB chunks.
