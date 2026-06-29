@@ -499,11 +499,31 @@ class WorkerManager:
         topic_desc: str | None = None,
         replace: bool = False,
         mode: str = "auto",
-        # None = preserve the row's existing flag on redeploy; False/True = set it explicitly.
-        # New workers default to False (coerced at the WorkerSpec create sites below).
         reject_zero: bool | None = None,
         custody: CustodyMode = "local",
     ) -> DeployResult:
+        """Deploy (or redeploy) a worker for ``topic_id`` from ``artifact_path``.
+
+        Args:
+            topic_id: Allora topic the worker submits to.
+            artifact_path: Pickled inference artifact to deploy.
+            address: Explicit local-custody address to bind; rejected under ``custody='managed'``.
+            mnemonic: Mnemonic to import a new local identity (local custody only).
+            identity_alias: Alias for a newly-imported local identity (local custody only).
+            topic_desc: Optional human-readable topic description override.
+            replace: When *True*, rotate the artifact on an existing worker instead of
+                conflicting / auto-assigning.
+            mode: ``'auto'`` (allocate an alternate address on conflict) or ``'strict'``
+                (raise if a worker already exists).
+            reject_zero: ``None`` preserves the row's existing flag on redeploy; ``False`` / ``True``
+                sets it explicitly. New workers default to ``False`` (coerced at the WorkerSpec
+                create sites below).
+            custody: ``'local'`` (self-custodial key file) or ``'managed'`` (Forge-provisioned
+                Privy wallet bound to the topic).
+
+        Returns:
+            A :class:`DeployResult` describing the assigned address and the action taken.
+        """
         artifact = Path(artifact_path)
         if not artifact.exists():
             raise FileNotFoundError(f"Artifact not found: {artifact}")
