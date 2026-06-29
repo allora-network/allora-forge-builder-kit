@@ -750,6 +750,24 @@ def test_release_managed_binding_caps_concurrent_threads(tmp_path: Path):
     assert client.cleared == []  # skipped (cap reached), not cleared, and no thread spawned
 
 
+def test_release_managed_binding_releases_slot_when_thread_start_fails(tmp_path: Path, monkeypatch):
+    """If Thread.start() raises before _clear runs, the acquired cleanup slot must be released
+    rather than leaked (otherwise the cap silently shrinks until all releases are disabled)."""
+    import threading
+
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+
+    def _boom(self):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(threading.Thread, "start", _boom)
+    manager._release_managed_binding("wallet-x", topic_id=1, timeout=0.1)
+    # All 8 slots are free again: the acquire was rolled back on the start() failure.
+    for _ in range(8):
+        assert manager._cleanup_sem.acquire(blocking=False)
+
+
 def test_deploy_managed_rejects_malformed_backend_wallet(tmp_path: Path):
     class _BadClient(_FakeForgeClient):
         def provision_wallet(self, topic_id: int, label: str | None = None):

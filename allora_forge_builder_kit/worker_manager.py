@@ -351,7 +351,19 @@ class WorkerManager:
         worker = threading.Thread(
             target=_clear, name=f"clear-association-{signing_wallet_id}", daemon=True
         )
-        worker.start()
+        try:
+            worker.start()
+        except BaseException:
+            # Thread.start() can raise (e.g. "can't start new thread" under resource exhaustion)
+            # before _clear runs, so the finally that releases the slot never fires; release here
+            # or the cap silently shrinks until all backend releases are disabled for the process.
+            self._cleanup_sem.release()
+            logger.warning(
+                "failed to start clear-association thread for managed wallet %s (topic %s); "
+                "released the cleanup slot, stale binding is reused on the next deploy",
+                signing_wallet_id, topic_id,
+            )
+            return
         worker.join(timeout)
         if worker.is_alive():
             logger.warning(
