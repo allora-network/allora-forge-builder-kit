@@ -160,8 +160,11 @@ class WorkerManager:
         self.key_dir.mkdir(parents=True, exist_ok=True)
         self._network = network
         self._no_faucet = no_faucet
-        self._forge_api_key = forge_api_key or os.environ.get("FORGE_API_KEY")
-        self._forge_backend_url = forge_backend_url or os.environ.get("FORGE_BACKEND_URL")
+        # Strip and coerce empty/whitespace-only to None: _build_run_command's truthiness guard
+        # otherwise passes a whitespace-only value, spawning a subprocess whose worker_runtime
+        # strict .strip() check fails immediately — after the DB row was already marked 'running'.
+        self._forge_api_key = (forge_api_key or os.environ.get("FORGE_API_KEY") or "").strip() or None
+        self._forge_backend_url = (forge_backend_url or os.environ.get("FORGE_BACKEND_URL") or "").strip() or None
         self._forge_client_cache = forge_client
         self._lock = threading.RLock()
         # Bounds concurrent in-flight clear-association daemon threads (see _release_managed_binding):
