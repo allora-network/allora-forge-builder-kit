@@ -127,6 +127,51 @@ def test_submit_rejection_none_when_no_rejections():
     assert _submit_rejection({}) is None
 
 
+def test_jsonposter_selects_https_proxy_from_env(monkeypatch):
+    from allora_forge_builder_kit import wallet_link
+
+    monkeypatch.setattr(wallet_link.urllib.request, "getproxies", lambda: {"https": "http://proxy.local:3128"})
+    monkeypatch.setattr(wallet_link.urllib.request, "proxy_bypass", lambda host: False)
+    poster = wallet_link._JsonPoster("https://forge.example.com")
+    assert poster._proxy == ("proxy.local", 3128)
+
+
+def test_jsonposter_no_proxy_when_env_unset(monkeypatch):
+    from allora_forge_builder_kit import wallet_link
+
+    monkeypatch.setattr(wallet_link.urllib.request, "getproxies", lambda: {})
+    monkeypatch.setattr(wallet_link.urllib.request, "proxy_bypass", lambda host: False)
+    poster = wallet_link._JsonPoster("https://forge.example.com")
+    assert poster._proxy is None
+
+
+def test_jsonposter_respects_no_proxy_bypass(monkeypatch):
+    from allora_forge_builder_kit import wallet_link
+
+    monkeypatch.setattr(wallet_link.urllib.request, "getproxies", lambda: {"https": "http://proxy.local:3128"})
+    monkeypatch.setattr(wallet_link.urllib.request, "proxy_bypass", lambda host: True)
+    poster = wallet_link._JsonPoster("https://forge.example.com")
+    assert poster._proxy is None
+
+
+def test_jsonposter_connect_tunnels_https_through_proxy(monkeypatch):
+    from allora_forge_builder_kit import wallet_link
+
+    monkeypatch.setattr(wallet_link.urllib.request, "getproxies", lambda: {"https": "http://proxy.local:3128"})
+    monkeypatch.setattr(wallet_link.urllib.request, "proxy_bypass", lambda host: False)
+    poster = wallet_link._JsonPoster("https://forge.example.com:8443")
+    conn = poster._connect()
+    try:
+        # The socket targets the proxy; the CONNECT tunnel points at the real Forge host so TLS is
+        # still validated against it.
+        assert conn.host == "proxy.local"
+        assert conn.port == 3128
+        assert conn._tunnel_host == "forge.example.com"
+        assert conn._tunnel_port == 8443
+    finally:
+        conn.close()
+
+
 def test_sign_challenge_address_mismatch():
     """A mnemonic whose address differs from the requested one is rejected."""
     pytest.importorskip("cosmpy")

@@ -261,9 +261,10 @@ class _JsonPoster:
 
     The device-flow poll loop hits a single Forge host up to ~120 times; ``urllib`` opens a
     fresh TCP+TLS connection per call, so reusing one connection removes a handshake per poll.
-    This mirrors ``_post_json``'s bounded read, error sanitization, and ``SystemExit``-on-failure
-    so the poll loop's existing transient-error handling is unchanged. A server that closed an
-    idle keep-alive connection between polls is handled by one transparent reconnect.
+    This mirrors ``_post_json``'s bounded read, error sanitization, ``SystemExit``-on-failure, and
+    proxy resolution (HTTP(S)_PROXY / NO_PROXY) so the poll loop's existing transient-error handling
+    and proxied environments both keep working. A server that closed an idle keep-alive connection
+    between polls is handled by one transparent reconnect.
     """
 
     def __init__(self, base_url: str, timeout: float = 15.0) -> None:
@@ -273,15 +274,53 @@ class _JsonPoster:
         self._https = parts.scheme != "http"
         self._timeout = timeout
         self._conn: http.client.HTTPConnection | None = None
+        # http.client does not read proxy env vars, so resolve the proxy the way urllib (used by
+        # _post_json for /start and /submit) does. Without this the keep-alive poll connection
+        # would silently go direct and hang/fail behind a corporate HTTP(S) proxy.
+        self._proxy = self._select_proxy(base_url, self._https)
+
+    @staticmethod
+    def _select_proxy(base_url: str, https: bool) -> tuple[str, int | None] | None:
+        """Resolve the (host, port) proxy for base_url from the environment.
+
+        Returns None for a direct connection, including when the host matches NO_PROXY. Mirrors
+        urllib's resolution (``getproxies`` + ``proxy_bypass``) so the poll path honors the same
+        proxy configuration as the urllib-based start/submit requests.
+        """
+        host = urlsplit(base_url).hostname or ""
+        if urllib.request.proxy_bypass(host):
+            return None
+        proxies = urllib.request.getproxies()
+        proxy_url = proxies.get("https" if https else "http") or proxies.get("all")
+        if not proxy_url:
+            return None
+        parsed = urlsplit(proxy_url if "://" in proxy_url else f"//{proxy_url}", scheme="http")
+        if not parsed.hostname:
+            return None
+        return (parsed.hostname, parsed.port)
 
     def _connect(self) -> http.client.HTTPConnection:
+        if self._proxy is not None:
+            proxy_host, proxy_port = self._proxy
+            if self._https:
+                # CONNECT-tunnel the TLS session through the proxy so the certificate is still
+                # validated against the real Forge host rather than the proxy.
+                conn = http.client.HTTPSConnection(proxy_host, proxy_port, timeout=self._timeout)
+                conn.set_tunnel(self._host, self._port)
+                return conn
+            return http.client.HTTPConnection(proxy_host, proxy_port, timeout=self._timeout)
         if self._https:
             return http.client.HTTPSConnection(self._host, self._port, timeout=self._timeout)
         return http.client.HTTPConnection(self._host, self._port, timeout=self._timeout)
 
     def post(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         """POST JSON to url over the held connection; raises SystemExit on HTTP/network errors."""
-        path = urlsplit(url).path or "/"
+        # Through a plain-HTTP proxy the request line must carry the absolute URL (RFC 7230 5.3.2);
+        # direct and HTTPS-tunneled connections use the origin-form path.
+        if self._proxy is not None and not self._https:
+            request_target = url
+        else:
+            request_target = urlsplit(url).path or "/"
         body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         # One transparent reconnect: the server may have closed an idle keep-alive connection
@@ -290,7 +329,7 @@ class _JsonPoster:
             if self._conn is None:
                 self._conn = self._connect()
             try:
-                self._conn.request("POST", path, body=body, headers=headers)
+                self._conn.request("POST", request_target, body=body, headers=headers)
                 resp = self._conn.getresponse()
                 data = resp.read(_MAX_RESPONSE_BYTES)
                 if resp.status >= 400:
