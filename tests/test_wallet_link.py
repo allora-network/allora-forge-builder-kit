@@ -47,6 +47,25 @@ def test_discover_keys_missing_file(tmp_path):
     assert discover_keys(str(tmp_path / "nope.json")) == {}
 
 
+def test_discover_keys_skips_non_string_entries(tmp_path):
+    # A tampered/malformed secrets file with non-string address/key_file must be skipped with a
+    # clean result, not crash inside _checked_key_file on Path(<int>) (only json/OSError are caught).
+    key_file = tmp_path / "w.key"
+    key_file.write_text("mnemonic")
+    secrets = tmp_path / "worker_secrets.json"
+    secrets.write_text(
+        json.dumps(
+            {
+                "bad_addr": {"address": 123, "key_file": str(key_file)},
+                "bad_kf": {"address": "allo1bad", "key_file": 456},
+                "good": {"address": "allo1good", "key_file": str(key_file)},
+            }
+        )
+    )
+    keys = discover_keys(str(secrets))
+    assert set(keys) == {"allo1good"}
+
+
 def test_sign_roundtrip_with_cosmpy():
     """sign_challenge must round-trip against the address derived from the key,
     and produce a 33-byte pubkey + 64-byte signature the Go verifier accepts."""

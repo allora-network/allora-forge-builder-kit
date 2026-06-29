@@ -151,9 +151,15 @@ def discover_keys(secrets_path: str | Path) -> dict[str, _KeyEntry]:
     # since the second would otherwise win invisibly — a footgun combined with relative key_files.
     keys: dict[str, _KeyEntry] = {}
     for alias, entry in raw.items():
-        if not (isinstance(entry, dict) and entry.get("address") and entry.get("key_file")):
+        if not isinstance(entry, dict):
             continue
-        address = entry["address"]
+        address = entry.get("address")
+        key_file = entry.get("key_file")
+        # Require strings (not just truthy): a tampered secrets file with non-string values
+        # (e.g. {"address": 123}) would otherwise reach _checked_key_file and crash on
+        # Path(123), defeating the documented "warn, skip" handling for a malformed file.
+        if not (isinstance(address, str) and address and isinstance(key_file, str) and key_file):
+            continue
         if address in keys:
             print(
                 f"warning: duplicate address {address} in {secrets_path}; "
@@ -162,7 +168,7 @@ def discover_keys(secrets_path: str | Path) -> dict[str, _KeyEntry]:
             )
         keys[address] = {
             "alias": alias,
-            "key_file": _checked_key_file(base, address, entry["key_file"]),
+            "key_file": _checked_key_file(base, address, key_file),
         }
     return keys
 
