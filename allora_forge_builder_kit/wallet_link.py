@@ -242,7 +242,8 @@ def _submit_rejection(submit: dict[str, Any]) -> str | None:
     """Return a user-facing message if /device/submit reported rejected signatures, else None.
 
     The server can return HTTP 200 while rejecting individual signatures (e.g.
-    ``{"rejected": [{"address", "reason"}]}``) or signalling a top-level ``error``. Surfacing it
+    ``{"rejected": [{"address": "allo1...", "reason": "..."}]}``) or signalling a top-level
+    ``error``. Surfacing it
     here lets the caller bail before the poll loop instead of waiting out the full deadline only to
     report ``Linked 0 worker(s)``. Server strings are filtered through ``_printable``.
     """
