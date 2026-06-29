@@ -11,6 +11,7 @@ from allora_forge_builder_kit.wallet_link import (
     _RequestError,
     _is_terminal_poll_error,
     _loads_json_object,
+    _submit_rejection,
     build_adr036_sign_doc,
     discover_keys,
 )
@@ -107,6 +108,23 @@ def test_post_json_http_error_carries_status(monkeypatch):
     with pytest.raises(_RequestError) as excinfo:
         wallet_link._post_json("https://forge.example", {})
     assert excinfo.value.status == 404
+
+
+def test_submit_rejection_reports_rejected_signatures():
+    msg = _submit_rejection({"rejected": [{"address": "allo1abc", "reason": "bad signature"}]})
+    assert msg is not None
+    assert "allo1abc" in msg
+    assert "bad signature" in msg
+
+
+def test_submit_rejection_reports_top_level_error():
+    assert _submit_rejection({"error": "device code mismatch"}) is not None
+
+
+def test_submit_rejection_none_when_no_rejections():
+    assert _submit_rejection({"linked": []}) is None
+    assert _submit_rejection({"rejected": []}) is None
+    assert _submit_rejection({}) is None
 
 
 def test_sign_challenge_address_mismatch():

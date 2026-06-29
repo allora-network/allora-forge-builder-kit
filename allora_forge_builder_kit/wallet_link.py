@@ -232,6 +232,30 @@ def _printable(text: str) -> str:
     return "".join(c for c in text if c.isprintable())
 
 
+def _submit_rejection(submit: dict[str, Any]) -> str | None:
+    """Return a user-facing message if /device/submit reported rejected signatures, else None.
+
+    The server can return HTTP 200 while rejecting individual signatures (e.g.
+    ``{"rejected": [{"address", "reason"}]}``) or signalling a top-level ``error``. Surfacing it
+    here lets the caller bail before the poll loop instead of waiting out the full deadline only to
+    report ``Linked 0 worker(s)``. Server strings are filtered through ``_printable``.
+    """
+    rejected = submit.get("rejected")
+    if isinstance(rejected, list) and rejected:
+        lines = ["Server rejected one or more worker signatures:"]
+        for item in rejected:
+            if not isinstance(item, dict):
+                continue
+            addr = _printable(str(item.get("address", "?")))
+            reason = _printable(str(item.get("reason", "no reason given")))
+            lines.append(f"  - {addr}: {reason}")
+        return "\n".join(lines)
+    error = submit.get("error")
+    if error:
+        return f"Server rejected the signature submission: {_printable(str(error))}"
+    return None
+
+
 class _JsonPoster:
     """Reusable JSON poster that holds one keep-alive connection to a fixed host.
 
@@ -398,10 +422,14 @@ def run_link(
             {"address": address, "pubkey": pubkey_b64, "signature": signature_b64}
         )
 
-    _post_json(
+    submit = _post_json(
         f"{forge_url}/api/v1/wallet-link/device/submit",
         {"device_code": device_code, "signatures": signatures},
     )
+    rejection = _submit_rejection(submit)
+    if rejection is not None:
+        print(rejection, file=sys.stderr)
+        return 1
 
     # 3. Hand off to the browser for the logged-in user to approve.
     print()
