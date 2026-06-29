@@ -396,12 +396,10 @@ class _JsonPoster:
             request_target = urlsplit(url).path or "/"
         body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
-        # A plain-HTTP proxy expects Proxy-Authorization on the (absolute-form) request itself; for
-        # HTTPS the credentials already rode the CONNECT tunnel in _connect().
+        # Plain-HTTP proxy: auth rides the request; HTTPS auth already rode the CONNECT tunnel.
         if self._proxy is not None and not self._https and self._proxy_auth:
             headers["Proxy-Authorization"] = self._proxy_auth
-        # One transparent reconnect: the server may have closed an idle keep-alive connection
-        # between polls, which only surfaces as a connection error when the next request reuses it.
+        # Retry once: the server may have dropped an idle keep-alive connection between polls.
         for attempt in (1, 2):
             if self._conn is None:
                 self._conn = self._connect()
@@ -411,9 +409,8 @@ class _JsonPoster:
                 data = resp.read(_MAX_RESPONSE_BYTES)
                 if resp.status >= 400:
                     detail = _printable(data.decode("utf-8", "replace"))
-                    # Close before raising: _RequestError is a BaseException the surrounding
-                    # except (HTTPException, OSError) won't catch, so the connection would otherwise
-                    # be reused with a possibly-undrained body and defeat keep-alive on the next poll.
+                    # Close before raising: _RequestError (a BaseException) escapes the except below,
+                    # so an undrained connection would defeat keep-alive.
                     self.close()
                     raise _RequestError(f"request to {url} failed ({resp.status}): {detail}", status=resp.status)
                 return _loads_json_object(url, data.decode("utf-8", "replace"))

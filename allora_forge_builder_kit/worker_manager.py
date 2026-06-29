@@ -721,11 +721,7 @@ class WorkerManager:
             active_hash = self._get_active_deployment_hash(topic_id, address)
             identical = active_hash is not None and active_hash == new_hash
 
-            # Idempotent re-run: identical artifact AND no explicit replace. Leave the running
-            # artifact in place (no rotation) but still re-sync the worker-row metadata
-            # (reject_zero + the freshly-provisioned signing_wallet_id, and topic_desc) so the row
-            # never drifts from the fresh provision. An explicit replace=True is honored instead
-            # and falls through to the rotate path below — the caller asked to rotate.
+            # Idempotent re-run: identical hash, no replace -> keep the artifact, re-sync row metadata.
             if identical and not replace:
                 self._sync_worker_metadata(
                     topic_id, address, topic_desc, reject_zero=reject_zero, signing_wallet_id=info.id
@@ -738,18 +734,15 @@ class WorkerManager:
                     message=f"Reused managed worker for topic {topic_id} (wallet {address}); artifact unchanged, metadata re-synced",
                 )
 
-            # synth-009: a different artifact — or a legacy active deployment with no recorded hash,
-            # treated conservatively as unknown — must not silently overwrite the running deployment.
-            # Require an explicit replace=True, even in auto mode.
+            # synth-009: a different/unknown-hash artifact must not silently overwrite a running
+            # deployment; require explicit replace=True even in auto mode.
             if not replace:
                 raise ValueError(
                     f"Managed worker for topic {topic_id} (wallet {address}) already has an active "
                     "deployment with a different (or unknown) artifact; pass replace=True to rotate it"
                 )
 
-            # Explicit replace (or a genuinely different artifact): rotate the artifact on the
-            # one-per-topic wallet. Re-sync reject_zero and the freshly-provisioned wallet id so a
-            # redeploy cannot leave the row pointing at a stale flag or wallet binding.
+            # Explicit replace (or different artifact): rotate, re-syncing reject_zero + wallet id.
             current_artifact = self._update_worker(
                 topic_id, address, artifact, topic_desc, reject_zero=reject_zero, signing_wallet_id=info.id
             )
