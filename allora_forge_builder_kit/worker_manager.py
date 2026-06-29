@@ -205,6 +205,10 @@ class WorkerManager:
                 "$FORGE_API_KEY and $FORGE_BACKEND_URL or pass forge_api_key/forge_backend_url"
             )
         # Imported lazily: local-custody installs need not import the SDK signing client.
+        # @@TODO: this targets the internal module allora_sdk.rpc_client.remote_signer; an SDK
+        # refactor moving ForgeBackendClient would silently break it. allora-sdk-py should add a
+        # public re-export (allora_sdk.ForgeBackendClient) so this becomes `from allora_sdk import
+        # ForgeBackendClient` and the path coupling goes away (cross-repo follow-up).
         try:
             from allora_sdk.rpc_client.remote_signer import ForgeBackendClient
         except ImportError as e:
