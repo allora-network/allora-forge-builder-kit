@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -463,7 +464,7 @@ class WorkerManager:
                     f"custody='managed' does not accept local-custody inputs {local_only}; the "
                     "backend provisions a topic-bound wallet and assigns the address"
                 )
-            return self._deploy_managed_worker(topic_id, artifact, topic_desc, replace, mode, reject_zero)
+            return self._deploy_managed_worker(topic_id, artifact, topic_desc, replace, reject_zero)
 
         # Explicit address path
         if address:
@@ -528,12 +529,25 @@ class WorkerManager:
         artifact: Path,
         topic_desc: str | None,
         replace: bool,
-        mode: str,
         reject_zero: bool | None,
     ) -> DeployResult:
         """Provision (idempotent get-or-create) a managed Privy wallet bound to ``topic_id`` and
         register a managed worker against its backend-assigned address. One wallet per topic, so a
-        re-deploy refreshes the artifact against the same wallet rather than allocating a new one.
+        re-deploy targets the same wallet rather than allocating a new one.
+
+        Redeploys are hash-aware (synth-009): the new artifact's SHA-256 is compared against the
+        active deployment's recorded hash.
+
+        * identical hash -> ``reused``: the running deployment already serves byte-identical
+          artifact, so it is left untouched (no rotation). Makes a re-run of the same CI deploy
+          idempotent instead of needlessly churning the worker.
+        * different (or unknown) hash with ``replace=False`` -> ``ValueError``: a different
+          artifact is never silently swapped onto a running deployment, even in auto mode.
+        * ``replace=True`` -> ``replaced``: rotate the artifact on the one-per-topic wallet.
+
+        A legacy active deployment with no recorded hash is treated conservatively as "unknown":
+        without ``replace=True`` we cannot prove the artifact is unchanged, so we refuse rather
+        than risk overwriting a different running deployment.
         """
         client = self._forge_client()
         # Prefer a resolved topic name (same source the rest of the registry uses) over the bare
@@ -547,8 +561,29 @@ class WorkerManager:
         address = info.address
 
         if self._worker_exists(topic_id, address):
-            if not replace and mode == "strict":
-                raise ValueError(f"Managed worker already exists for topic={topic_id} address={address}")
+            new_hash = self._artifact_sha256(artifact)
+            active_hash = self._get_active_deployment_hash(topic_id, address)
+
+            # Idempotent re-run: the active deployment already serves byte-identical artifact, so
+            # keep it as-is rather than rotating the running worker. Reported as 'reused'.
+            if active_hash is not None and active_hash == new_hash:
+                return DeployResult(
+                    topic_id=topic_id,
+                    address_assigned=address,
+                    artifact_path=str(artifact),
+                    action="reused",
+                    message=f"Reused managed worker for topic {topic_id} (wallet {address}); artifact unchanged",
+                )
+
+            # synth-009: a different artifact — or a legacy active deployment with no recorded hash,
+            # treated conservatively as unknown — must not silently overwrite the running deployment.
+            # Require an explicit replace=True, even in auto mode.
+            if not replace:
+                raise ValueError(
+                    f"Managed worker for topic {topic_id} (wallet {address}) already has an active "
+                    "deployment with a different (or unknown) artifact; pass replace=True to rotate it"
+                )
+
             # Re-sync reject_zero and the freshly-provisioned wallet id so a redeploy cannot leave
             # the row pointing at a stale flag or wallet binding.
             current_artifact = self._update_worker(
@@ -560,9 +595,6 @@ class WorkerManager:
                 topic_id=topic_id,
                 address_assigned=address,
                 artifact_path=str(artifact),
-                # A managed redeploy always rotates the artifact on the one-per-topic wallet, so
-                # report 'replaced' regardless of the replace flag — labelling it 'reused' would
-                # mislead callers that branch on action to fire notifications / downstream jobs.
                 action="replaced",
                 message=f"Replaced managed worker artifact for topic {topic_id} (wallet {address})",
             )
@@ -1139,6 +1171,15 @@ class WorkerManager:
                 "Use export_predict_self_contained.py."
             )
 
+    @staticmethod
+    def _artifact_sha256(artifact_path: Path) -> str:
+        """Return the SHA-256 hex digest of an artifact's bytes.
+
+        Recorded on every deployment so a managed redeploy can tell an idempotent re-run (identical
+        bytes) from a genuinely different model, and so that comparison survives a process restart.
+        """
+        return hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+
     def _build_default_topic_desc_resolver(self) -> Optional[Callable[[int], Optional[str]]]:
         api_key = os.environ.get("ALLORA_API_KEY")
         if not api_key:
@@ -1196,6 +1237,7 @@ class WorkerManager:
 
     def _create_deployment_record(self, topic_id: int, address: str, artifact_path: Path) -> str:
         deployment_id = str(uuid.uuid4())
+        artifact_hash = self._artifact_sha256(artifact_path)
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 "UPDATE worker_deployments SET is_active=0, ended_at=CURRENT_TIMESTAMP WHERE topic_id=? AND address=? AND is_active=1",
@@ -1204,9 +1246,9 @@ class WorkerManager:
             conn.execute(
                 """
                 INSERT INTO worker_deployments(deployment_id, topic_id, address, artifact_path, artifact_hash, deployed_at, is_active)
-                VALUES(?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, 1)
+                VALUES(?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 1)
                 """,
-                (deployment_id, topic_id, address, str(artifact_path)),
+                (deployment_id, topic_id, address, str(artifact_path), artifact_hash),
             )
             conn.commit()
 
@@ -1222,6 +1264,16 @@ class WorkerManager:
                 (topic_id, address),
             ).fetchone()
         return row[0] if row else None
+
+    def _get_active_deployment_hash(self, topic_id: int, address: str) -> Optional[str]:
+        """Return the active deployment's recorded artifact SHA-256, or None when there is no
+        active deployment or it predates hash tracking (legacy NULL row)."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT artifact_hash FROM worker_deployments WHERE topic_id=? AND address=? AND is_active=1 ORDER BY deployed_at DESC LIMIT 1",
+                (topic_id, address),
+            ).fetchone()
+        return row[0] if row and row[0] else None
 
     def _archive_active_deployment(self, topic_id: int, address: str) -> None:
         with sqlite3.connect(self.db_path) as conn:

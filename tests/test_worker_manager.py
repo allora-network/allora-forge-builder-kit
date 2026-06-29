@@ -253,7 +253,9 @@ def test_deploy_managed_provisions_and_registers(tmp_path: Path):
     assert status["identity_ref"] == "managed"
 
 
-def test_deploy_managed_redeploy_reuses_same_wallet(tmp_path: Path):
+def test_deploy_managed_redeploy_different_artifact_with_replace_rotates(tmp_path: Path):
+    """synth-009: a genuinely different artifact with replace=True rotates the deployment on the
+    one-per-topic wallet (no second worker row) and reports 'replaced'."""
     client = _FakeForgeClient()
     manager = _managed_manager(tmp_path, client)
     v1 = tmp_path / "v1.pkl"
@@ -262,12 +264,68 @@ def test_deploy_managed_redeploy_reuses_same_wallet(tmp_path: Path):
     v2.write_text("v2")
 
     manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed")
+    dep1 = manager._get_active_deployment_id(8, "allo1managed0008")
     result = manager.deploy_worker(topic_id=8, artifact_path=v2, custody="managed", replace=True)
 
     assert result.action == "replaced"
     assert result.address_assigned == "allo1managed0008"
     # One worker per topic — no second worker row was created.
     assert len([w for w in manager.status_all() if w["topic_id"] == 8]) == 1
+    # The artifact was rotated: a new active deployment supersedes the first.
+    dep2 = manager._get_active_deployment_id(8, "allo1managed0008")
+    assert dep1 and dep2 and dep1 != dep2
+
+
+def test_deploy_managed_redeploy_identical_artifact_is_reused(tmp_path: Path):
+    """synth-009: re-deploying byte-identical artifact (e.g. an idempotent CI re-run) is a no-op
+    'reused' — the running deployment is left untouched rather than churned."""
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    v1 = tmp_path / "v1.pkl"
+    v1.write_text("same-bytes")
+
+    first = manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed")
+    assert first.action == "created"
+    dep1 = manager._get_active_deployment_id(8, "allo1managed0008")
+    artifact_before = manager.status_worker(8, "allo1managed0008")["artifact_path"]
+
+    # Identical bytes (a fresh file with the same content) re-deployed without replace.
+    v1_again = tmp_path / "v1_again.pkl"
+    v1_again.write_text("same-bytes")
+    result = manager.deploy_worker(topic_id=8, artifact_path=v1_again, custody="managed")
+
+    assert result.action == "reused"
+    assert result.address_assigned == "allo1managed0008"
+    assert len([w for w in manager.status_all() if w["topic_id"] == 8]) == 1
+    # No rotation: the active deployment and the on-disk managed artifact are unchanged.
+    assert manager._get_active_deployment_id(8, "allo1managed0008") == dep1
+    assert manager.status_worker(8, "allo1managed0008")["artifact_path"] == artifact_before
+
+
+def test_deploy_managed_redeploy_legacy_null_hash_without_replace_raises(tmp_path: Path):
+    """A legacy active deployment with no recorded hash is treated conservatively as 'unknown':
+    a redeploy without replace=True refuses rather than risk overwriting a different deployment,
+    even when the bytes happen to match."""
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    v1 = tmp_path / "v1.pkl"
+    v1.write_text("legacy")
+    manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed")
+
+    # Simulate a pre-hash-tracking deployment row.
+    with sqlite3.connect(tmp_path / "state.db") as conn:
+        conn.execute(
+            "UPDATE worker_deployments SET artifact_hash=NULL WHERE topic_id=? AND address=? AND is_active=1",
+            (8, "allo1managed0008"),
+        )
+        conn.commit()
+
+    with pytest.raises(ValueError, match="replace=True"):
+        manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed")
+
+    # With replace=True the unknown-hash row is rotated normally.
+    result = manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed", replace=True)
+    assert result.action == "replaced"
 
 
 def test_managed_redeploy_syncs_reject_zero_into_db_and_command(tmp_path: Path, monkeypatch):
@@ -295,7 +353,10 @@ def test_managed_redeploy_syncs_reject_zero_into_db_and_command(tmp_path: Path, 
     assert "--reject-zero" in cmd
 
 
-def test_managed_auto_redeploy_reports_replaced_not_reused(tmp_path: Path):
+def test_managed_redeploy_different_artifact_without_replace_raises(tmp_path: Path):
+    """synth-009 core fix: a different artifact for an existing managed worker is NOT silently
+    overwritten in auto mode — it raises unless replace=True is passed, leaving the running
+    deployment intact."""
     client = _FakeForgeClient()
     manager = _managed_manager(tmp_path, client)
     v1 = tmp_path / "v1.pkl"
@@ -304,9 +365,15 @@ def test_managed_auto_redeploy_reports_replaced_not_reused(tmp_path: Path):
     v2.write_text("v2")
 
     manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed")
-    # Auto mode (no replace=True) still rotates the artifact on the one-per-topic wallet.
-    result = manager.deploy_worker(topic_id=8, artifact_path=v2, custody="managed")
-    assert result.action == "replaced"
+    dep1 = manager._get_active_deployment_id(8, "allo1managed0008")
+
+    # Auto mode (no replace=True) with a different artifact must refuse rather than overwrite.
+    with pytest.raises(ValueError, match="replace=True"):
+        manager.deploy_worker(topic_id=8, artifact_path=v2, custody="managed")
+
+    # The original deployment is untouched: same active deployment, still one worker row.
+    assert manager._get_active_deployment_id(8, "allo1managed0008") == dep1
+    assert len([w for w in manager.status_all() if w["topic_id"] == 8]) == 1
 
 
 def test_build_run_command_managed_injects_forge_env_and_no_keyfile(tmp_path: Path, monkeypatch):
