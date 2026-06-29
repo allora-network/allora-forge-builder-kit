@@ -540,12 +540,14 @@ def run_link(
     except (TypeError, ValueError):
         timeout = _POLL_TIMEOUT_SECONDS
     timeout = max(1, min(timeout, _POLL_TIMEOUT_SECONDS))
-    deadline = time.time() + timeout
+    # Monotonic deadline: immune to NTP steps / manual clock changes / DST that a wall-clock
+    # time.time() deadline would let silently extend or prematurely abort the session.
+    deadline = time.monotonic() + timeout
     # Reuse one keep-alive connection across the (up to ~120) polls to the same Forge host
     # instead of a fresh TCP+TLS handshake per poll.
     poller = _JsonPoster(forge_url)
     try:
-        while time.time() < deadline:
+        while time.monotonic() < deadline:
             time.sleep(max(1, interval))
             try:
                 poll = poller.post(
@@ -558,7 +560,7 @@ def run_link(
                     print(f"\nLink failed: {exc}", file=sys.stderr)
                     return 1
                 # Transient (5xx / 408 / 429 / DNS blip / malformed body): keep polling until our
-                # wall-clock deadline instead of aborting the whole flow.
+                # monotonic deadline instead of aborting the whole flow.
                 print(f"  (poll error: {exc}; retrying...)", file=sys.stderr)
                 continue
             status = poll.get("status")
