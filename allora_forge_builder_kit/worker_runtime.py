@@ -74,10 +74,14 @@ def _validate_managed_env() -> None:
             "self-hosted Forge instance.",
             stacklevel=2,
         )
-    if not os.environ.get("FEE_GRANTER"):
+    # FORGE_MASTER_GRANTER_ADDRESS is the canonical fee-granter env var across the Allora SDKs
+    # (allora-sdk-py/-go/-ts); FEE_GRANTER is the deprecated alias the SDK still accepts. Check the
+    # canonical name first so an operator who set it correctly doesn't see a spurious warning.
+    if not (os.environ.get("FORGE_MASTER_GRANTER_ADDRESS") or os.environ.get("FEE_GRANTER")):
         warnings.warn(
-            "FEE_GRANTER is not set: a managed wallet holds no ALLO, so gasless submission needs "
-            "a fee granter — transactions may fail with 'insufficient fees' without one.",
+            "No fee granter set (FORGE_MASTER_GRANTER_ADDRESS, or the deprecated FEE_GRANTER): a "
+            "managed wallet holds no ALLO, so gasless submission needs a fee granter — transactions "
+            "may fail with 'insufficient fees' without one.",
             stacklevel=2,
         )
 

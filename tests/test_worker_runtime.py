@@ -102,6 +102,32 @@ def test_resolve_wallet_cfg_local_does_not_validate_managed_env(fake_wallet_conf
     assert len(recwarn) == 0
 
 
+def test_validate_managed_env_accepts_canonical_granter(monkeypatch, recwarn):
+    # The canonical FORGE_MASTER_GRANTER_ADDRESS (the name all sibling SDKs use) must suppress the
+    # fee-granter warning; previously only the deprecated FEE_GRANTER did.
+    monkeypatch.setenv("FORGE_BACKEND_URL", "https://staging.forge")
+    monkeypatch.setenv("FORGE_MASTER_GRANTER_ADDRESS", "allo1granter")
+    monkeypatch.delenv("FEE_GRANTER", raising=False)
+    worker_runtime._validate_managed_env()
+    assert len(recwarn) == 0
+
+
+def test_validate_managed_env_accepts_deprecated_fee_granter(monkeypatch, recwarn):
+    monkeypatch.setenv("FORGE_BACKEND_URL", "https://staging.forge")
+    monkeypatch.delenv("FORGE_MASTER_GRANTER_ADDRESS", raising=False)
+    monkeypatch.setenv("FEE_GRANTER", "allo1granter")
+    worker_runtime._validate_managed_env()
+    assert len(recwarn) == 0
+
+
+def test_validate_managed_env_warns_when_no_granter(monkeypatch):
+    monkeypatch.setenv("FORGE_BACKEND_URL", "https://staging.forge")
+    monkeypatch.delenv("FORGE_MASTER_GRANTER_ADDRESS", raising=False)
+    monkeypatch.delenv("FEE_GRANTER", raising=False)
+    with pytest.warns(UserWarning, match="fee granter"):
+        worker_runtime._validate_managed_env()
+
+
 def test_main_managed_with_mnemonic_file_errors(monkeypatch):
     monkeypatch.setattr(
         "sys.argv",
