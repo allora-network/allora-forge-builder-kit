@@ -647,7 +647,17 @@ class WorkerManager:
             return
 
         log_path = self.runtime_log_dir / f"worker_{topic_id}_{address}.log"
-        log_f = open(log_path, "ab")
+        # Managed-custody workers carry FORGE_API_KEY in their env, so if the worker (or a
+        # transitive dependency) ever echoes it the secret lands in this log file. Create the
+        # log owner-only (0600) so it is not world-readable on a shared host, matching the
+        # secrets-file permissions. os.open's mode only applies on creation, so also chmod an
+        # already-existing log (best-effort) to tighten logs written before this change.
+        log_fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        log_f = os.fdopen(log_fd, "ab")
+        try:
+            os.chmod(log_path, 0o600)
+        except OSError:
+            pass  # tightening a pre-existing log must not block worker start
         try:
             cmd, env = self._build_run_command(topic_id, address, status)
         except Exception:
