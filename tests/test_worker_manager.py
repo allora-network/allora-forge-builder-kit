@@ -370,6 +370,25 @@ def test_allora_api_key_present_treats_empty_file_as_absent(tmp_path: Path, monk
     assert WorkerManager._allora_api_key_present() is True
 
 
+def test_start_worker_validation_failure_leaves_no_log_file(tmp_path: Path, monkeypatch):
+    """A managed worker that fails the _build_run_command precheck must not create an empty log:
+    the file open is deferred until after validation so a persistently-misconfigured worker does
+    not re-touch a silent empty log on every reconcile."""
+    monkeypatch.setenv("ALLORA_API_KEY", "test-allora-key")  # clear the api-key precheck
+    monkeypatch.delenv("FORGE_API_KEY", raising=False)
+    monkeypatch.delenv("FORGE_BACKEND_URL", raising=False)
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)  # no Forge creds on the manager -> precheck fails
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+    manager.deploy_worker(topic_id=4, artifact_path=artifact, custody="managed")
+
+    log_path = manager.runtime_log_dir / "worker_4_allo1managed0004.log"
+    with pytest.raises(ValueError):
+        manager.start_worker(topic_id=4, address="allo1managed0004")
+    assert not log_path.exists()
+
+
 def test_remove_managed_worker_clears_association(tmp_path: Path):
     client = _FakeForgeClient()
     manager = _managed_manager(tmp_path, client)

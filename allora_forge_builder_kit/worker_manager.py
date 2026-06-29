@@ -659,6 +659,12 @@ class WorkerManager:
             self._set_worker_status(topic_id, address, status="running", last_error=None)
             return
 
+        # Build (and validate) the launch command before opening the log file. A managed worker
+        # that fails the credential/wallet precheck must not leave an empty
+        # worker_<topic>_<addr>.log behind — otherwise every reconcile over a persistent
+        # misconfiguration re-touches a silent empty file with no forensic value.
+        cmd, env = self._build_run_command(topic_id, address, status)
+
         log_path = self.runtime_log_dir / f"worker_{topic_id}_{address}.log"
         # Managed-custody workers carry FORGE_API_KEY in their env, so if the worker (or a
         # transitive dependency) ever echoes it the secret lands in this log file. Create the
@@ -672,11 +678,10 @@ class WorkerManager:
         except OSError:
             pass  # tightening a pre-existing log must not block worker start
         try:
-            cmd, env = self._build_run_command(topic_id, address, status)
+            proc = subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT, cwd=str(Path.cwd()), env=env)
         except Exception:
             log_f.close()
             raise
-        proc = subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT, cwd=str(Path.cwd()), env=env)
         key = (topic_id, address)
         self._runners[key] = {"proc": proc, "log": log_f}
 
