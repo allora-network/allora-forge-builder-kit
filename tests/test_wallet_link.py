@@ -140,10 +140,20 @@ def test_post_json_http_error_carries_status(monkeypatch):
     def _raise(*args, **kwargs):
         raise urllib.error.HTTPError("https://forge.example", 404, "Not Found", {}, io.BytesIO(b"nope"))
 
-    monkeypatch.setattr(wallet_link.urllib.request, "urlopen", _raise)
+    monkeypatch.setattr(wallet_link._OPENER, "open", _raise)
     with pytest.raises(_RequestError) as excinfo:
         wallet_link._post_json("https://forge.example", {})
     assert excinfo.value.status == 404
+
+
+def test_post_json_opener_refuses_redirects():
+    # The start/submit opener must not follow 3xx: redirect_request returning None makes urllib
+    # raise HTTPError instead of re-POSTing the signed body to the redirect target.
+    from allora_forge_builder_kit import wallet_link
+
+    handler = wallet_link._NoRedirectHandler()
+    assert handler.redirect_request(None, None, 302, "Found", {}, "https://evil.example/") is None
+    assert any(isinstance(h, wallet_link._NoRedirectHandler) for h in wallet_link._OPENER.handlers)
 
 
 def test_submit_rejection_reports_rejected_signatures():

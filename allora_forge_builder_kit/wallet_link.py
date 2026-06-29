@@ -228,6 +228,22 @@ def _loads_json_object(url: str, raw: str) -> dict[str, Any]:
     return parsed
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse to follow redirects so a 3xx surfaces as an HTTPError.
+
+    A signed wallet-link POST body must never be replayed to a redirect target: returning None
+    from redirect_request makes urllib raise instead of re-issuing the request elsewhere. (The
+    keep-alive ``_JsonPoster`` path uses ``http.client`` directly and never redirects either.)
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+# Opener without redirect following, used for the (non-keep-alive) start/submit POSTs.
+_OPENER = urllib.request.build_opener(_NoRedirectHandler)
+
+
 def _post_json(url: str, payload: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
     """POST JSON payload to url; raises SystemExit on HTTP/network errors or a non-object body."""
     body = json.dumps(payload).encode("utf-8")
@@ -235,7 +251,7 @@ def _post_json(url: str, payload: dict[str, Any], timeout: float = 15.0) -> dict
         url, data=body, headers={"Content-Type": "application/json"}, method="POST"
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _OPENER.open(req, timeout=timeout) as resp:
             return _loads_json_object(url, resp.read(_MAX_RESPONSE_BYTES).decode("utf-8", "replace"))
     except urllib.error.HTTPError as exc:
         # Filter the server-supplied error body so it can't inject terminal escapes (matches the
