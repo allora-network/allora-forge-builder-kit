@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 # wire and in SQLite.
 CustodyMode = Literal["local", "managed"]
 
+# Outcome of a deploy_worker call. The domain is fixed and small, so a Literal (like CustodyMode)
+# gives the type-checker coverage that catches a typo such as "replace" and documents the contract
+# callers branch on (e.g. firing downstream jobs only on "created"/"replaced").
+DeployAction = Literal["created", "reused", "replaced"]
+
 
 @dataclass(frozen=True)
 class Identity:
@@ -53,7 +58,7 @@ class DeployResult:
     topic_id: int
     address_assigned: str
     artifact_path: str
-    action: str  # created|reused|replaced
+    action: DeployAction
     message: str
 
 
@@ -463,7 +468,7 @@ class WorkerManager:
                 )
 
             ident = self.ensure_identity(alias=identity_alias, address=address, mnemonic=mnemonic)
-            action = "reused" if self._address_has_other_topics(ident.address) else "created"
+            action: DeployAction = "reused" if self._address_has_other_topics(ident.address) else "created"
             spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias, reject_zero=bool(reject_zero))
             self.add_worker(spec)
             return DeployResult(
@@ -476,7 +481,7 @@ class WorkerManager:
 
         # Auto address path: reuse free identity first, else create new
         ident, created = self._pick_or_create_identity_for_topic(topic_id)
-        action = "created" if created else "reused"
+        action: DeployAction = "created" if created else "reused"
         spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias, reject_zero=bool(reject_zero))
         self.add_worker(spec)
         return DeployResult(
