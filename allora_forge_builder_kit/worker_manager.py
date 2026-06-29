@@ -343,6 +343,42 @@ class WorkerManager:
             return
         logger.info("released managed wallet %s topic binding (topic %s)", signing_wallet_id, topic_id)
 
+    def _provision_wallet_bounded(
+        self, client: ForgeClientProtocol, topic_id: int, label: str, timeout: float = 30.0
+    ) -> ProvisionedWallet:
+        """Run the backend get-or-create on a bounded daemon thread; raise on timeout.
+
+        The SDK's ``provision_wallet`` exposes no per-request timeout, so without this bound a
+        degraded backend that accepts the connection but never responds would stall ``deploy_worker``
+        indefinitely — and in a batch/fleet bring-up hang the whole batch at the first managed
+        deploy. Unlike the teardown path (:meth:`_release_managed_binding`, which swallows), a deploy
+        must not proceed without a wallet, so a timeout raises ``TimeoutError``. A background thread
+        that completes after the timeout only leaves an idempotent get-or-create binding the next
+        deploy reuses.
+        """
+        result: dict[str, Any] = {}
+
+        def _provision() -> None:
+            try:
+                result["wallet"] = client.provision_wallet(topic_id, label=label)
+            except BaseException as e:  # noqa: BLE001 - surfaced via result; must not escape the thread
+                result["error"] = e
+
+        worker = threading.Thread(
+            target=_provision, name=f"provision-wallet-topic-{topic_id}", daemon=True
+        )
+        worker.start()
+        worker.join(timeout)
+        if worker.is_alive():
+            raise TimeoutError(
+                f"provisioning a managed wallet for topic {topic_id} did not complete within "
+                f"{timeout:.0f}s; the Forge backend may be degraded"
+            )
+        error = result.get("error")
+        if error is not None:
+            raise error
+        return result["wallet"]
+
     def status_worker(self, topic_id: int, address: str) -> dict:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
@@ -566,7 +602,7 @@ class WorkerManager:
         # Prefer a resolved topic name (same source the rest of the registry uses) over the bare
         # topic_id fallback so the backend wallet label is human-meaningful.
         label = self._resolve_topic_desc(topic_id, topic_desc) or f"worker-topic-{topic_id}"
-        info = client.provision_wallet(topic_id, label=label)
+        info = self._provision_wallet_bounded(client, topic_id, label)
         if not getattr(info, "address", None) or not getattr(info, "id", None):
             raise RuntimeError(
                 f"Forge backend returned a malformed wallet for topic {topic_id}: {info!r}"

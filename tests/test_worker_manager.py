@@ -273,6 +273,41 @@ def test_deploy_managed_releases_binding_when_add_worker_fails(tmp_path: Path, m
     assert client.cleared == ["wallet-42"]  # binding released on the failed deploy
 
 
+def test_provision_wallet_bounded_raises_on_hang(tmp_path: Path):
+    # A backend that never responds to provision_wallet must not stall the deploy: the bounded
+    # thread raises TimeoutError rather than blocking indefinitely (deploys must not proceed
+    # without a wallet).
+    import threading
+
+    class _HangingClient(_FakeForgeClient):
+        def provision_wallet(self, topic_id: int, label: str | None = None):
+            threading.Event().wait(30)  # block well past the test timeout
+
+    client = _HangingClient()
+    manager = _managed_manager(tmp_path, client)
+    with pytest.raises(TimeoutError):
+        manager._provision_wallet_bounded(client, 7, "label", timeout=0.2)
+
+
+def test_provision_wallet_bounded_returns_wallet(tmp_path: Path):
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    info = manager._provision_wallet_bounded(client, 7, "label", timeout=5.0)
+    assert info.id == "wallet-7"
+    assert info.address == "allo1managed0007"
+
+
+def test_provision_wallet_bounded_propagates_backend_error(tmp_path: Path):
+    class _FailClient(_FakeForgeClient):
+        def provision_wallet(self, topic_id: int, label: str | None = None):
+            raise RuntimeError("backend 500")
+
+    client = _FailClient()
+    manager = _managed_manager(tmp_path, client)
+    with pytest.raises(RuntimeError, match="backend 500"):
+        manager._provision_wallet_bounded(client, 7, "label", timeout=5.0)
+
+
 def test_deploy_managed_redeploy_different_artifact_with_replace_rotates(tmp_path: Path):
     """synth-009: a genuinely different artifact with replace=True rotates the deployment on the
     one-per-topic wallet (no second worker row) and reports 'replaced'."""
