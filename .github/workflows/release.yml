@@ -24,7 +24,7 @@ jobs:
       - name: Guard against unreleased local SDK source
         run: |
           set -euo pipefail
-          if grep -qE '^\[tool\.uv\.sources' pyproject.toml; then
+          if grep -qE '^[[:space:]]*\[tool\.uv\.sources' pyproject.toml; then
             echo "::error file=pyproject.toml::[tool.uv.sources] is still present; it pins allora-sdk to the local ../allora-sdk-py worktree and must be removed before publishing (gated on the allora-sdk PyPI release, ENGN-8646)."
             exit 1
           fi
