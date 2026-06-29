@@ -353,6 +353,15 @@ class _JsonPoster:
             password = unquote(parsed.password) if parsed.password is not None else ""
             token = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
             auth = f"Basic {token}"
+        if parsed.port is None:
+            # http.client silently defaults a missing port to 443 (HTTPS) / 80 (HTTP); an operator
+            # who set HTTPS_PROXY=proxy.corp.local expecting 3128/8080 would otherwise hit a
+            # confusing connection failure. Surface the implicit default.
+            print(
+                f"warning: proxy {parsed.hostname} has no explicit port; defaulting to "
+                f"{443 if https else 80}",
+                file=sys.stderr,
+            )
         return (parsed.hostname, parsed.port, auth)
 
     def _connect(self) -> http.client.HTTPConnection:
