@@ -651,6 +651,21 @@ def test_real_forge_backend_client_exposes_managed_custody_methods():
     assert hasattr(ForgeBackendClient, "clear_association")
 
 
+def test_forge_client_protocol_is_runtime_checkable():
+    """The lazy ForgeBackendClient build asserts isinstance(client, ForgeClientProtocol) at the
+    injection boundary, so the Protocol must be runtime-checkable: a fully-shaped client satisfies
+    it and a client missing a method does not."""
+    assert isinstance(_FakeForgeClient(), ForgeClientProtocol)
+
+    class _Partial:
+        def provision_wallet(self, topic_id, label=None):
+            ...
+
+        # intentionally missing clear_association
+
+    assert not isinstance(_Partial(), ForgeClientProtocol)
+
+
 def test_real_sdk_wallet_config_defers_for_managed_worker_without_crashing(monkeypatch):
     """Refutes 'every managed worker crashes with No wallet credentials provided': with only
     FORGE_API_KEY set (the deferred managed contract), the real AlloraWalletConfig.from_env()

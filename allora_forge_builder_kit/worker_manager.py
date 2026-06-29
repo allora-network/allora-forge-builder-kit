@@ -15,7 +15,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal, Optional, Protocol
+from typing import Any, Callable, Literal, Optional, Protocol, runtime_checkable
 
 from .worker_monitor import MONITOR_TARGETS_DDL
 
@@ -71,12 +71,14 @@ class ProvisionedWallet(Protocol):
     address: str
 
 
+@runtime_checkable
 class ForgeClientProtocol(Protocol):
     """Contract for the Forge backend client used by managed custody.
 
     Implemented by ``allora_sdk``'s ``ForgeBackendClient`` and stubbed in tests. Captures only the
     two calls :class:`WorkerManager` makes so local-custody installs need not import the SDK and the
-    injected client is checked at the boundary instead of being typed as ``Any``.
+    injected client is checked at the boundary instead of being typed as ``Any``. ``@runtime_checkable``
+    lets the lazy build assert the SDK client satisfies this contract at the injection boundary.
     """
 
     def provision_wallet(self, topic_id: int, label: Optional[str] = None) -> ProvisionedWallet:
@@ -199,6 +201,14 @@ class WorkerManager:
         # to build; the double-checked assignment under the lock keeps the first and drops the
         # loser (its Session is released on GC).
         client = ForgeBackendClient(self._forge_backend_url, self._forge_api_key)
+        # Enforce the structural contract at the injection boundary, not only in tests: if the SDK
+        # renames or drops provision_wallet / clear_association, fail loudly here instead of at the
+        # first managed deploy/teardown call.
+        if not isinstance(client, ForgeClientProtocol):
+            raise TypeError(
+                "allora_sdk ForgeBackendClient does not satisfy ForgeClientProtocol "
+                "(expected provision_wallet + clear_association); SDK contract drift"
+            )
         with self._lock:
             if self._forge_client_cache is None:
                 self._forge_client_cache = client
