@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 # wallet provisioned by the Forge backend, keyed by signing_wallet_id). A Literal gives the
 # fixed two-value set type-checker coverage and IDE completion while staying a plain str on the
 # wire and in SQLite.
+# @@TODO: the `if custody == 'managed'` branches threaded through deploy_worker, _build_run_command,
+# remove_worker, start_worker, status_worker/status_all could collapse into a CustodyStrategy
+# Protocol (provision_address / build_subprocess_env / release / validate_deploy_inputs). Deferred
+# as YAGNI with only two modes — extract when a third custody mode lands.
 CustodyMode = Literal["local", "managed"]
 
 # Outcome of a deploy_worker call. The domain is fixed and small, so a Literal (like CustodyMode)
