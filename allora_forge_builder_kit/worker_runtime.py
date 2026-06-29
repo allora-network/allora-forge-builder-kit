@@ -105,7 +105,10 @@ class _ArtifactCaller:
     signature (the failure mode of probing by execution alone). Only an *unannotated* single-param
     artifact is probed at call time: try the ``RunContext`` form (a legacy int-taking function
     raises ``TypeError`` when handed a ``RunContext``), then fall back to the nonce form. The
-    resolved shape is cached so the contract is decided once, not on every nonce.
+    legacy shape is cached only once the nonce fallback actually succeeds; if that fallback also
+    raises (e.g. a modern artifact whose own body raised the ``TypeError``), the original error
+    propagates and the shape stays unresolved, so a transient failure can't permanently mis-route a
+    context-taking artifact to the int-nonce form for the rest of the worker's life.
     """
 
     def __init__(self, raw_fn: Callable[..., object]) -> None:
@@ -119,9 +122,16 @@ class _ArtifactCaller:
             return self._raw_fn(ctx.nonce)
         try:
             value = self._raw_fn(ctx)
-        except TypeError:
+        except TypeError as original:
+            # Only demote to the legacy nonce form if the fallback succeeds. If it raises too, the
+            # TypeError came from the modern artifact's body, not a signature mismatch: re-raise it
+            # and leave the shape unresolved rather than caching the wrong (legacy) contract.
+            try:
+                value = self._raw_fn(ctx.nonce)
+            except Exception:
+                raise original
             self._expects_context = False
-            return self._raw_fn(ctx.nonce)
+            return value
         self._expects_context = True
         return value
 

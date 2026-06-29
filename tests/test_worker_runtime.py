@@ -171,6 +171,28 @@ def test_artifact_caller_annotated_modern_not_demoted_by_body_typeerror():
     assert all(not isinstance(c, int) for c in calls)
 
 
+def test_artifact_caller_unannotated_modern_body_typeerror_not_demoted():
+    # An *unannotated* single-param modern artifact whose body raises TypeError on its first call
+    # must not be permanently demoted to the legacy nonce form: the int fallback fails too, so the
+    # original TypeError propagates and the shape stays unresolved (re-probed) instead of caching
+    # the wrong legacy contract for the rest of the worker's life.
+    calls = []
+
+    def modern(ctx):  # unannotated -> probed at call time
+        calls.append(ctx)
+        if len(calls) == 1:
+            raise TypeError("transient body error, not a signature mismatch")
+        return float(ctx.nonce)
+
+    caller = _ArtifactCaller(modern)
+    with pytest.raises(TypeError, match="transient body error"):
+        caller(_FakeCtx(1))
+    # Not demoted: shape stays unresolved, so the next call probes the context form and succeeds.
+    assert caller._expects_context is None
+    assert caller(_FakeCtx(2)) == 2.0
+    assert caller._expects_context is True
+
+
 def test_artifact_caller_caches_modern_shape_without_reprobe():
     calls = []
 
