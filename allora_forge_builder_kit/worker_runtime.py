@@ -211,6 +211,18 @@ def main() -> None:
             "(the SDK provisions a topic-bound managed wallet from it)"
         )
 
+    if args.custody == "managed" and not os.environ.get("FORGE_BACKEND_URL", "").strip():
+        # WorkerManager-spawned managed workers always get FORGE_BACKEND_URL injected, but this
+        # direct CLI entry point does not. The SDK's AlloraWalletConfig.from_env() silently defaults
+        # an unset URL to the public production backend, so warn loudly to avoid signing against
+        # prod when a staging / self-hosted instance was intended.
+        warnings.warn(
+            "FORGE_BACKEND_URL is not set: managed custody will default to the public production "
+            "backend (https://forge.allora.network); set it explicitly to target a staging or "
+            "self-hosted Forge instance.",
+            stacklevel=2,
+        )
+
     if args.custody == "managed" and not os.environ.get("FEE_GRANTER"):
         warnings.warn(
             "FEE_GRANTER is not set: a managed wallet holds no ALLO, so gasless submission needs "
