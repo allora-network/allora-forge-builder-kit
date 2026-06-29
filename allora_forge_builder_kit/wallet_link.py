@@ -130,26 +130,35 @@ def _checked_key_file(base: str, address: str, key_file: str) -> str:
     return kf_abs
 
 
+class SecretsLoadError(Exception):
+    """Raised when a present worker-secrets file cannot be read or parsed.
+
+    Distinct from an *absent* secrets file (which :func:`discover_keys` reports as no keys) so a
+    caller can surface a corrupt/unreadable file instead of the misleading "no worker keys, create
+    one" path.
+    """
+
+
 def discover_keys(secrets_path: str | Path) -> dict[str, _KeyEntry]:
-    """Load WorkerManager secrets: {address: {"alias", "key_file"}}."""
+    """Load WorkerManager secrets: {address: {"alias", "key_file"}}.
+
+    Returns an empty mapping when the file is absent. Raises :class:`SecretsLoadError` when a
+    present file is unreadable, not valid JSON, or not a JSON object, so a corrupt secrets file is
+    not masked as "no keys".
+    """
     path = Path(secrets_path)
     if not path.exists():
         return {}
     try:
         raw = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError) as exc:
-        # Present-but-unreadable/corrupt is distinct from not-found: surface it
-        # instead of masking it as the "no worker keys, create one" case.
-        print(f"could not read worker secrets at {secrets_path}: {exc}", file=sys.stderr)
-        return {}
+        # Present-but-unreadable/corrupt is distinct from not-found: surface it instead of
+        # masking it as the "no worker keys, create one" case.
+        raise SecretsLoadError(f"could not read worker secrets at {secrets_path}: {exc}") from exc
     if not isinstance(raw, dict):
-        # Valid JSON whose root is a list/scalar would crash on raw.items(); treat a
-        # malformed-but-parseable secrets file as "no keys" rather than raising.
-        print(
-            f"worker secrets at {secrets_path} is not a JSON object; ignoring",
-            file=sys.stderr,
-        )
-        return {}
+        # Valid JSON whose root is a list/scalar would crash on raw.items(); a malformed-but-
+        # parseable secrets file is a corrupt file, not "no keys".
+        raise SecretsLoadError(f"worker secrets at {secrets_path} is not a JSON object")
     base = os.path.dirname(os.path.abspath(path))
     # Keyed by address; warn (rather than silently overwrite) when two aliases share an address,
     # since the second would otherwise win invisibly — a footgun combined with relative key_files.
@@ -417,7 +426,13 @@ def run_link(
             file=sys.stderr,
         )
         return 1
-    keys = discover_keys(secrets_path)
+    try:
+        keys = discover_keys(secrets_path)
+    except SecretsLoadError as exc:
+        # A corrupt / unreadable secrets file is a distinct failure from "no keys yet"; report it
+        # instead of the misleading "create a worker first" hint.
+        print(str(exc), file=sys.stderr)
+        return 1
     if not keys:
         print(
             f"No worker keys found in {secrets_path}. Create a worker first "

@@ -14,6 +14,7 @@ from allora_forge_builder_kit.wallet_link import (
     _submit_rejection,
     build_adr036_sign_doc,
     discover_keys,
+    SecretsLoadError,
 )
 
 # Byte-for-byte parity with the Go verifier's golden
@@ -64,6 +65,22 @@ def test_discover_keys_skips_non_string_entries(tmp_path):
     )
     keys = discover_keys(str(secrets))
     assert set(keys) == {"allo1good"}
+
+
+def test_discover_keys_raises_on_corrupt_json(tmp_path):
+    # A present-but-corrupt secrets file is distinct from absent: raise SecretsLoadError rather
+    # than return {} (which would mislead the caller into "no worker keys, create one").
+    secrets = tmp_path / "worker_secrets.json"
+    secrets.write_text("{not valid json")
+    with pytest.raises(SecretsLoadError):
+        discover_keys(str(secrets))
+
+
+def test_discover_keys_raises_on_non_object_root(tmp_path):
+    secrets = tmp_path / "worker_secrets.json"
+    secrets.write_text(json.dumps([1, 2, 3]))
+    with pytest.raises(SecretsLoadError):
+        discover_keys(str(secrets))
 
 
 def test_sign_roundtrip_with_cosmpy():
