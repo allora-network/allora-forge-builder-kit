@@ -633,7 +633,19 @@ class WorkerManager:
             custody="managed",
             signing_wallet_id=info.id,
         )
-        self.add_worker(spec)
+        try:
+            self.add_worker(spec)
+        except BaseException:
+            # provision_wallet bound a Privy wallet to (user, topic) on the backend; if registering
+            # the local row failed (disk-full materialize, DB integrity, OSError) we'd leak that
+            # binding with no local row referencing it — remove_worker can't help because
+            # _get_custody returns ('local', None) for a missing row. Best-effort release it before
+            # re-raising, but only when no row was actually created so a partially-committed row is
+            # never orphaned. The backend get-or-create is idempotent, so a later deploy
+            # reconstitutes the binding cleanly.
+            if not self._worker_exists(topic_id, address):
+                self._release_managed_binding(info.id, topic_id)
+            raise
         return DeployResult(
             topic_id=topic_id,
             address_assigned=address,

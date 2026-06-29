@@ -253,6 +253,26 @@ def test_deploy_managed_provisions_and_registers(tmp_path: Path):
     assert status["identity_ref"] == "managed"
 
 
+def test_deploy_managed_releases_binding_when_add_worker_fails(tmp_path: Path, monkeypatch):
+    # provision_wallet succeeds but add_worker fails (disk full / DB error): the server-side
+    # (user, topic) binding must be released, not leaked with no local row referencing it.
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+
+    def boom(spec):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(manager, "add_worker", boom)
+
+    with pytest.raises(OSError):
+        manager.deploy_worker(topic_id=42, artifact_path=artifact, custody="managed")
+
+    assert client.provisioned == [(42, "worker-topic-42")]
+    assert client.cleared == ["wallet-42"]  # binding released on the failed deploy
+
+
 def test_deploy_managed_redeploy_different_artifact_with_replace_rotates(tmp_path: Path):
     """synth-009: a genuinely different artifact with replace=True rotates the deployment on the
     one-per-topic wallet (no second worker row) and reports 'replaced'."""
