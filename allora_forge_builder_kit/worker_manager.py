@@ -644,7 +644,7 @@ class WorkerManager:
         would resolve it to an empty key and fail at runtime, so accepting it here would defeat the
         fail-before-running guarantee this precheck exists to provide.
         """
-        if os.environ.get("ALLORA_API_KEY"):
+        if os.environ.get("ALLORA_API_KEY", "").strip():
             return True
         for p in ("notebooks/.allora_api_key", ".allora_api_key"):
             try:

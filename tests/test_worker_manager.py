@@ -496,6 +496,18 @@ def test_allora_api_key_present_treats_empty_file_as_absent(tmp_path: Path, monk
     assert WorkerManager._allora_api_key_present() is True
 
 
+def test_allora_api_key_present_treats_whitespace_env_as_absent(tmp_path: Path, monkeypatch):
+    """A whitespace-only ALLORA_API_KEY env value must not satisfy the precheck: the truthy check
+    let it through, the worker was marked running, and the subprocess forwarded an empty key that
+    failed at runtime — defeating the fail-before-running guarantee for env-based provisioning."""
+    monkeypatch.chdir(tmp_path)  # no .allora_api_key file fallbacks here
+    monkeypatch.setenv("ALLORA_API_KEY", "   ")
+    assert WorkerManager._allora_api_key_present() is False
+
+    monkeypatch.setenv("ALLORA_API_KEY", "real-key")
+    assert WorkerManager._allora_api_key_present() is True
+
+
 def test_start_worker_validation_failure_leaves_no_log_file(tmp_path: Path, monkeypatch):
     """A managed worker that fails the _build_run_command precheck must not create an empty log:
     the file open is deferred until after validation so a persistently-misconfigured worker does
