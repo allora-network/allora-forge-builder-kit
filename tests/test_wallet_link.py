@@ -331,3 +331,13 @@ def test_run_link_full_linked_set_succeeds(tmp_path, monkeypatch):
     )
     rc = wallet_link.run_link(forge_url="https://forge.example", secrets_path=secrets, open_browser=False)
     assert rc == 0
+
+
+def test_run_link_rejects_forge_url_with_path(capsys):
+    # https://forge.allora.network/api/v1 would yield a double /api/v1 and a confusing 404;
+    # reject it up front (before any network) with an actionable message.
+    from allora_forge_builder_kit import wallet_link
+
+    rc = wallet_link.run_link(forge_url="https://forge.example/api/v1", open_browser=False)
+    assert rc == 1
+    assert "path" in capsys.readouterr().err.lower()

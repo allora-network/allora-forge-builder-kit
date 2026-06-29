@@ -398,6 +398,16 @@ def run_link(
             file=sys.stderr,
         )
         return 1
+    if parsed.path and parsed.path != "/":
+        # The /api/v1/wallet-link/... prefix is appended below, so a forge-url carrying a path
+        # (e.g. https://forge.allora.network/api/v1) would produce a double /api/v1 and a confusing
+        # 404. Reject it up front with an actionable message instead.
+        print(
+            f"forge_url must be a scheme+host with no path; got path={parsed.path!r}. "
+            "Use e.g. https://forge.allora.network (the /api/v1 prefix is added automatically).",
+            file=sys.stderr,
+        )
+        return 1
     keys = discover_keys(secrets_path)
     if not keys:
         print(
