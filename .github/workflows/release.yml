@@ -24,13 +24,22 @@ jobs:
       - name: Guard against unreleased local SDK source
         run: |
           set -euo pipefail
-          # Parse the TOML rather than grep for a header: a grep anchored on "[tool.uv.sources"
-          # misses semantically equivalent forms (inline "[tool.uv]" with a "sources = {...}" key,
-          # dotted/quoted keys, etc.) that would still redirect allora-sdk to the local worktree.
-          if python -c "import tomllib, sys; data = tomllib.load(open('pyproject.toml', 'rb')); sys.exit(0 if 'sources' in data.get('tool', {}).get('uv', {}) else 1)"; then
-            echo "::error file=pyproject.toml::[tool.uv.sources] is still present; it pins allora-sdk to the local ../allora-sdk-py worktree and must be removed before publishing (gated on the allora-sdk PyPI release, ENGN-8646)."
-            exit 1
-          fi
+          # Parse pyproject.toml with tomllib (stdlib, Python 3.11) instead of grepping: a real
+          # TOML parse catches every semantically-equivalent spelling of the [tool.uv.sources]
+          # table (indented, dotted, inline) that a regex would miss.
+          python - <<'PY'
+          import sys
+          import tomllib
+          with open("pyproject.toml", "rb") as f:
+              data = tomllib.load(f)
+          if data.get("tool", {}).get("uv", {}).get("sources"):
+              print(
+                  "::error file=pyproject.toml::[tool.uv.sources] is still present; it pins "
+                  "allora-sdk to the local ../allora-sdk-py worktree and must be removed before "
+                  "publishing (gated on the allora-sdk PyPI release, ENGN-8646)."
+              )
+              sys.exit(1)
+          PY
           req="$(python -c "import tomllib; deps = tomllib.load(open('pyproject.toml', 'rb'))['project']['dependencies']; print(next(r for r in deps if r.replace(' ', '').lower().startswith('allora-sdk')))")"
           echo "Verifying '${req}' is resolvable from PyPI (wheels only)..."
           # Resolve wheels only (--only-binary=:all:): never build an sdist, so this check cannot
