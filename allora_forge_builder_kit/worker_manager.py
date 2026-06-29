@@ -291,16 +291,46 @@ class WorkerManager:
         # freed. Best-effort — the worker is already gone locally, and the backend get-or-create is
         # idempotent, so a stale binding is simply reused on the next deploy rather than leaking.
         if custody == "managed" and signing_wallet_id:
+            self._release_managed_binding(signing_wallet_id, topic_id)
+
+    def _release_managed_binding(self, signing_wallet_id: str, topic_id: int, timeout: float = 5.0) -> None:
+        """Best-effort release of a managed wallet's (user, topic) binding on the Forge backend.
+
+        Runs ``clear_association`` on a bounded daemon thread and waits at most ``timeout`` seconds.
+        The SDK call takes no per-request timeout, so without this bound a degraded backend would
+        stall the caller for the full SDK timeout and serialize batch teardowns one RTT at a time —
+        even though the local state is already gone. The backend get-or-create is idempotent, so a
+        binding left unreleased here is reused on the next deploy rather than leaking. Never raises:
+        decommission cleanup must neither block on nor be aborted by the backend.
+        """
+        result: dict[str, BaseException] = {}
+
+        def _clear() -> None:
             try:
                 self._forge_client().clear_association(signing_wallet_id)
-                logger.info("released managed wallet %s topic binding (topic %s)", signing_wallet_id, topic_id)
-            except Exception as e:  # noqa: BLE001 - decommission cleanup must never raise
-                logger.warning(
-                    "clear-association failed for managed wallet %s (topic %s): %s; removed locally anyway",
-                    signing_wallet_id,
-                    topic_id,
-                    e,
-                )
+            except BaseException as e:  # noqa: BLE001 - surfaced via result; must not escape the thread
+                result["error"] = e
+
+        worker = threading.Thread(
+            target=_clear, name=f"clear-association-{signing_wallet_id}", daemon=True
+        )
+        worker.start()
+        worker.join(timeout)
+        if worker.is_alive():
+            logger.warning(
+                "clear-association for managed wallet %s (topic %s) did not finish within %.0fs; "
+                "removed locally anyway (stale binding is reused on the next deploy)",
+                signing_wallet_id, topic_id, timeout,
+            )
+            return
+        error = result.get("error")
+        if error is not None:
+            logger.warning(
+                "clear-association failed for managed wallet %s (topic %s): %s; removed locally anyway",
+                signing_wallet_id, topic_id, error,
+            )
+            return
+        logger.info("released managed wallet %s topic binding (topic %s)", signing_wallet_id, topic_id)
 
     def status_worker(self, topic_id: int, address: str) -> dict:
         with sqlite3.connect(self.db_path) as conn:

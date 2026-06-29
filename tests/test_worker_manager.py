@@ -433,6 +433,31 @@ def test_remove_local_worker_does_not_clear(tmp_path: Path):
     assert client.cleared == []
 
 
+def test_release_managed_binding_bounds_slow_backend(tmp_path: Path):
+    """A degraded backend must not stall teardown: _release_managed_binding returns within its
+    timeout even when clear_association blocks, and never raises."""
+    import threading
+    import time
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    class _HangingClient(_FakeForgeClient):
+        def clear_association(self, wallet_id: str) -> None:
+            entered.set()
+            release.wait(30)  # would block the caller for the full SDK timeout without the bound
+
+    manager = _managed_manager(tmp_path, _HangingClient())
+
+    start = time.monotonic()
+    manager._release_managed_binding("wallet-x", topic_id=1, timeout=0.5)
+    elapsed = time.monotonic() - start
+    release.set()  # let the daemon thread unwind
+
+    assert entered.wait(1.0)  # the clear actually started on the background thread
+    assert elapsed < 5.0  # returned at ~0.5s, not blocked on the 30s backend call
+
+
 def test_deploy_managed_rejects_malformed_backend_wallet(tmp_path: Path):
     class _BadClient(_FakeForgeClient):
         def provision_wallet(self, topic_id: int, label: str | None = None):
