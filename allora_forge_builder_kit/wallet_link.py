@@ -167,6 +167,31 @@ def discover_keys(secrets_path: str | Path) -> dict[str, _KeyEntry]:
     return keys
 
 
+class _RequestError(SystemExit):
+    """A wallet-link HTTP/network failure.
+
+    Subclasses ``SystemExit`` so an unhandled error still aborts the CLI with a clean message
+    (no traceback), like the rest of this module, while carrying the HTTP ``status`` (``None`` for
+    network/transport errors) so the device-flow poll loop can stop on a terminal 4xx instead of
+    retrying it until the deadline.
+    """
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+def _is_terminal_poll_error(exc: BaseException) -> bool:
+    """True when a poll error should stop the device flow immediately rather than be retried.
+
+    Terminal = a 4xx client error other than 408/429 (e.g. the device code is expired, invalid, or
+    already used): every retry returns the same response until the deadline. 5xx, 408, 429, network
+    blips, and malformed-body errors (no ``status``) are transient and keep polling.
+    """
+    status = getattr(exc, "status", None)
+    return status is not None and 400 <= status < 500 and status not in (408, 429)
+
+
 def _loads_json_object(url: str, raw: str) -> dict[str, Any]:
     """Parse a server response body into a JSON object.
 
@@ -197,9 +222,9 @@ def _post_json(url: str, payload: dict[str, Any], timeout: float = 15.0) -> dict
         # Filter the server-supplied error body so it can't inject terminal escapes (matches the
         # _printable() treatment of user_code / verification_uri_complete on the success path).
         detail = _printable(exc.read(_MAX_RESPONSE_BYTES).decode("utf-8", "replace"))
-        raise SystemExit(f"request to {url} failed ({exc.code}): {detail}") from exc
+        raise _RequestError(f"request to {url} failed ({exc.code}): {detail}", status=exc.code) from exc
     except urllib.error.URLError as exc:
-        raise SystemExit(f"could not reach {url}: {exc.reason}") from exc
+        raise _RequestError(f"could not reach {url}: {exc.reason}") from exc
 
 
 def _printable(text: str) -> str:
@@ -246,13 +271,13 @@ class _JsonPoster:
                 data = resp.read(_MAX_RESPONSE_BYTES)
                 if resp.status >= 400:
                     detail = _printable(data.decode("utf-8", "replace"))
-                    raise SystemExit(f"request to {url} failed ({resp.status}): {detail}")
+                    raise _RequestError(f"request to {url} failed ({resp.status}): {detail}", status=resp.status)
                 return _loads_json_object(url, data.decode("utf-8", "replace"))
             except (http.client.HTTPException, OSError) as exc:
                 self.close()
                 if attempt == 2:
-                    raise SystemExit(f"could not reach {url}: {exc}") from exc
-        raise SystemExit(f"could not reach {url}")  # unreachable: the loop returns or raises
+                    raise _RequestError(f"could not reach {url}: {exc}") from exc
+        raise _RequestError(f"could not reach {url}")  # unreachable: the loop returns or raises
 
     def close(self) -> None:
         if self._conn is not None:
@@ -415,8 +440,13 @@ def run_link(
                     f"{forge_url}/api/v1/wallet-link/device/poll", {"device_code": device_code}
                 )
             except SystemExit as exc:
-                # Transient HTTP/network error (502/503/429, DNS blip): keep polling
-                # until our wall-clock deadline instead of aborting the whole flow.
+                if _is_terminal_poll_error(exc):
+                    # Stop now with the server's explanation instead of spamming "retrying..."
+                    # until the deadline — a terminal 4xx returns the same response every poll.
+                    print(f"\nLink failed: {exc}", file=sys.stderr)
+                    return 1
+                # Transient (5xx / 408 / 429 / DNS blip / malformed body): keep polling until our
+                # wall-clock deadline instead of aborting the whole flow.
                 print(f"  (poll error: {exc}; retrying...)", file=sys.stderr)
                 continue
             status = poll.get("status")

@@ -8,6 +8,8 @@ import json
 import pytest
 
 from allora_forge_builder_kit.wallet_link import (
+    _RequestError,
+    _is_terminal_poll_error,
     _loads_json_object,
     build_adr036_sign_doc,
     discover_keys,
@@ -77,6 +79,34 @@ def test_loads_json_object_rejects_non_json_body():
     # unwrapped JSONDecodeError; it becomes a SystemExit the poll loop can treat as transient.
     with pytest.raises(SystemExit):
         _loads_json_object("https://forge.example", "<html>502 Bad Gateway</html>")
+
+
+def test_is_terminal_poll_error_classifies_status():
+    # Terminal 4xx (except 408/429) stops the flow; 5xx / 408 / 429 / network / malformed retry.
+    assert _is_terminal_poll_error(_RequestError("x", status=404)) is True
+    assert _is_terminal_poll_error(_RequestError("x", status=400)) is True
+    assert _is_terminal_poll_error(_RequestError("x", status=403)) is True
+    assert _is_terminal_poll_error(_RequestError("x", status=500)) is False
+    assert _is_terminal_poll_error(_RequestError("x", status=503)) is False
+    assert _is_terminal_poll_error(_RequestError("x", status=429)) is False
+    assert _is_terminal_poll_error(_RequestError("x", status=408)) is False
+    assert _is_terminal_poll_error(_RequestError("x")) is False  # network error: status is None
+    assert _is_terminal_poll_error(SystemExit("malformed body")) is False  # no status attribute
+
+
+def test_post_json_http_error_carries_status(monkeypatch):
+    import io
+    import urllib.error
+
+    from allora_forge_builder_kit import wallet_link
+
+    def _raise(*args, **kwargs):
+        raise urllib.error.HTTPError("https://forge.example", 404, "Not Found", {}, io.BytesIO(b"nope"))
+
+    monkeypatch.setattr(wallet_link.urllib.request, "urlopen", _raise)
+    with pytest.raises(_RequestError) as excinfo:
+        wallet_link._post_json("https://forge.example", {})
+    assert excinfo.value.status == 404
 
 
 def test_sign_challenge_address_mismatch():
