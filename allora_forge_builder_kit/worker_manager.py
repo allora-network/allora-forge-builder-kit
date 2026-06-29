@@ -573,7 +573,7 @@ class WorkerManager:
             return True
         return any(os.path.exists(p) for p in ("notebooks/.allora_api_key", ".allora_api_key"))
 
-    def _build_run_command(self, topic_id: int, address: str, status: dict) -> tuple[list[str], Optional[dict[str, str]]]:
+    def _build_run_command(self, topic_id: int, address: str, status: dict[str, Any]) -> tuple[list[str], Optional[dict[str, str]]]:
         """Build the ``worker_runtime`` argv (and subprocess env) for a worker slot.
 
         Local custody passes the on-disk key file via ``--mnemonic-file``. Managed custody passes
