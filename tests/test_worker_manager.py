@@ -356,6 +356,20 @@ def test_build_run_command_managed_without_signing_wallet_id_raises(tmp_path: Pa
         manager._build_run_command(7, "allo1managed0007", status)
 
 
+def test_allora_api_key_present_treats_empty_file_as_absent(tmp_path: Path, monkeypatch):
+    """An existing-but-empty .allora_api_key must not satisfy the precheck: the subprocess would
+    resolve it to an empty key and fail at runtime, defeating the fail-before-running guarantee."""
+    monkeypatch.delenv("ALLORA_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+    key_file = tmp_path / ".allora_api_key"
+
+    key_file.write_text("   \n")
+    assert WorkerManager._allora_api_key_present() is False
+
+    key_file.write_text("real-key")
+    assert WorkerManager._allora_api_key_present() is True
+
+
 def test_remove_managed_worker_clears_association(tmp_path: Path):
     client = _FakeForgeClient()
     manager = _managed_manager(tmp_path, client)

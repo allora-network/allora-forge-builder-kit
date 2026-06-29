@@ -564,14 +564,22 @@ class WorkerManager:
     # ----------------------------
     @staticmethod
     def _allora_api_key_present() -> bool:
-        """True when ALLORA_API_KEY is resolvable, mirroring worker_runtime._load_api_key.
+        """True when a non-empty ALLORA_API_KEY is resolvable, mirroring worker_runtime._load_api_key.
 
-        Checks the environment first, then the ``.allora_api_key`` file fallbacks the runtime reads,
-        so this precheck matches exactly what the spawned subprocess will look for.
+        Checks the environment first, then the ``.allora_api_key`` file fallbacks the runtime reads.
+        A file that exists but is empty or whitespace-only is treated as absent: the subprocess
+        would resolve it to an empty key and fail at runtime, so accepting it here would defeat the
+        fail-before-running guarantee this precheck exists to provide.
         """
         if os.environ.get("ALLORA_API_KEY"):
             return True
-        return any(os.path.exists(p) for p in ("notebooks/.allora_api_key", ".allora_api_key"))
+        for p in ("notebooks/.allora_api_key", ".allora_api_key"):
+            try:
+                if Path(p).read_text().strip():
+                    return True
+            except OSError:
+                continue
+        return False
 
     def _build_run_command(self, topic_id: int, address: str, status: dict[str, Any]) -> tuple[list[str], Optional[dict[str, str]]]:
         """Build the ``worker_runtime`` argv (and subprocess env) for a worker slot.
