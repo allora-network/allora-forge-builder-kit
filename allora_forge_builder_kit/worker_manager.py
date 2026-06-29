@@ -1369,15 +1369,28 @@ class WorkerManager:
     def _validate_artifact_for_deploy(self, artifact_path: Path) -> None:
         """Block known-bad artifact variants from deployment.
 
-        Guardrail: old pickles that embed `load_raw` for live price lookup are
-        not deploy-safe in managed worker runtime.
+        Guardrail: old pickles that embed `load_raw` for live price lookup are not deploy-safe in
+        the managed worker runtime. Streamed in 64 KiB chunks (carrying a needle-sized overlap
+        between chunks) so a large pickled model (100MB+) is never read into memory in full —
+        mirroring `_artifact_sha256`. This runs before the custody branch, so managed deploys
+        benefit from the bounded memory too.
         """
+        needles = (b"load_raw", b"Could not get current price from raw data")
+        overlap = max(len(n) for n in needles) - 1
+        found = [False, False]
         try:
-            blob = artifact_path.read_bytes()
+            with artifact_path.open("rb") as f:
+                tail = b""
+                for chunk in iter(lambda: f.read(65536), b""):
+                    window = tail + chunk
+                    found = [hit or needle in window for hit, needle in zip(found, needles)]
+                    if all(found):
+                        break
+                    tail = window[-overlap:]
         except Exception:
             return
 
-        if b"load_raw" in blob and b"Could not get current price from raw data" in blob:
+        if all(found):
             raise ValueError(
                 f"Refusing to deploy artifact with raw-data inference path: {artifact_path}. "
                 "Use export_predict_self_contained.py."

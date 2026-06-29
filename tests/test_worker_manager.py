@@ -54,6 +54,36 @@ def _new_manager(tmp_path: Path) -> WorkerManager:
     )
 
 
+def test_validate_artifact_for_deploy_clean_artifact_ok(tmp_path: Path):
+    manager = _managed_manager(tmp_path, _FakeForgeClient())
+    artifact = tmp_path / "clean.pkl"
+    artifact.write_bytes(b"x" * 200000)  # > one 64 KiB chunk, no banned markers
+    manager._validate_artifact_for_deploy(artifact)  # no raise
+
+
+def test_validate_artifact_for_deploy_rejects_raw_data_artifact(tmp_path: Path):
+    manager = _managed_manager(tmp_path, _FakeForgeClient())
+    artifact = tmp_path / "raw.pkl"
+    artifact.write_bytes(b"load_raw ... Could not get current price from raw data ...")
+    with pytest.raises(ValueError, match="raw-data inference path"):
+        manager._validate_artifact_for_deploy(artifact)
+
+
+def test_validate_artifact_for_deploy_detects_marker_across_chunk_boundary(tmp_path: Path):
+    # A banned marker straddling the 64 KiB streaming boundary must still be detected (the chunk
+    # overlap covers it) — otherwise streaming would regress the in-memory scan it replaced.
+    manager = _managed_manager(tmp_path, _FakeForgeClient())
+    artifact = tmp_path / "boundary.pkl"
+    artifact.write_bytes(
+        b"x" * (65536 - 4)
+        + b"load_raw"  # straddles the first/second chunk boundary
+        + b"y" * 50
+        + b"Could not get current price from raw data"
+    )
+    with pytest.raises(ValueError, match="raw-data inference path"):
+        manager._validate_artifact_for_deploy(artifact)
+
+
 def test_add_worker_enforces_unique_topic_address(tmp_path: Path):
     manager = _new_manager(tmp_path)
     spec = WorkerSpec(
