@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import http.client
 import json
 import os
 import re
@@ -30,7 +31,7 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import Any, TypedDict
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 DEFAULT_FORGE_URL = "https://forge.allora.network"
 DEFAULT_SECRETS_PATH = "worker_secrets.json"
@@ -185,6 +186,61 @@ def _printable(text: str) -> str:
     return "".join(c for c in text if c.isprintable())
 
 
+class _JsonPoster:
+    """Reusable JSON poster that holds one keep-alive connection to a fixed host.
+
+    The device-flow poll loop hits a single Forge host up to ~120 times; ``urllib`` opens a
+    fresh TCP+TLS connection per call, so reusing one connection removes a handshake per poll.
+    This mirrors ``_post_json``'s bounded read, error sanitization, and ``SystemExit``-on-failure
+    so the poll loop's existing transient-error handling is unchanged. A server that closed an
+    idle keep-alive connection between polls is handled by one transparent reconnect.
+    """
+
+    def __init__(self, base_url: str, timeout: float = 15.0) -> None:
+        parts = urlsplit(base_url)
+        self._host = parts.hostname or ""
+        self._port = parts.port
+        self._https = parts.scheme != "http"
+        self._timeout = timeout
+        self._conn: http.client.HTTPConnection | None = None
+
+    def _connect(self) -> http.client.HTTPConnection:
+        if self._https:
+            return http.client.HTTPSConnection(self._host, self._port, timeout=self._timeout)
+        return http.client.HTTPConnection(self._host, self._port, timeout=self._timeout)
+
+    def post(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST JSON to url over the held connection; raises SystemExit on HTTP/network errors."""
+        path = urlsplit(url).path or "/"
+        body = json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        # One transparent reconnect: the server may have closed an idle keep-alive connection
+        # between polls, which only surfaces as a connection error when the next request reuses it.
+        for attempt in (1, 2):
+            if self._conn is None:
+                self._conn = self._connect()
+            try:
+                self._conn.request("POST", path, body=body, headers=headers)
+                resp = self._conn.getresponse()
+                data = resp.read(_MAX_RESPONSE_BYTES)
+                if resp.status >= 400:
+                    detail = _printable(data.decode("utf-8", "replace"))
+                    raise SystemExit(f"request to {url} failed ({resp.status}): {detail}")
+                return json.loads(data.decode("utf-8"))
+            except (http.client.HTTPException, OSError) as exc:
+                self.close()
+                if attempt == 2:
+                    raise SystemExit(f"could not reach {url}: {exc}") from exc
+        raise SystemExit(f"could not reach {url}")  # unreachable: the loop returns or raises
+
+    def close(self) -> None:
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            finally:
+                self._conn = None
+
+
 def run_link(
     forge_url: str = DEFAULT_FORGE_URL,
     secrets_path: str = DEFAULT_SECRETS_PATH,
@@ -319,33 +375,39 @@ def run_link(
         timeout = _POLL_TIMEOUT_SECONDS
     timeout = max(1, min(timeout, _POLL_TIMEOUT_SECONDS))
     deadline = time.time() + timeout
-    while time.time() < deadline:
-        time.sleep(max(1, interval))
-        try:
-            poll = _post_json(
-                f"{forge_url}/api/v1/wallet-link/device/poll", {"device_code": device_code}
-            )
-        except SystemExit as exc:
-            # Transient HTTP/network error (502/503/429, DNS blip): keep polling
-            # until our wall-clock deadline instead of aborting the whole flow.
-            print(f"  (poll error: {exc}; retrying...)", file=sys.stderr)
-            continue
-        status = poll.get("status")
-        if status == "approved":
-            linked = poll.get("linked", [])
-            print(f"\nLinked {len(linked)} verified worker(s):")
-            for addr in linked:
-                # Server-controlled: filter terminal escapes so a malicious 'linked' entry can't
-                # render a clickable OSC-8 hyperlink disguised as a bech32 address.
-                if isinstance(addr, str):
-                    print(f"  + {_printable(addr)}")
-            return 0
-        if status == "denied":
-            print("\nLink request was denied in the browser.", file=sys.stderr)
-            return 1
-        if status == "expired":
-            print("\nLink request expired before approval.", file=sys.stderr)
-            return 1
+    # Reuse one keep-alive connection across the (up to ~120) polls to the same Forge host
+    # instead of a fresh TCP+TLS handshake per poll.
+    poller = _JsonPoster(forge_url)
+    try:
+        while time.time() < deadline:
+            time.sleep(max(1, interval))
+            try:
+                poll = poller.post(
+                    f"{forge_url}/api/v1/wallet-link/device/poll", {"device_code": device_code}
+                )
+            except SystemExit as exc:
+                # Transient HTTP/network error (502/503/429, DNS blip): keep polling
+                # until our wall-clock deadline instead of aborting the whole flow.
+                print(f"  (poll error: {exc}; retrying...)", file=sys.stderr)
+                continue
+            status = poll.get("status")
+            if status == "approved":
+                linked = poll.get("linked", [])
+                print(f"\nLinked {len(linked)} verified worker(s):")
+                for addr in linked:
+                    # Server-controlled: filter terminal escapes so a malicious 'linked' entry
+                    # can't render a clickable OSC-8 hyperlink disguised as a bech32 address.
+                    if isinstance(addr, str):
+                        print(f"  + {_printable(addr)}")
+                return 0
+            if status == "denied":
+                print("\nLink request was denied in the browser.", file=sys.stderr)
+                return 1
+            if status == "expired":
+                print("\nLink request expired before approval.", file=sys.stderr)
+                return 1
+    finally:
+        poller.close()
 
     print("\nTimed out waiting for browser approval.", file=sys.stderr)
     return 1
