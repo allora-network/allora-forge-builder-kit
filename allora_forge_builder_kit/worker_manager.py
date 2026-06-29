@@ -79,6 +79,11 @@ class ForgeClientProtocol(Protocol):
     two calls :class:`WorkerManager` makes so local-custody installs need not import the SDK and the
     injected client is checked at the boundary instead of being typed as ``Any``. ``@runtime_checkable``
     lets the lazy build assert the SDK client satisfies this contract at the injection boundary.
+
+    Note: allora-sdk-py owns the canonical contract; this is a local mirror. @@TODO: move this
+    Protocol (and ``ProvisionedWallet``) into allora-sdk-py's ``rpc_client`` package, re-export it,
+    and import rather than redeclare it here, so drift is caught at the SDK boundary, not only at the
+    first managed deploy (cross-repo follow-up).
     """
 
     def provision_wallet(self, topic_id: int, label: str | None = None) -> ProvisionedWallet:
