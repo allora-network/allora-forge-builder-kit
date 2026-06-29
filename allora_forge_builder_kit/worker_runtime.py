@@ -189,6 +189,16 @@ def main() -> None:
     parser.add_argument("--reject-zero", action="store_true")
     args = parser.parse_args()
 
+    if args.custody == "local" and not args.mnemonic_file:
+        # Symmetric with the managed branch's loud FORGE_API_KEY check below. Without a key file the
+        # SDK falls back to its interactive ".allora_key" flow — generating and persisting a fresh
+        # throwaway wallet (or blocking on a prompt) inside a headless subprocess — instead of
+        # signing with the intended worker key, so fail at parse time with an actionable message.
+        parser.error(
+            "--custody local requires --mnemonic-file pointing at a worker key file; "
+            "use --custody managed for backend-provisioned wallets"
+        )
+
     if args.custody == "managed" and args.mnemonic_file:
         parser.error(
             "--mnemonic-file is incompatible with --custody managed; managed custody uses "

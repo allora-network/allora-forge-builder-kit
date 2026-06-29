@@ -98,6 +98,17 @@ def test_main_managed_with_mnemonic_file_errors(monkeypatch):
         main()
 
 
+def test_main_local_without_mnemonic_file_errors(monkeypatch):
+    # Symmetric with the managed branch: local custody requires --mnemonic-file, otherwise the SDK
+    # would silently generate a throwaway wallet. Fail at arg-parse time instead.
+    monkeypatch.setattr(
+        "sys.argv",
+        ["worker_runtime", "--topic", "1", "--artifact", "x.pkl", "--custody", "local"],
+    )
+    with pytest.raises(SystemExit):
+        main()
+
+
 def test_main_managed_without_forge_api_key_errors(monkeypatch):
     monkeypatch.setattr(
         "sys.argv",
