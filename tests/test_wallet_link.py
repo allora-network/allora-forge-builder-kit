@@ -8,6 +8,7 @@ import json
 import pytest
 
 from allora_forge_builder_kit.wallet_link import (
+    _loads_json_object,
     build_adr036_sign_doc,
     discover_keys,
 )
@@ -58,6 +59,24 @@ def test_sign_roundtrip_with_cosmpy():
     pubkey_b64, signature_b64 = sign_challenge(mnemonic, address, "verify me")
     assert len(base64.b64decode(pubkey_b64)) == 33
     assert len(base64.b64decode(signature_b64)) == 64
+
+
+def test_loads_json_object_accepts_object():
+    assert _loads_json_object("https://forge.example", '{"device_code": "abc"}') == {"device_code": "abc"}
+
+
+def test_loads_json_object_rejects_non_object_json():
+    # A JSON array/scalar/null would crash callers with AttributeError on .get(); reject cleanly.
+    for body in ("[1, 2, 3]", '"a string"', "null", "42"):
+        with pytest.raises(SystemExit):
+            _loads_json_object("https://forge.example", body)
+
+
+def test_loads_json_object_rejects_non_json_body():
+    # A truncated body or an HTML error page from an intermediary proxy must not raise an
+    # unwrapped JSONDecodeError; it becomes a SystemExit the poll loop can treat as transient.
+    with pytest.raises(SystemExit):
+        _loads_json_object("https://forge.example", "<html>502 Bad Gateway</html>")
 
 
 def test_sign_challenge_address_mismatch():

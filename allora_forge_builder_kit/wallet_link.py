@@ -167,15 +167,32 @@ def discover_keys(secrets_path: str | Path) -> dict[str, _KeyEntry]:
     return keys
 
 
+def _loads_json_object(url: str, raw: str) -> dict[str, Any]:
+    """Parse a server response body into a JSON object.
+
+    Raises ``SystemExit`` when the body is not valid JSON, or is valid JSON that is not an object
+    (a list, string, number, or null), so callers never hit an ``AttributeError`` from ``.get(...)``
+    on a non-dict nor an unwrapped ``JSONDecodeError``. On the poll path this ``SystemExit`` is
+    caught and retried as transient; on start/submit it aborts cleanly like the HTTP-error path.
+    """
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"request to {url} returned non-JSON: {raw[:200]!r}") from exc
+    if not isinstance(parsed, dict):
+        raise SystemExit(f"request to {url} returned unexpected JSON type: {type(parsed).__name__}")
+    return parsed
+
+
 def _post_json(url: str, payload: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
-    """POST JSON payload to url; raises SystemExit on HTTP/network errors."""
+    """POST JSON payload to url; raises SystemExit on HTTP/network errors or a non-object body."""
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url, data=body, headers={"Content-Type": "application/json"}, method="POST"
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read(_MAX_RESPONSE_BYTES).decode("utf-8"))
+            return _loads_json_object(url, resp.read(_MAX_RESPONSE_BYTES).decode("utf-8", "replace"))
     except urllib.error.HTTPError as exc:
         # Filter the server-supplied error body so it can't inject terminal escapes (matches the
         # _printable() treatment of user_code / verification_uri_complete on the success path).
@@ -230,7 +247,7 @@ class _JsonPoster:
                 if resp.status >= 400:
                     detail = _printable(data.decode("utf-8", "replace"))
                     raise SystemExit(f"request to {url} failed ({resp.status}): {detail}")
-                return json.loads(data.decode("utf-8"))
+                return _loads_json_object(url, data.decode("utf-8", "replace"))
             except (http.client.HTTPException, OSError) as exc:
                 self.close()
                 if attempt == 2:
