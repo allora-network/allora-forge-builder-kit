@@ -29,8 +29,11 @@ jobs:
             exit 1
           fi
           req="$(python -c "import tomllib; deps = tomllib.load(open('pyproject.toml', 'rb'))['project']['dependencies']; print(next(r for r in deps if r.replace(' ', '').lower().startswith('allora-sdk')))")"
-          echo "Verifying '${req}' is resolvable from PyPI..."
-          python -m pip download --no-deps --dest /tmp/allora-sdk-resolve "${req}"
+          echo "Verifying '${req}' is resolvable from PyPI (wheels only)..."
+          # Resolve wheels only (--only-binary=:all:): never build an sdist, so this check cannot
+          # execute arbitrary build hooks from a source distribution in a job that holds
+          # id-token: write. allora-sdk publishes a wheel for every release.
+          python -m pip download --no-deps --only-binary=:all: --dest /tmp/allora-sdk-resolve "${req}"
 
       - name: Install build tools
         run: pip install build
