@@ -548,13 +548,26 @@ def run_link(
                 continue
             status = poll.get("status")
             if status == "approved":
-                linked = poll.get("linked", [])
-                print(f"\nLinked {len(linked)} verified worker(s):")
-                for addr in linked:
-                    # Server-controlled: filter terminal escapes so a malicious 'linked' entry
-                    # can't render a clickable OSC-8 hyperlink disguised as a bech32 address.
-                    if isinstance(addr, str):
-                        print(f"  + {_printable(addr)}")
+                # Coerce defensively: a server emitting {"linked": null} would make
+                # poll.get("linked", []) return None (the key exists) and crash len(None).
+                linked_raw = poll.get("linked")
+                linked = linked_raw if isinstance(linked_raw, list) else []
+                # Server-controlled strings: filter terminal escapes so a malicious 'linked' entry
+                # can't render a clickable OSC-8 hyperlink disguised as a bech32 address.
+                linked_addrs = {a for a in linked if isinstance(a, str)}
+                missing = [a for a in selected if a not in linked_addrs]
+                if missing:
+                    # Approved but the backend linked only a subset (or none): a partial link is a
+                    # failure, not a silent exit 0 that signals success to a CI pipeline.
+                    print(
+                        f"\nLink reported approved but {len(missing)} requested address(es) "
+                        "were not linked:\n  " + "\n  ".join(_printable(a) for a in missing),
+                        file=sys.stderr,
+                    )
+                    return 1
+                print(f"\nLinked {len(linked_addrs)} verified worker(s):")
+                for addr in sorted(linked_addrs):
+                    print(f"  + {_printable(addr)}")
                 return 0
             if status == "denied":
                 print("\nLink request was denied in the browser.", file=sys.stderr)

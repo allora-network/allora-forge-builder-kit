@@ -260,3 +260,74 @@ def test_sign_challenge_address_mismatch():
 
     with pytest.raises(ValueError):
         sign_challenge(generate_mnemonic(), "allo1definitelynottheright", "msg")
+
+
+def _setup_device_flow(monkeypatch, tmp_path, poll_result, addresses=("allo1aaa", "allo1bbb")):
+    """Drive run_link's device flow against a stubbed server returning ``poll_result`` on poll."""
+    from allora_forge_builder_kit import wallet_link
+
+    key_file = tmp_path / "w.key"
+    key_file.write_text("mnemonic")
+    secrets = tmp_path / "worker_secrets.json"
+    secrets.write_text(
+        json.dumps({a: {"address": a, "key_file": str(key_file)} for a in addresses})
+    )
+
+    def fake_post_json(url, payload, timeout=15.0):
+        if url.endswith("/device/start"):
+            return {
+                "device_code": "dev",
+                "user_code": "USER",
+                "verification_uri_complete": "https://forge.example/approve",
+                "interval": 1,
+                "expires_in": 5,
+                "challenges": [{"address": a, "message": "m"} for a in addresses],
+            }
+        return {"status": "submitted"}
+
+    class _FakePoller:
+        def __init__(self, *a, **k):
+            pass
+
+        def post(self, url, payload):
+            return poll_result
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(wallet_link, "_post_json", fake_post_json)
+    monkeypatch.setattr(wallet_link, "_JsonPoster", _FakePoller)
+    monkeypatch.setattr(wallet_link, "sign_challenge", lambda *a: ("pub", "sig"))
+    monkeypatch.setattr(wallet_link.webbrowser, "open", lambda url: False)
+    monkeypatch.setattr(wallet_link.time, "sleep", lambda s: None)
+    return str(secrets)
+
+
+def test_run_link_partial_linked_set_is_failure(tmp_path, monkeypatch, capsys):
+    # Approved but only a subset linked: must fail (exit 1) and name the dropped address, not
+    # silently exit 0 (which would signal success to CI for a partial/failed link).
+    from allora_forge_builder_kit import wallet_link
+
+    secrets = _setup_device_flow(monkeypatch, tmp_path, {"status": "approved", "linked": ["allo1aaa"]})
+    rc = wallet_link.run_link(forge_url="https://forge.example", secrets_path=secrets, open_browser=False)
+    assert rc == 1
+    assert "allo1bbb" in capsys.readouterr().err
+
+
+def test_run_link_null_linked_does_not_crash(tmp_path, monkeypatch):
+    # {"linked": null} previously made poll.get("linked", []) return None and crash len(None).
+    from allora_forge_builder_kit import wallet_link
+
+    secrets = _setup_device_flow(monkeypatch, tmp_path, {"status": "approved", "linked": None})
+    rc = wallet_link.run_link(forge_url="https://forge.example", secrets_path=secrets, open_browser=False)
+    assert rc == 1
+
+
+def test_run_link_full_linked_set_succeeds(tmp_path, monkeypatch):
+    from allora_forge_builder_kit import wallet_link
+
+    secrets = _setup_device_flow(
+        monkeypatch, tmp_path, {"status": "approved", "linked": ["allo1aaa", "allo1bbb"]}
+    )
+    rc = wallet_link.run_link(forge_url="https://forge.example", secrets_path=secrets, open_browser=False)
+    assert rc == 0
