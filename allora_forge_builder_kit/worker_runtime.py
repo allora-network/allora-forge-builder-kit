@@ -9,6 +9,7 @@ Two distinct API keys are used here and must not be confused:
 
 They authenticate different backends; ``--custody managed`` consumes ``FORGE_API_KEY`` only.
 """
+
 from __future__ import annotations
 
 import argparse
