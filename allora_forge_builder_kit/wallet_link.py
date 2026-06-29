@@ -35,7 +35,11 @@ from urllib.parse import urlparse, urlsplit
 
 DEFAULT_FORGE_URL = "https://forge.allora.network"
 DEFAULT_SECRETS_PATH = "worker_secrets.json"
-_POLL_TIMEOUT_SECONDS = 600
+# Ceiling on how long the device-flow poll loop waits for browser approval. The client honors the
+# server-advertised expires_in but clamps it to this bound (with a 1s floor). Sized to the typical
+# RFC 8628 device-authorization session window (900-1800s); a lower ceiling would abort sessions the
+# server still considers live (e.g. an approval delayed by MFA or a device switch).
+_POLL_TIMEOUT_SECONDS = 1800
 _MAX_RESPONSE_BYTES = 512 * 1024
 
 
