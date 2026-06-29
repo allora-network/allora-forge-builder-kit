@@ -360,6 +360,32 @@ def test_run_link_rejects_forge_url_with_path(capsys):
     assert "path" in capsys.readouterr().err.lower()
 
 
+def test_run_link_rejects_verification_url_on_different_port(tmp_path, monkeypatch, capsys):
+    # A compromised server returning the approval URL on a different port of the same host must be
+    # refused: the port is part of the origin the CLI pins.
+    from allora_forge_builder_kit import wallet_link
+
+    key_file = tmp_path / "w.key"
+    key_file.write_text("mnemonic")
+    secrets = tmp_path / "worker_secrets.json"
+    secrets.write_text(json.dumps({"allo1aaa": {"address": "allo1aaa", "key_file": str(key_file)}}))
+
+    def fake_post_json(url, payload, timeout=15.0):
+        return {
+            "device_code": "dev",
+            "user_code": "USER",
+            "verification_uri_complete": "https://forge.example:8443/approve",
+            "interval": 1,
+            "expires_in": 5,
+            "challenges": [{"address": "allo1aaa", "message": "m"}],
+        }
+
+    monkeypatch.setattr(wallet_link, "_post_json", fake_post_json)
+    rc = wallet_link.run_link(forge_url="https://forge.example", secrets_path=str(secrets), open_browser=False)
+    assert rc == 1
+    assert "untrusted verification URL" in capsys.readouterr().err
+
+
 def test_jsonposter_closes_connection_on_http_error(monkeypatch):
     # A >= 400 response raises _RequestError (a BaseException the keep-alive except clause won't
     # catch), so the connection must be closed first — otherwise the next poll reuses a connection

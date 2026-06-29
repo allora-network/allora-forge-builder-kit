@@ -251,6 +251,11 @@ def _printable(text: str) -> str:
     return "".join(c for c in text if c.isprintable())
 
 
+def _default_port(scheme: str) -> int | None:
+    """Return the default TCP port for an URL scheme (so an unspecified port compares equal)."""
+    return {"https": 443, "http": 80}.get(scheme)
+
+
 def _submit_rejection(submit: dict[str, Any]) -> str | None:
     """Return a user-facing message if /device/submit reported rejected signatures, else None.
 
@@ -497,11 +502,16 @@ def run_link(
     # a file://, javascript:, or app-launcher URI to the OS handler.
     verification = urlparse(verification_uri_complete)
     same_host = verification.hostname == parsed.hostname
+    # The port is part of the origin: pin it too (using the scheme default when unspecified) so a
+    # compromised server can't redirect to an arbitrary port on the same host.
+    same_port = (verification.port or _default_port(verification.scheme)) == (
+        parsed.port or _default_port(parsed.scheme)
+    )
     safe_scheme = verification.scheme == "https" or (
         verification.scheme == "http"
         and (verification.hostname in _LOOPBACK_HOSTS or insecure)
     )
-    if not (same_host and safe_scheme):
+    if not (same_host and same_port and safe_scheme):
         print(
             f"refusing to open untrusted verification URL: {verification_uri_complete}",
             file=sys.stderr,
