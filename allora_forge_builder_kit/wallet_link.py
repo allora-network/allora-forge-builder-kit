@@ -297,6 +297,12 @@ def _submit_rejection(submit: dict[str, Any]) -> str | None:
     return None
 
 
+# @@TODO: This module hand-rolls an HTTP transport (_post_json + _JsonPoster: proxy resolution,
+# CONNECT tunneling, Proxy-Authorization, keep-alive reconnect, bounded read) that duplicates the
+# requests.Session transport allora-sdk-py's ForgeBackendClient already owns for the same Forge
+# host. Consolidate by moving the device-flow transport into allora-sdk-py (e.g. a DeviceFlowClient
+# reusing the SDK Session) so builder-kit keeps only the CLI orchestration + ADR-036 sign-doc
+# builder. Cross-repo (allora-sdk-py + forge-v2); tracked as a follow-up, not done here.
 class _JsonPoster:
     """Reusable JSON poster that holds one keep-alive connection to a fixed host.
 
