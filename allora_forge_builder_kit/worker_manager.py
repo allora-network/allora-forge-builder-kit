@@ -748,7 +748,12 @@ class WorkerManager:
                 continue
         return False
 
-    def _build_run_command(self, topic_id: int, address: str, status: dict[str, Any]) -> tuple[list[str], dict[str, str] | None]:
+    def _build_run_command(
+        self,
+        topic_id: int,
+        address: str,
+        status: dict[str, Any],
+    ) -> tuple[list[str], dict[str, str] | None]:
         """Build the ``worker_runtime`` argv (and subprocess env) for a worker slot.
 
         Local custody passes the on-disk key file via ``--mnemonic-file``. Managed custody passes
