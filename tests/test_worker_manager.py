@@ -302,6 +302,65 @@ def test_deploy_managed_redeploy_identical_artifact_is_reused(tmp_path: Path):
     assert manager.status_worker(8, "allo1managed0008")["artifact_path"] == artifact_before
 
 
+def test_deploy_managed_redeploy_identical_artifact_resyncs_metadata(tmp_path: Path):
+    """The hash-identical 'reused' path must still re-sync the worker-row metadata (reject_zero +
+    the freshly-provisioned signing_wallet_id) so an idempotent re-run cannot leave the row
+    pointing at a stale flag or wallet binding — while leaving the artifact unrotated."""
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    v1 = tmp_path / "v1.pkl"
+    v1.write_text("same-bytes")
+
+    manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed", reject_zero=False)
+    dep1 = manager._get_active_deployment_id(8, "allo1managed0008")
+    artifact_before = manager.status_worker(8, "allo1managed0008")["artifact_path"]
+
+    # Drift the row: simulate a signing wallet id that has fallen behind the backend.
+    with sqlite3.connect(tmp_path / "state.db") as conn:
+        conn.execute(
+            "UPDATE workers SET signing_wallet_id='stale-wallet' WHERE topic_id=? AND address=?",
+            (8, "allo1managed0008"),
+        )
+        conn.commit()
+
+    # Identical artifact, no replace, but flip reject_zero.
+    v1_again = tmp_path / "v1_again.pkl"
+    v1_again.write_text("same-bytes")
+    result = manager.deploy_worker(topic_id=8, artifact_path=v1_again, custody="managed", reject_zero=True)
+
+    assert result.action == "reused"
+    row = manager.status_worker(8, "allo1managed0008")
+    # Metadata re-synced from the fresh provision...
+    assert row["reject_zero"] is True
+    assert row["signing_wallet_id"] == "wallet-8"
+    # ...but the artifact was NOT rotated.
+    assert manager._get_active_deployment_id(8, "allo1managed0008") == dep1
+    assert row["artifact_path"] == artifact_before
+
+
+def test_deploy_managed_redeploy_identical_artifact_with_replace_rotates(tmp_path: Path):
+    """An explicit replace=True is honored even when the artifact is byte-identical: the caller
+    asked to rotate, so the deployment is rotated and reported 'replaced' rather than
+    short-circuited to 'reused'."""
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    v1 = tmp_path / "v1.pkl"
+    v1.write_text("same-bytes")
+
+    manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed")
+    dep1 = manager._get_active_deployment_id(8, "allo1managed0008")
+
+    v1_again = tmp_path / "v1_again.pkl"
+    v1_again.write_text("same-bytes")
+    result = manager.deploy_worker(topic_id=8, artifact_path=v1_again, custody="managed", replace=True)
+
+    assert result.action == "replaced"
+    assert len([w for w in manager.status_all() if w["topic_id"] == 8]) == 1
+    # Explicit replace rotated the deployment even though the bytes were identical.
+    dep2 = manager._get_active_deployment_id(8, "allo1managed0008")
+    assert dep1 and dep2 and dep1 != dep2
+
+
 def test_deploy_managed_redeploy_legacy_null_hash_without_replace_raises(tmp_path: Path):
     """A legacy active deployment with no recorded hash is treated conservatively as 'unknown':
     a redeploy without replace=True refuses rather than risk overwriting a different deployment,

@@ -538,12 +538,15 @@ class WorkerManager:
         Redeploys are hash-aware (synth-009): the new artifact's SHA-256 is compared against the
         active deployment's recorded hash.
 
-        * identical hash -> ``reused``: the running deployment already serves byte-identical
-          artifact, so it is left untouched (no rotation). Makes a re-run of the same CI deploy
-          idempotent instead of needlessly churning the worker.
+        * identical hash, ``replace=False`` -> ``reused``: the running deployment already serves
+          byte-identical artifact, so the artifact is left in place (no rotation). The worker-row
+          metadata (reject_zero + the freshly-provisioned signing_wallet_id, and topic_desc) is
+          still re-synced so an idempotent re-run cannot leave the row pointing at a stale flag or
+          wallet binding.
+        * ``replace=True`` -> ``replaced``: the caller explicitly asked to rotate, so rotate the
+          artifact on the one-per-topic wallet even when it is byte-identical.
         * different (or unknown) hash with ``replace=False`` -> ``ValueError``: a different
           artifact is never silently swapped onto a running deployment, even in auto mode.
-        * ``replace=True`` -> ``replaced``: rotate the artifact on the one-per-topic wallet.
 
         A legacy active deployment with no recorded hash is treated conservatively as "unknown":
         without ``replace=True`` we cannot prove the artifact is unchanged, so we refuse rather
@@ -563,16 +566,23 @@ class WorkerManager:
         if self._worker_exists(topic_id, address):
             new_hash = self._artifact_sha256(artifact)
             active_hash = self._get_active_deployment_hash(topic_id, address)
+            identical = active_hash is not None and active_hash == new_hash
 
-            # Idempotent re-run: the active deployment already serves byte-identical artifact, so
-            # keep it as-is rather than rotating the running worker. Reported as 'reused'.
-            if active_hash is not None and active_hash == new_hash:
+            # Idempotent re-run: identical artifact AND no explicit replace. Leave the running
+            # artifact in place (no rotation) but still re-sync the worker-row metadata
+            # (reject_zero + the freshly-provisioned signing_wallet_id, and topic_desc) so the row
+            # never drifts from the fresh provision. An explicit replace=True is honored instead
+            # and falls through to the rotate path below — the caller asked to rotate.
+            if identical and not replace:
+                self._sync_worker_metadata(
+                    topic_id, address, topic_desc, reject_zero=reject_zero, signing_wallet_id=info.id
+                )
                 return DeployResult(
                     topic_id=topic_id,
                     address_assigned=address,
                     artifact_path=str(artifact),
                     action="reused",
-                    message=f"Reused managed worker for topic {topic_id} (wallet {address}); artifact unchanged",
+                    message=f"Reused managed worker for topic {topic_id} (wallet {address}); artifact unchanged, metadata re-synced",
                 )
 
             # synth-009: a different artifact — or a legacy active deployment with no recorded hash,
@@ -584,8 +594,9 @@ class WorkerManager:
                     "deployment with a different (or unknown) artifact; pass replace=True to rotate it"
                 )
 
-            # Re-sync reject_zero and the freshly-provisioned wallet id so a redeploy cannot leave
-            # the row pointing at a stale flag or wallet binding.
+            # Explicit replace (or a genuinely different artifact): rotate the artifact on the
+            # one-per-topic wallet. Re-sync reject_zero and the freshly-provisioned wallet id so a
+            # redeploy cannot leave the row pointing at a stale flag or wallet binding.
             current_artifact = self._update_worker(
                 topic_id, address, artifact, topic_desc, reject_zero=reject_zero, signing_wallet_id=info.id
             )
@@ -1153,6 +1164,43 @@ class WorkerManager:
             )
             conn.commit()
         return managed_artifact
+
+    def _sync_worker_metadata(
+        self,
+        topic_id: int,
+        address: str,
+        topic_desc: str | None = None,
+        reject_zero: Optional[bool] = None,
+        signing_wallet_id: Optional[str] = None,
+    ) -> None:
+        """Re-sync a worker row's mutable metadata in place, without rotating its artifact.
+
+        The hash-identical managed redeploy path uses this: the running artifact is byte-identical
+        so it is left untouched, but reject_zero / signing_wallet_id (and topic_desc) are still
+        refreshed from the fresh provision so an idempotent re-run cannot leave the row pointing at
+        a stale flag or wallet binding. Each field is written only when provided (non-None), via
+        COALESCE — mirroring the metadata half of :meth:`_update_worker` minus the artifact swap.
+        """
+        resolved_desc = self._resolve_topic_desc(topic_id, topic_desc)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE workers
+                   SET topic_desc=COALESCE(?, topic_desc),
+                       reject_zero=COALESCE(?, reject_zero),
+                       signing_wallet_id=COALESCE(?, signing_wallet_id),
+                       updated_at=CURRENT_TIMESTAMP
+                 WHERE topic_id=? AND address=?
+                """,
+                (
+                    resolved_desc,
+                    None if reject_zero is None else (1 if reject_zero else 0),
+                    signing_wallet_id,
+                    topic_id,
+                    address,
+                ),
+            )
+            conn.commit()
 
     def _validate_artifact_for_deploy(self, artifact_path: Path) -> None:
         """Block known-bad artifact variants from deployment.
