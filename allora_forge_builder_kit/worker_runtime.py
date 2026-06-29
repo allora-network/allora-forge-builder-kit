@@ -82,7 +82,10 @@ def _validate_managed_env() -> None:
     # FORGE_MASTER_GRANTER_ADDRESS is the canonical fee-granter env var across the Allora SDKs
     # (allora-sdk-py/-go/-ts); FEE_GRANTER is the deprecated alias the SDK still accepts. Check the
     # canonical name first so an operator who set it correctly doesn't see a spurious warning.
-    if not (os.environ.get("FORGE_MASTER_GRANTER_ADDRESS") or os.environ.get("FEE_GRANTER")):
+    if not (
+        os.environ.get("FORGE_MASTER_GRANTER_ADDRESS", "").strip()
+        or os.environ.get("FEE_GRANTER", "").strip()
+    ):
         warnings.warn(
             "No fee granter set (FORGE_MASTER_GRANTER_ADDRESS, or the deprecated FEE_GRANTER): a "
             "managed wallet holds no ALLO, so gasless submission needs a fee granter — transactions "
