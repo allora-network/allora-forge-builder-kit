@@ -41,6 +41,10 @@ DEFAULT_SECRETS_PATH = "worker_secrets.json"
 # server still considers live (e.g. an approval delayed by MFA or a device switch).
 _POLL_TIMEOUT_SECONDS = 1800
 _MAX_RESPONSE_BYTES = 512 * 1024
+# Loopback hosts treated as safe for plaintext HTTP / verification-URL origin pinning. Includes the
+# IPv6 loopback ::1 (urlparse('http://[::1]/').hostname == '::1', no brackets) so a local Forge bound
+# to [::1] on a dual-stack host doesn't require --insecure.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 # A single discovered worker key entry from worker_secrets.json.
@@ -394,7 +398,7 @@ def run_link(
     parsed = urlparse(forge_url)
     if (
         parsed.scheme != "https"
-        and parsed.hostname not in ("localhost", "127.0.0.1")
+        and parsed.hostname not in _LOOPBACK_HOSTS
         and not insecure
     ):
         print(
@@ -480,7 +484,7 @@ def run_link(
     same_host = verification.hostname == parsed.hostname
     safe_scheme = verification.scheme == "https" or (
         verification.scheme == "http"
-        and (verification.hostname in ("localhost", "127.0.0.1") or insecure)
+        and (verification.hostname in _LOOPBACK_HOSTS or insecure)
     )
     if not (same_host and safe_scheme):
         print(
