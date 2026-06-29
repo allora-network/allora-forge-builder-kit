@@ -136,6 +136,30 @@ def test_artifact_caller_modern_runcontext_named_run_ctx():
     assert _ArtifactCaller(modern)(_FakeCtx(3)) == 6.0
 
 
+def test_artifact_caller_annotated_modern_not_demoted_by_body_typeerror():
+    # cubic: a RunContext-annotated artifact whose body raises TypeError on its first call must not
+    # be misclassified as legacy (which would then pass an int where a RunContext is expected). The
+    # annotation is authoritative, so the shape stays 'context' and the body error propagates.
+    class RunContext:
+        def __init__(self, nonce):
+            self.nonce = nonce
+
+    calls = []
+
+    def modern(ctx: RunContext):
+        calls.append(ctx)
+        if len(calls) == 1:
+            raise TypeError("transient error from the artifact body, not a signature mismatch")
+        return float(ctx.nonce)
+
+    caller = _ArtifactCaller(modern)
+    with pytest.raises(TypeError):
+        caller(_FakeCtx(1))
+    # Still routed via the context form; the ctx object is passed on the retry, never an int nonce.
+    assert caller(_FakeCtx(2)) == 2.0
+    assert all(not isinstance(c, int) for c in calls)
+
+
 def test_artifact_caller_caches_modern_shape_without_reprobe():
     calls = []
 

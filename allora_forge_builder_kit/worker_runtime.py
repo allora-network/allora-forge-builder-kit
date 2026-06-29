@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import math
 import os
 import warnings
@@ -72,21 +73,43 @@ def _resolve_wallet_cfg(
     return AlloraWalletConfig(mnemonic_file=mnemonic_file) if mnemonic_file else None
 
 
+def _annotated_context_shape(raw_fn: Callable[..., object]) -> bool | None:
+    """Resolve the artifact call shape from its signature annotation, without invoking it.
+
+    Returns True when the single positional parameter is annotated as a ``RunContext`` (modern
+    form), False when it carries any other explicit annotation (legacy ``fn(nonce: int)`` form), or
+    None when the shape cannot be decided from the signature alone — unannotated, zero/many
+    positional params, or an un-introspectable builtin — and must be probed at call time.
+    """
+    try:
+        params = [
+            p
+            for p in inspect.signature(raw_fn).parameters.values()
+            if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        ]
+    except (TypeError, ValueError):
+        return None
+    if len(params) != 1 or params[0].annotation is inspect.Parameter.empty:
+        return None
+    return "RunContext" in str(params[0].annotation)
+
+
 class _ArtifactCaller:
     """Resolve and cache how a pickled inference artifact wants to be invoked.
 
     The current SDK calls the inferer callback with a ``RunContext``; legacy kit artifacts are
-    written as ``fn(nonce: int)``. Rather than guess from the parameter name — which silently
-    mis-routes an artifact whose nonce argument happens to be named ``ctx`` (a common idiom), or
-    a modern artifact whose context argument is named something else — probe the actual call
-    contract: try the ``RunContext`` form first (a legacy int-taking function raises ``TypeError``
-    when handed a ``RunContext`` object), then fall back to the nonce form. The winning shape is
-    cached so the contract is resolved once, on the first invocation, not on every nonce.
+    written as ``fn(nonce: int)``. The shape is taken from the parameter's annotation when one is
+    present — a ``RunContext`` annotation is the modern form, any other annotation the legacy form —
+    so a ``TypeError`` raised inside a modern artifact's own body is never misread as a legacy
+    signature (the failure mode of probing by execution alone). Only an *unannotated* single-param
+    artifact is probed at call time: try the ``RunContext`` form (a legacy int-taking function
+    raises ``TypeError`` when handed a ``RunContext``), then fall back to the nonce form. The
+    resolved shape is cached so the contract is decided once, not on every nonce.
     """
 
     def __init__(self, raw_fn: Callable[..., object]) -> None:
         self._raw_fn = raw_fn
-        self._expects_context: bool | None = None
+        self._expects_context: bool | None = _annotated_context_shape(raw_fn)
 
     def __call__(self, ctx: RunContext) -> object:
         if self._expects_context is True:
