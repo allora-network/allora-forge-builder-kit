@@ -341,6 +341,12 @@ class WorkerManager:
         reached the backend release is skipped (still safe — the idempotent get-or-create reuses the
         binding on the next deploy) rather than spawning yet another stuck thread. Daemon threads
         keep process exit non-blocking.
+
+        The SDK call is not cancellable, so under a *sustained* degraded backend the cap can stay
+        saturated for the rest of the process; recovery is a process restart (no binding leaks — the
+        idempotent get-or-create reconstitutes any skipped release on the next deploy). @@TODO: pass
+        a shorter per-request timeout into ForgeBackendClient once allora-sdk-py exposes one, so a
+        stuck clear-association frees its slot promptly (cross-repo follow-up).
         """
         result: dict[str, BaseException] = {}
 
