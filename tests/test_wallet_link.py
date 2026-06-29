@@ -341,3 +341,40 @@ def test_run_link_rejects_forge_url_with_path(capsys):
     rc = wallet_link.run_link(forge_url="https://forge.example/api/v1", open_browser=False)
     assert rc == 1
     assert "path" in capsys.readouterr().err.lower()
+
+
+def test_jsonposter_closes_connection_on_http_error(monkeypatch):
+    # A >= 400 response raises _RequestError (a BaseException the keep-alive except clause won't
+    # catch), so the connection must be closed first — otherwise the next poll reuses a connection
+    # whose body may be undrained and defeats keep-alive.
+    from allora_forge_builder_kit import wallet_link
+
+    class _FakeResp:
+        status = 403
+
+        def read(self, n):
+            return b"denied"
+
+    class _FakeConn:
+        def __init__(self):
+            self.closed = False
+
+        def request(self, *a, **k):
+            pass
+
+        def getresponse(self):
+            return _FakeResp()
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(wallet_link.urllib.request, "getproxies", lambda: {})
+    monkeypatch.setattr(wallet_link.urllib.request, "proxy_bypass", lambda host: False)
+    poster = wallet_link._JsonPoster("https://forge.example.com")
+    fake = _FakeConn()
+    poster._conn = fake
+    with pytest.raises(wallet_link._RequestError) as ei:
+        poster.post("https://forge.example.com/poll", {})
+    assert ei.value.status == 403
+    assert fake.closed is True       # the dirty connection was closed
+    assert poster._conn is None      # so the next poll reconnects fresh

@@ -362,6 +362,10 @@ class _JsonPoster:
                 data = resp.read(_MAX_RESPONSE_BYTES)
                 if resp.status >= 400:
                     detail = _printable(data.decode("utf-8", "replace"))
+                    # Close before raising: _RequestError is a BaseException the surrounding
+                    # except (HTTPException, OSError) won't catch, so the connection would otherwise
+                    # be reused with a possibly-undrained body and defeat keep-alive on the next poll.
+                    self.close()
                     raise _RequestError(f"request to {url} failed ({resp.status}): {detail}", status=resp.status)
                 return _loads_json_object(url, data.decode("utf-8", "replace"))
             except (http.client.HTTPException, OSError) as exc:
