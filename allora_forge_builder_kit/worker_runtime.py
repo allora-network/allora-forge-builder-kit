@@ -32,13 +32,18 @@ if TYPE_CHECKING:
 def _load_api_key(explicit: str | None) -> str:
     if explicit:
         return explicit
-    env = os.environ.get("ALLORA_API_KEY")
+    # Strip the env value and treat a whitespace-only string as absent, mirroring the file
+    # fallbacks below and WorkerManager._allora_api_key_present: otherwise the subprocess would
+    # accept a garbage key the manager precheck rejects, resolving different effective credentials.
+    env = os.environ.get("ALLORA_API_KEY", "").strip()
     if env:
         return env
     for path in ("notebooks/.allora_api_key", ".allora_api_key"):
         if os.path.exists(path):
             with open(path, "r") as f:
-                return f.read().strip()
+                key = f.read().strip()
+                if key:
+                    return key
     raise RuntimeError("ALLORA_API_KEY not found")
 
 
