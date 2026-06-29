@@ -1094,7 +1094,7 @@ class WorkerManager:
             row = conn.execute("SELECT 1 FROM workers WHERE topic_id=? AND address=?", (topic_id, address)).fetchone()
         return row is not None
 
-    def _get_custody(self, topic_id: int, address: str) -> tuple[str, Optional[str]]:
+    def _get_custody(self, topic_id: int, address: str) -> tuple[CustodyMode, str | None]:
         """Return ``(custody, signing_wallet_id)`` for a worker; ``("local", None)`` if absent."""
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
