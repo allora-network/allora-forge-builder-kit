@@ -274,7 +274,15 @@ def run_link(
     selected = addresses or list(keys.keys())
     missing = [a for a in selected if a not in keys]
     if missing:
-        print(f"No local key for: {', '.join(missing)}", file=sys.stderr)
+        # A managed-custody worker has no local key file, so it legitimately won't appear
+        # here. Spell that out rather than leave the operator thinking a valid worker is
+        # broken: managed workers are linked automatically via the backend, not via this CLI.
+        print(
+            f"No local key for: {', '.join(missing)}\n"
+            "  (this command links LOCAL-custody workers only; a managed-custody worker is "
+            "linked automatically by the Forge backend and needs no local signing)",
+            file=sys.stderr,
+        )
         return 1
 
     # Validate key files up front so a stale secrets entry fails before we
@@ -416,7 +424,13 @@ def run_link(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="allora-forge-link",
-        description="Prove ownership of local worker wallets and link them to Allora Forge.",
+        description=(
+            "Prove ownership of LOCAL-custody worker wallets and link them to Allora Forge. "
+            "This command applies only to workers whose signing key lives in a local key file "
+            "(listed in the WorkerManager secrets file). Managed-custody workers are linked "
+            "automatically by the Forge backend, hold no local key to prove, and are therefore "
+            "neither required nor handled here."
+        ),
     )
     parser.add_argument("--forge-url", default=DEFAULT_FORGE_URL, help="Forge base URL")
     parser.add_argument(
