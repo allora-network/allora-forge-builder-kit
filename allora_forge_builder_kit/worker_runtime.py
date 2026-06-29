@@ -100,13 +100,21 @@ def _resolve_wallet_cfg(
     """Resolve the signing-wallet config for the chosen custody mode.
 
     Managed custody validates the managed-custody env (:func:`_validate_managed_env`) and runs
-    ``AlloraWalletConfig.from_env()``. With ``FORGE_API_KEY`` set and no ``FORGE_SIGNING_WALLET_ID``,
-    the SDK returns a deferred managed config (no local key) and the worker get-or-creates a wallet
-    bound to its topic at startup (ENGN-8646). The managed branch is taken before any
-    ``PRIVATE_KEY`` / ``MNEMONIC`` is read, so ``FORGE_API_KEY`` always takes precedence — there is
-    no silent local-key fallback. ``from_env()`` performs a blocking wallet-info fetch, so it is
-    resolved here in sync code (called from ``main`` before the event loop starts) rather than
-    inside the async worker.
+    ``AlloraWalletConfig.from_env()``. Two managed entry points feed this, and the SDK branch differs
+    between them:
+
+    * Direct CLI (notebook / advanced use): only ``FORGE_API_KEY`` is set, no
+      ``FORGE_SIGNING_WALLET_ID``. The SDK returns a deferred managed config (no local key) and the
+      worker get-or-creates a wallet bound to its topic at startup (ENGN-8646).
+    * WorkerManager-spawned: the manager injects ``FORGE_API_KEY`` **and** pins
+      ``FORGE_SIGNING_WALLET_ID`` to the already-provisioned wallet, so ``from_env()`` takes the
+      immediate ``make_remote_wallet`` fetch branch for that exact wallet rather than the deferred
+      get-or-create.
+
+    Either way the managed branch is taken before any ``PRIVATE_KEY`` / ``MNEMONIC`` is read, so
+    ``FORGE_API_KEY`` always takes precedence — there is no silent local-key fallback. ``from_env()``
+    performs a blocking wallet-info fetch, so it is resolved here in sync code (called from ``main``
+    before the event loop starts) rather than inside the async worker.
     """
     if custody == "managed":
         _validate_managed_env()
