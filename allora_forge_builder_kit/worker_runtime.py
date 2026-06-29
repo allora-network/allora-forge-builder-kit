@@ -129,7 +129,12 @@ def _annotated_context_shape(raw_fn: Callable[..., object]) -> bool | None:
         return None
     if len(params) != 1 or params[0].annotation is inspect.Parameter.empty:
         return None
-    return "RunContext" in str(params[0].annotation)
+    # Match the unqualified type name exactly (covers both the RunContext class object and a
+    # string / forward-ref annotation) so a distinct type whose name merely *contains* "RunContext"
+    # — e.g. MockRunContext, NotRunContext — is not misrouted to the modern fn(ctx) form.
+    annotation = params[0].annotation
+    name = getattr(annotation, "__name__", None) or str(annotation)
+    return name.rsplit(".", 1)[-1] == "RunContext"
 
 
 class _ArtifactCaller:

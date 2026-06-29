@@ -3,6 +3,7 @@ import pytest
 from allora_forge_builder_kit import worker_runtime
 from allora_forge_builder_kit.worker_runtime import (
     _TESTNET_FAUCET_URL,
+    _annotated_context_shape,
     _ArtifactCaller,
     _build_network,
     _resolve_wallet_cfg,
@@ -252,3 +253,27 @@ def test_artifact_caller_caches_modern_shape_without_reprobe():
     # The RunContext form succeeded on the first probe, so the shape is cached and the second
     # call goes straight through — no fallback, each nonce seen exactly once.
     assert calls == [1, 2]
+
+
+def test_annotated_context_shape_exact_name_not_substring():
+    # A distinct type whose name merely *contains* "RunContext" must not be read as the modern
+    # form (the old substring check misrouted exactly this).
+    class MockRunContext:
+        pass
+
+    class RunContext:
+        pass
+
+    def fake(ctx: MockRunContext):
+        return 0.0
+
+    def real(ctx: RunContext):
+        return 0.0
+
+    def legacy(nonce: int):
+        return 0.0
+
+    assert _annotated_context_shape(fake) is False
+    assert _annotated_context_shape(real) is True
+    assert _annotated_context_shape(legacy) is False
+    assert _annotated_context_shape(lambda ctx: ctx) is None  # unannotated -> probe at call time
