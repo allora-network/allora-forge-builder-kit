@@ -15,7 +15,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Literal, Protocol, runtime_checkable
 
 from .worker_monitor import MONITOR_TARGETS_DDL
 
@@ -42,7 +42,7 @@ class Identity:
 @dataclass
 class WorkerSpec:
     topic_id: int
-    topic_desc: Optional[str]
+    topic_desc: str | None
     address: str
     artifact_path: Path
     identity_ref: str
@@ -51,7 +51,7 @@ class WorkerSpec:
     # custody: "local" (self-custodial key file on disk) or "managed" (Privy-managed
     # wallet provisioned by the Forge backend; signing_wallet_id is the backend wallet id).
     custody: CustodyMode = "local"
-    signing_wallet_id: Optional[str] = None
+    signing_wallet_id: str | None = None
 
 
 @dataclass
@@ -81,7 +81,7 @@ class ForgeClientProtocol(Protocol):
     lets the lazy build assert the SDK client satisfies this contract at the injection boundary.
     """
 
-    def provision_wallet(self, topic_id: int, label: Optional[str] = None) -> ProvisionedWallet:
+    def provision_wallet(self, topic_id: int, label: str | None = None) -> ProvisionedWallet:
         """Idempotently get-or-create the managed wallet bound to ``topic_id``."""
         ...
 
@@ -100,19 +100,19 @@ class WorkerManager:
         self,
         db_path: str | Path = "worker_state.db",
         secrets_path: str | Path = "worker_secrets.json",
-        identity_creator: Optional[Callable[[], tuple[str, str, str]]] = None,
-        monitor: Optional[Any] = None,
+        identity_creator: Callable[[], tuple[str, str, str]] | None = None,
+        monitor: Any | None = None,
         auto_monitor_sync: bool = True,
-        topic_desc_resolver: Optional[Callable[[int], Optional[str]]] = None,
+        topic_desc_resolver: Callable[[int], str | None] | None = None,
         runtime_log_dir: str | Path = "worker_logs",
         artifact_dir: str | Path = "managed_artifacts",
         key_dir: str | Path = "worker_keys",
         network: str = "testnet",
         no_faucet: bool = False,
         reconcile_on_start: bool = True,
-        forge_api_key: Optional[str] = None,
-        forge_backend_url: Optional[str] = None,
-        forge_client: Optional[ForgeClientProtocol] = None,
+        forge_api_key: str | None = None,
+        forge_backend_url: str | None = None,
+        forge_client: ForgeClientProtocol | None = None,
     ):
         """Initialise the worker manager.
 
@@ -748,7 +748,7 @@ class WorkerManager:
                 continue
         return False
 
-    def _build_run_command(self, topic_id: int, address: str, status: dict[str, Any]) -> tuple[list[str], Optional[dict[str, str]]]:
+    def _build_run_command(self, topic_id: int, address: str, status: dict[str, Any]) -> tuple[list[str], dict[str, str] | None]:
         """Build the ``worker_runtime`` argv (and subprocess env) for a worker slot.
 
         Local custody passes the on-disk key file via ``--mnemonic-file``. Managed custody passes
@@ -765,7 +765,7 @@ class WorkerManager:
             "--artifact",
             str(status["artifact_path"]),
         ]
-        env: Optional[dict[str, str]] = None
+        env: dict[str, str] | None = None
         # ALLORA_API_KEY is required by the worker_runtime subprocess (faucet drips + topic
         # queries). Pre-check it for both custody modes so a missing key fails loudly here —
         # surfaced by start_worker/reconcile — instead of the subprocess raising
@@ -971,7 +971,7 @@ class WorkerManager:
             conn.commit()
         return {"updated": updated}
 
-    def attach_monitor(self, monitor: Any, backfill_since: Optional[str] = None, sync_now: bool = True) -> dict:
+    def attach_monitor(self, monitor: Any, backfill_since: str | None = None, sync_now: bool = True) -> dict:
         """Attach monitor and optionally bootstrap existing workers into monitoring.
 
         Args:
@@ -1117,7 +1117,7 @@ class WorkerManager:
             raise ValueError("Either mnemonic or source_file must be provided")
         return dest
 
-    def _get_key_file_for_address(self, address: str) -> Optional[Path]:
+    def _get_key_file_for_address(self, address: str) -> Path | None:
         secrets = self._load_secrets()
         for entry in secrets.values():
             if isinstance(entry, dict) and entry.get("address") == address:
@@ -1171,7 +1171,7 @@ class WorkerManager:
         alias = f"identity_{uuid.uuid4().hex[:12]}"
         return (alias, address, mnemonic)
 
-    def _get_identity_by_address(self, address: str) -> Optional[dict]:
+    def _get_identity_by_address(self, address: str) -> dict | None:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute("SELECT alias, address FROM identities WHERE address=?", (address,)).fetchone()
         if not row:
@@ -1233,8 +1233,8 @@ class WorkerManager:
         address: str,
         artifact_path: Path,
         topic_desc: str | None,
-        reject_zero: Optional[bool] = None,
-        signing_wallet_id: Optional[str] = None,
+        reject_zero: bool | None = None,
+        signing_wallet_id: str | None = None,
     ) -> Path:
         """Re-materialize the artifact, update the worker row, and return the new artifact path.
 
@@ -1273,8 +1273,8 @@ class WorkerManager:
         topic_id: int,
         address: str,
         topic_desc: str | None = None,
-        reject_zero: Optional[bool] = None,
-        signing_wallet_id: Optional[str] = None,
+        reject_zero: bool | None = None,
+        signing_wallet_id: str | None = None,
     ) -> None:
         """Re-sync a worker row's mutable metadata in place, without rotating its artifact.
 
@@ -1337,7 +1337,7 @@ class WorkerManager:
                 h.update(chunk)
         return h.hexdigest()
 
-    def _build_default_topic_desc_resolver(self) -> Optional[Callable[[int], Optional[str]]]:
+    def _build_default_topic_desc_resolver(self) -> Callable[[int], str | None] | None:
         api_key = os.environ.get("ALLORA_API_KEY")
         if not api_key:
             for candidate in (Path("notebooks/.allora_api_key"), Path(".allora_api_key")):
@@ -1353,7 +1353,7 @@ class WorkerManager:
         except Exception:
             return None
 
-    def _resolve_topic_desc(self, topic_id: int, fallback: Optional[str]) -> Optional[str]:
+    def _resolve_topic_desc(self, topic_id: int, fallback: str | None) -> str | None:
         if self._topic_desc_resolver:
             try:
                 resolved = self._topic_desc_resolver(topic_id)
@@ -1382,7 +1382,7 @@ class WorkerManager:
         except Exception:
             return False
 
-    def _get_worker_deployed_at(self, topic_id: int, address: str) -> Optional[str]:
+    def _get_worker_deployed_at(self, topic_id: int, address: str) -> str | None:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
                 "SELECT deployed_at FROM workers WHERE topic_id=? AND address=?",
@@ -1419,7 +1419,7 @@ class WorkerManager:
         self._set_monitor_target_deployment_db(topic_id=topic_id, address=address, deployment_id=deployment_id)
         return deployment_id
 
-    def _get_active_deployment_id(self, topic_id: int, address: str) -> Optional[str]:
+    def _get_active_deployment_id(self, topic_id: int, address: str) -> str | None:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
                 "SELECT deployment_id FROM worker_deployments WHERE topic_id=? AND address=? AND is_active=1 ORDER BY deployed_at DESC LIMIT 1",
@@ -1427,7 +1427,7 @@ class WorkerManager:
             ).fetchone()
         return row[0] if row else None
 
-    def _get_active_deployment_hash(self, topic_id: int, address: str) -> Optional[str]:
+    def _get_active_deployment_hash(self, topic_id: int, address: str) -> str | None:
         """Return the active deployment's recorded artifact SHA-256, or None when there is no
         active deployment or it predates hash tracking (legacy NULL row)."""
         with sqlite3.connect(self.db_path) as conn:
@@ -1451,7 +1451,7 @@ class WorkerManager:
         self._archive_active_deployment(topic_id, address)
         return self._create_deployment_record(topic_id, address, artifact_path, artifact_hash=artifact_hash)
 
-    def _monitor_register(self, topic_id: int, address: str, deployment_id: Optional[str] = None) -> None:
+    def _monitor_register(self, topic_id: int, address: str, deployment_id: str | None = None) -> None:
         if not self._monitor:
             return
         deployed_at = self._get_worker_deployed_at(topic_id, address)
@@ -1501,7 +1501,7 @@ class WorkerManager:
             conn.commit()
 
 
-def build_topic_desc_resolver(api_key: Optional[str] = None, network: str = "testnet") -> Callable[[int], Optional[str]]:
+def build_topic_desc_resolver(api_key: str | None = None, network: str = "testnet") -> Callable[[int], str | None]:
     """Build a topic description resolver backed by Allora topic discovery."""
     from .topic_discovery import AlloraTopicDiscovery
 
@@ -1511,7 +1511,7 @@ def build_topic_desc_resolver(api_key: Optional[str] = None, network: str = "tes
         for t in discovery.get_all_topics()
     }
 
-    def _resolve(topic_id: int) -> Optional[str]:
+    def _resolve(topic_id: int) -> str | None:
         return cache.get(topic_id)
 
     return _resolve
