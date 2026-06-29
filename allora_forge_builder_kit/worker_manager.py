@@ -646,7 +646,9 @@ class WorkerManager:
             current_artifact = self._update_worker(
                 topic_id, address, artifact, topic_desc, reject_zero=reject_zero, signing_wallet_id=info.id
             )
-            deployment_id = self._rotate_deployment(topic_id, address, current_artifact)
+            # Reuse the hash already computed above: the materialized copy is byte-identical to the
+            # source, so this avoids a second full read of a large artifact on the replace path.
+            deployment_id = self._rotate_deployment(topic_id, address, current_artifact, artifact_hash=new_hash)
             self._monitor_register(topic_id, address, deployment_id=deployment_id)
             return DeployResult(
                 topic_id=topic_id,
@@ -1306,8 +1308,14 @@ class WorkerManager:
 
         Recorded on every deployment so a managed redeploy can tell an idempotent re-run (identical
         bytes) from a genuinely different model, and so that comparison survives a process restart.
+        Streamed in 64 KiB chunks so a large pickled model (100MB+) is never loaded into memory in
+        full.
         """
-        return hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+        h = hashlib.sha256()
+        with artifact_path.open("rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
 
     def _build_default_topic_desc_resolver(self) -> Optional[Callable[[int], Optional[str]]]:
         api_key = os.environ.get("ALLORA_API_KEY")
@@ -1364,9 +1372,14 @@ class WorkerManager:
             return None
         return row[0]
 
-    def _create_deployment_record(self, topic_id: int, address: str, artifact_path: Path) -> str:
+    def _create_deployment_record(
+        self, topic_id: int, address: str, artifact_path: Path, artifact_hash: str | None = None
+    ) -> str:
         deployment_id = str(uuid.uuid4())
-        artifact_hash = self._artifact_sha256(artifact_path)
+        # Reuse a precomputed digest when the caller already hashed the source (the managed redeploy
+        # does, and shutil.copy2 preserves content byte-for-byte) so a large artifact isn't re-read.
+        if artifact_hash is None:
+            artifact_hash = self._artifact_sha256(artifact_path)
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 "UPDATE worker_deployments SET is_active=0, ended_at=CURRENT_TIMESTAMP WHERE topic_id=? AND address=? AND is_active=1",
@@ -1412,9 +1425,11 @@ class WorkerManager:
             )
             conn.commit()
 
-    def _rotate_deployment(self, topic_id: int, address: str, artifact_path: Path) -> str:
+    def _rotate_deployment(
+        self, topic_id: int, address: str, artifact_path: Path, artifact_hash: str | None = None
+    ) -> str:
         self._archive_active_deployment(topic_id, address)
-        return self._create_deployment_record(topic_id, address, artifact_path)
+        return self._create_deployment_record(topic_id, address, artifact_path, artifact_hash=artifact_hash)
 
     def _monitor_register(self, topic_id: int, address: str, deployment_id: Optional[str] = None) -> None:
         if not self._monitor:

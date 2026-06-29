@@ -335,6 +335,34 @@ def test_provision_wallet_bounded_propagates_backend_error(tmp_path: Path):
         manager._provision_wallet_bounded(client, 7, "label", timeout=5.0)
 
 
+def test_artifact_sha256_streams_correctly(tmp_path: Path):
+    # The streamed (chunked) digest must equal a one-shot hash over the full bytes, including a file
+    # that spans multiple 64 KiB chunks.
+    import hashlib
+
+    data = b"x" * (65536 * 2 + 123)
+    p = tmp_path / "big.pkl"
+    p.write_bytes(data)
+    assert WorkerManager._artifact_sha256(p) == hashlib.sha256(data).hexdigest()
+
+
+def test_managed_replace_records_correct_artifact_hash(tmp_path: Path):
+    # The replace path threads the already-computed source hash into the deployment record (instead
+    # of re-reading the materialized copy); it must still record the artifact's true digest.
+    import hashlib
+
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    v1 = tmp_path / "v1.pkl"
+    v1.write_bytes(b"one")
+    v2 = tmp_path / "v2.pkl"
+    v2.write_bytes(b"two")
+
+    manager.deploy_worker(topic_id=3, artifact_path=v1, custody="managed")
+    manager.deploy_worker(topic_id=3, artifact_path=v2, custody="managed", replace=True)
+    assert manager._get_active_deployment_hash(3, "allo1managed0003") == hashlib.sha256(b"two").hexdigest()
+
+
 def test_deploy_managed_redeploy_different_artifact_with_replace_rotates(tmp_path: Path):
     """synth-009: a genuinely different artifact with replace=True rotates the deployment on the
     one-per-topic wallet (no second worker row) and reports 'replaced'."""
