@@ -172,6 +172,66 @@ def test_jsonposter_connect_tunnels_https_through_proxy(monkeypatch):
         conn.close()
 
 
+def test_jsonposter_authenticated_proxy_builds_proxy_authorization(monkeypatch):
+    import base64
+
+    from allora_forge_builder_kit import wallet_link
+
+    # Userinfo is percent-encoded (p%40ss == "p@ss") to confirm it is URL-unquoted before base64.
+    monkeypatch.setattr(
+        wallet_link.urllib.request, "getproxies", lambda: {"https": "http://user:p%40ss@proxy.local:3128"}
+    )
+    monkeypatch.setattr(wallet_link.urllib.request, "proxy_bypass", lambda host: False)
+    poster = wallet_link._JsonPoster("https://forge.example.com")
+
+    assert poster._proxy == ("proxy.local", 3128)  # host/port still parsed; creds kept separately
+    expected = "Basic " + base64.b64encode(b"user:p@ss").decode("ascii")
+    assert poster._proxy_auth == expected
+
+
+def test_jsonposter_unauthenticated_proxy_has_no_auth(monkeypatch):
+    from allora_forge_builder_kit import wallet_link
+
+    monkeypatch.setattr(wallet_link.urllib.request, "getproxies", lambda: {"https": "http://proxy.local:3128"})
+    monkeypatch.setattr(wallet_link.urllib.request, "proxy_bypass", lambda host: False)
+    poster = wallet_link._JsonPoster("https://forge.example.com")
+
+    assert poster._proxy == ("proxy.local", 3128)
+    assert poster._proxy_auth is None
+
+
+def test_jsonposter_connect_sends_proxy_auth_on_tunnel(monkeypatch):
+    import base64
+
+    from allora_forge_builder_kit import wallet_link
+
+    monkeypatch.setattr(
+        wallet_link.urllib.request, "getproxies", lambda: {"https": "http://user:pass@proxy.local:3128"}
+    )
+    monkeypatch.setattr(wallet_link.urllib.request, "proxy_bypass", lambda host: False)
+    poster = wallet_link._JsonPoster("https://forge.example.com:8443")
+    conn = poster._connect()
+    try:
+        expected = "Basic " + base64.b64encode(b"user:pass").decode("ascii")
+        # The credentials ride the CONNECT request, not the tunneled origin request.
+        assert conn._tunnel_headers.get("Proxy-Authorization") == expected
+    finally:
+        conn.close()
+
+
+def test_jsonposter_unauthenticated_tunnel_has_no_proxy_auth(monkeypatch):
+    from allora_forge_builder_kit import wallet_link
+
+    monkeypatch.setattr(wallet_link.urllib.request, "getproxies", lambda: {"https": "http://proxy.local:3128"})
+    monkeypatch.setattr(wallet_link.urllib.request, "proxy_bypass", lambda host: False)
+    poster = wallet_link._JsonPoster("https://forge.example.com:8443")
+    conn = poster._connect()
+    try:
+        assert "Proxy-Authorization" not in conn._tunnel_headers
+    finally:
+        conn.close()
+
+
 def test_sign_challenge_address_mismatch():
     """A mnemonic whose address differs from the requested one is rejected."""
     pytest.importorskip("cosmpy")

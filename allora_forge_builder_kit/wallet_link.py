@@ -31,7 +31,7 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import Any, TypedDict
-from urllib.parse import urlparse, urlsplit
+from urllib.parse import unquote, urlparse, urlsplit
 
 DEFAULT_FORGE_URL = "https://forge.allora.network"
 DEFAULT_SECRETS_PATH = "worker_secrets.json"
@@ -262,9 +262,10 @@ class _JsonPoster:
     The device-flow poll loop hits a single Forge host up to ~120 times; ``urllib`` opens a
     fresh TCP+TLS connection per call, so reusing one connection removes a handshake per poll.
     This mirrors ``_post_json``'s bounded read, error sanitization, ``SystemExit``-on-failure, and
-    proxy resolution (HTTP(S)_PROXY / NO_PROXY) so the poll loop's existing transient-error handling
-    and proxied environments both keep working. A server that closed an idle keep-alive connection
-    between polls is handled by one transparent reconnect.
+    proxy resolution (HTTP(S)_PROXY / NO_PROXY, including ``user:pass@`` proxy credentials sent as
+    ``Proxy-Authorization``) so the poll loop's existing transient-error handling and proxied
+    environments both keep working. A server that closed an idle keep-alive connection between polls
+    is handled by one transparent reconnect.
     """
 
     def __init__(self, base_url: str, timeout: float = 15.0) -> None:
@@ -277,15 +278,21 @@ class _JsonPoster:
         # http.client does not read proxy env vars, so resolve the proxy the way urllib (used by
         # _post_json for /start and /submit) does. Without this the keep-alive poll connection
         # would silently go direct and hang/fail behind a corporate HTTP(S) proxy.
-        self._proxy = self._select_proxy(base_url, self._https)
+        proxy = self._select_proxy(base_url, self._https)
+        self._proxy: tuple[str, int | None] | None = (proxy[0], proxy[1]) if proxy is not None else None
+        # Pre-built "Basic <base64>" Proxy-Authorization value when the proxy URL carried userinfo,
+        # else None — without it an authenticated proxy answers every poll with 407.
+        self._proxy_auth: str | None = proxy[2] if proxy is not None else None
 
     @staticmethod
-    def _select_proxy(base_url: str, https: bool) -> tuple[str, int | None] | None:
-        """Resolve the (host, port) proxy for base_url from the environment.
+    def _select_proxy(base_url: str, https: bool) -> tuple[str, int | None, str | None] | None:
+        """Resolve the proxy for base_url from the environment as ``(host, port, auth)``.
 
-        Returns None for a direct connection, including when the host matches NO_PROXY. Mirrors
-        urllib's resolution (``getproxies`` + ``proxy_bypass``) so the poll path honors the same
-        proxy configuration as the urllib-based start/submit requests.
+        Returns None for a direct connection, including when the host matches NO_PROXY. ``auth`` is
+        a ready ``Proxy-Authorization`` header value (``Basic <base64>``) when the proxy URL carries
+        userinfo, else None. Mirrors urllib's resolution (``getproxies`` + ``proxy_bypass``) so the
+        poll path honors the same proxy configuration — credentials included — as the urllib-based
+        start/submit requests.
         """
         host = urlsplit(base_url).hostname or ""
         if urllib.request.proxy_bypass(host):
@@ -297,16 +304,26 @@ class _JsonPoster:
         parsed = urlsplit(proxy_url if "://" in proxy_url else f"//{proxy_url}", scheme="http")
         if not parsed.hostname:
             return None
-        return (parsed.hostname, parsed.port)
+        auth = None
+        if parsed.username is not None:
+            # URL-unquote the userinfo before base64 so percent-encoded credentials (e.g. p%40ss)
+            # decode to their literal bytes, matching how urllib builds Proxy-Authorization.
+            user = unquote(parsed.username)
+            password = unquote(parsed.password) if parsed.password is not None else ""
+            token = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
+            auth = f"Basic {token}"
+        return (parsed.hostname, parsed.port, auth)
 
     def _connect(self) -> http.client.HTTPConnection:
         if self._proxy is not None:
             proxy_host, proxy_port = self._proxy
             if self._https:
                 # CONNECT-tunnel the TLS session through the proxy so the certificate is still
-                # validated against the real Forge host rather than the proxy.
+                # validated against the real Forge host rather than the proxy. Proxy credentials
+                # (if any) ride on the CONNECT request itself via set_tunnel's headers.
                 conn = http.client.HTTPSConnection(proxy_host, proxy_port, timeout=self._timeout)
-                conn.set_tunnel(self._host, self._port)
+                tunnel_headers = {"Proxy-Authorization": self._proxy_auth} if self._proxy_auth else {}
+                conn.set_tunnel(self._host, self._port, headers=tunnel_headers)
                 return conn
             return http.client.HTTPConnection(proxy_host, proxy_port, timeout=self._timeout)
         if self._https:
@@ -323,6 +340,10 @@ class _JsonPoster:
             request_target = urlsplit(url).path or "/"
         body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
+        # A plain-HTTP proxy expects Proxy-Authorization on the (absolute-form) request itself; for
+        # HTTPS the credentials already rode the CONNECT tunnel in _connect().
+        if self._proxy is not None and not self._https and self._proxy_auth:
+            headers["Proxy-Authorization"] = self._proxy_auth
         # One transparent reconnect: the server may have closed an idle keep-alive connection
         # between polls, which only surfaces as a connection error when the next request reuses it.
         for attempt in (1, 2):
