@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import http.client
 import json
 import os
 import re
@@ -30,12 +31,20 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import Any, TypedDict
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse, urlsplit
 
 DEFAULT_FORGE_URL = "https://forge.allora.network"
 DEFAULT_SECRETS_PATH = "worker_secrets.json"
-_POLL_TIMEOUT_SECONDS = 600
+# Ceiling on how long the device-flow poll loop waits for browser approval. The client honors the
+# server-advertised expires_in but clamps it to this bound (with a 1s floor). Sized to the typical
+# RFC 8628 device-authorization session window (900-1800s); a lower ceiling would abort sessions the
+# server still considers live (e.g. an approval delayed by MFA or a device switch).
+_POLL_TIMEOUT_SECONDS = 1800
 _MAX_RESPONSE_BYTES = 512 * 1024
+# Loopback hosts treated as safe for plaintext HTTP / verification-URL origin pinning. Includes the
+# IPv6 loopback ::1 (urlparse('http://[::1]/').hostname == '::1', no brackets) so a local Forge bound
+# to [::1] on a dual-stack host doesn't require --insecure.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 # A single discovered worker key entry from worker_secrets.json.
@@ -97,7 +106,12 @@ def sign_challenge(mnemonic: str, address: str, message: str) -> tuple[str, str]
 
 
 def _checked_key_file(base: str, address: str, key_file: str) -> str:
-    """Warn (without rejecting) when a secrets key_file resolves outside the secrets dir."""
+    """Resolve a secrets key_file against the secrets dir, warning when it escapes that dir.
+
+    Returns the absolute path so a relative key_file is read against the secrets file's location
+    (not the caller's cwd); without this, a non-default ``--secrets-path`` would make wallet-link
+    read/check the wrong key file.
+    """
     kf = Path(key_file).expanduser()
     kf_abs = os.path.abspath(kf if kf.is_absolute() else Path(base) / kf)
     try:
@@ -113,51 +127,305 @@ def _checked_key_file(base: str, address: str, key_file: str) -> str:
             f"{base}; reading it anyway ({key_file})",
             file=sys.stderr,
         )
-    return key_file
+    return kf_abs
+
+
+class SecretsLoadError(Exception):
+    """Raised when a present worker-secrets file cannot be read or parsed.
+
+    Distinct from an *absent* secrets file (which :func:`discover_keys` reports as no keys) so a
+    caller can surface a corrupt/unreadable file instead of the misleading "no worker keys, create
+    one" path.
+    """
 
 
 def discover_keys(secrets_path: str | Path) -> dict[str, _KeyEntry]:
-    """Load WorkerManager secrets: {address: {"alias", "key_file"}}."""
+    """Load WorkerManager secrets: {address: {"alias", "key_file"}}.
+
+    Returns an empty mapping when the file is absent. Raises :class:`SecretsLoadError` when a
+    present file is unreadable, not valid JSON, or not a JSON object, so a corrupt secrets file is
+    not masked as "no keys".
+    """
     path = Path(secrets_path)
     if not path.exists():
         return {}
     try:
         raw = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError) as exc:
-        # Present-but-unreadable/corrupt is distinct from not-found: surface it
-        # instead of masking it as the "no worker keys, create one" case.
-        print(f"could not read worker secrets at {secrets_path}: {exc}", file=sys.stderr)
-        return {}
+        # Present-but-unreadable/corrupt is distinct from not-found: surface it instead of
+        # masking it as the "no worker keys, create one" case.
+        raise SecretsLoadError(f"could not read worker secrets at {secrets_path}: {exc}") from exc
+    if not isinstance(raw, dict):
+        # Valid JSON whose root is a list/scalar would crash on raw.items(); a malformed-but-
+        # parseable secrets file is a corrupt file, not "no keys".
+        raise SecretsLoadError(f"worker secrets at {secrets_path} is not a JSON object")
     base = os.path.dirname(os.path.abspath(path))
-    return {
-        entry["address"]: {
+    # Keyed by address; warn (rather than silently overwrite) when two aliases share an address,
+    # since the second would otherwise win invisibly — a footgun combined with relative key_files.
+    keys: dict[str, _KeyEntry] = {}
+    for alias, entry in raw.items():
+        if not isinstance(entry, dict):
+            continue
+        address = entry.get("address")
+        key_file = entry.get("key_file")
+        # Require strings (not just truthy): a tampered secrets file with non-string values
+        # (e.g. {"address": 123}) would otherwise reach _checked_key_file and crash on
+        # Path(123), defeating the documented "warn, skip" handling for a malformed file.
+        if not (isinstance(address, str) and address and isinstance(key_file, str) and key_file):
+            continue
+        if address in keys:
+            print(
+                f"warning: duplicate address {address} in {secrets_path}; "
+                f"alias {alias!r} overrides {keys[address]['alias']!r}",
+                file=sys.stderr,
+            )
+        keys[address] = {
             "alias": alias,
-            "key_file": _checked_key_file(base, entry["address"], entry["key_file"]),
+            "key_file": _checked_key_file(base, address, key_file),
         }
-        for alias, entry in raw.items()
-        if isinstance(entry, dict) and entry.get("address") and entry.get("key_file")
-    }
+    return keys
+
+
+class _RequestError(SystemExit):
+    """A wallet-link HTTP/network failure.
+
+    Subclasses ``SystemExit`` so an unhandled error still aborts the CLI with a clean message
+    (no traceback), like the rest of this module, while carrying the HTTP ``status`` (``None`` for
+    network/transport errors) so the device-flow poll loop can stop on a terminal 4xx instead of
+    retrying it until the deadline.
+    """
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+def _is_terminal_poll_error(exc: BaseException) -> bool:
+    """True when a poll error should stop the device flow immediately rather than be retried.
+
+    Terminal = a 4xx client error other than 408/429 (e.g. the device code is expired, invalid, or
+    already used): every retry returns the same response until the deadline. 5xx, 408, 429, network
+    blips, and malformed-body errors (no ``status``) are transient and keep polling.
+    """
+    status = getattr(exc, "status", None)
+    return status is not None and 400 <= status < 500 and status not in (408, 429)
+
+
+def _loads_json_object(url: str, raw: str) -> dict[str, Any]:
+    """Parse a server response body into a JSON object.
+
+    Raises ``SystemExit`` when the body is not valid JSON, or is valid JSON that is not an object
+    (a list, string, number, or null), so callers never hit an ``AttributeError`` from ``.get(...)``
+    on a non-dict nor an unwrapped ``JSONDecodeError``. On the poll path this ``SystemExit`` is
+    caught and retried as transient; on start/submit it aborts cleanly like the HTTP-error path.
+    """
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"request to {url} returned non-JSON: {raw[:200]!r}") from exc
+    if not isinstance(parsed, dict):
+        raise SystemExit(f"request to {url} returned unexpected JSON type: {type(parsed).__name__}")
+    return parsed
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse to follow redirects so a 3xx surfaces as an HTTPError.
+
+    A signed wallet-link POST body must never be replayed to a redirect target: returning None
+    from redirect_request makes urllib raise instead of re-issuing the request elsewhere. (The
+    keep-alive ``_JsonPoster`` path uses ``http.client`` directly and never redirects either.)
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+# Opener without redirect following, used for the (non-keep-alive) start/submit POSTs.
+_OPENER = urllib.request.build_opener(_NoRedirectHandler)
 
 
 def _post_json(url: str, payload: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
-    """POST JSON payload to url; raises SystemExit on HTTP/network errors."""
+    """POST JSON payload to url; raises SystemExit on HTTP/network errors or a non-object body."""
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url, data=body, headers={"Content-Type": "application/json"}, method="POST"
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read(_MAX_RESPONSE_BYTES).decode("utf-8"))
+        with _OPENER.open(req, timeout=timeout) as resp:
+            return _loads_json_object(url, resp.read(_MAX_RESPONSE_BYTES).decode("utf-8", "replace"))
     except urllib.error.HTTPError as exc:
-        detail = exc.read(_MAX_RESPONSE_BYTES).decode("utf-8", "replace")
-        raise SystemExit(f"request to {url} failed ({exc.code}): {detail}") from exc
+        # Filter the server-supplied error body so it can't inject terminal escapes (matches the
+        # _printable() treatment of user_code / verification_uri_complete on the success path).
+        detail = _printable(exc.read(_MAX_RESPONSE_BYTES).decode("utf-8", "replace"))
+        raise _RequestError(f"request to {url} failed ({exc.code}): {detail}", status=exc.code) from exc
     except urllib.error.URLError as exc:
-        raise SystemExit(f"could not reach {url}: {exc.reason}") from exc
+        raise _RequestError(f"could not reach {url}: {exc.reason}") from exc
 
 
 def _printable(text: str) -> str:
     """Drop non-printable chars so server strings can't inject terminal escapes."""
     return "".join(c for c in text if c.isprintable())
+
+
+def _default_port(scheme: str) -> int | None:
+    """Return the default TCP port for an URL scheme (so an unspecified port compares equal)."""
+    return {"https": 443, "http": 80}.get(scheme)
+
+
+def _submit_rejection(submit: dict[str, Any]) -> str | None:
+    """Return a user-facing message if /device/submit reported rejected signatures, else None.
+
+    The server can return HTTP 200 while rejecting individual signatures (e.g.
+    ``{"rejected": [{"address": "allo1...", "reason": "..."}]}``) or signalling a top-level
+    ``error``. Surfacing it
+    here lets the caller bail before the poll loop instead of waiting out the full deadline only to
+    report ``Linked 0 worker(s)``. Server strings are filtered through ``_printable``.
+    """
+    rejected = submit.get("rejected")
+    if isinstance(rejected, list) and rejected:
+        lines = ["Server rejected one or more worker signatures:"]
+        for item in rejected:
+            if not isinstance(item, dict):
+                continue
+            addr = _printable(str(item.get("address", "?")))
+            reason = _printable(str(item.get("reason", "no reason given")))
+            lines.append(f"  - {addr}: {reason}")
+        return "\n".join(lines)
+    error = submit.get("error")
+    if error:
+        return f"Server rejected the signature submission: {_printable(str(error))}"
+    return None
+
+
+# @@TODO: This module hand-rolls an HTTP transport (_post_json + _JsonPoster: proxy resolution,
+# CONNECT tunneling, Proxy-Authorization, keep-alive reconnect, bounded read) that duplicates the
+# requests.Session transport allora-sdk-py's ForgeBackendClient already owns for the same Forge
+# host. Consolidate by moving the device-flow transport into allora-sdk-py (e.g. a DeviceFlowClient
+# reusing the SDK Session) so builder-kit keeps only the CLI orchestration + ADR-036 sign-doc
+# builder. Cross-repo (allora-sdk-py + forge-v2); tracked as a follow-up, not done here.
+class _JsonPoster:
+    """Reusable JSON poster that holds one keep-alive connection to a fixed host.
+
+    The device-flow poll loop hits a single Forge host up to ~120 times; ``urllib`` opens a
+    fresh TCP+TLS connection per call, so reusing one connection removes a handshake per poll.
+    This mirrors ``_post_json``'s bounded read, error sanitization, ``SystemExit``-on-failure, and
+    proxy resolution (HTTP(S)_PROXY / NO_PROXY, including ``user:pass@`` proxy credentials sent as
+    ``Proxy-Authorization``) so the poll loop's existing transient-error handling and proxied
+    environments both keep working. A server that closed an idle keep-alive connection between polls
+    is handled by one transparent reconnect.
+    """
+
+    def __init__(self, base_url: str, timeout: float = 15.0) -> None:
+        parts = urlsplit(base_url)
+        self._host = parts.hostname or ""
+        self._port = parts.port
+        self._https = parts.scheme != "http"
+        self._timeout = timeout
+        self._conn: http.client.HTTPConnection | None = None
+        # http.client does not read proxy env vars, so resolve the proxy the way urllib (used by
+        # _post_json for /start and /submit) does. Without this the keep-alive poll connection
+        # would silently go direct and hang/fail behind a corporate HTTP(S) proxy.
+        proxy = self._select_proxy(base_url, self._https)
+        self._proxy: tuple[str, int | None] | None = (proxy[0], proxy[1]) if proxy is not None else None
+        # Pre-built "Basic <base64>" Proxy-Authorization value when the proxy URL carried userinfo,
+        # else None — without it an authenticated proxy answers every poll with 407.
+        self._proxy_auth: str | None = proxy[2] if proxy is not None else None
+
+    @staticmethod
+    def _select_proxy(base_url: str, https: bool) -> tuple[str, int | None, str | None] | None:
+        """Resolve the proxy for base_url from the environment as ``(host, port, auth)``.
+
+        Returns None for a direct connection, including when the host matches NO_PROXY. ``auth`` is
+        a ready ``Proxy-Authorization`` header value (``Basic <base64>``) when the proxy URL carries
+        userinfo, else None. Mirrors urllib's resolution (``getproxies`` + ``proxy_bypass``) so the
+        poll path honors the same proxy configuration — credentials included — as the urllib-based
+        start/submit requests.
+        """
+        host = urlsplit(base_url).hostname or ""
+        if urllib.request.proxy_bypass(host):
+            return None
+        proxies = urllib.request.getproxies()
+        proxy_url = proxies.get("https" if https else "http") or proxies.get("all")
+        if not proxy_url:
+            return None
+        parsed = urlsplit(proxy_url if "://" in proxy_url else f"//{proxy_url}", scheme="http")
+        if not parsed.hostname:
+            return None
+        auth = None
+        if parsed.username is not None:
+            # URL-unquote the userinfo before base64 so percent-encoded credentials (e.g. p%40ss)
+            # decode to their literal bytes, matching how urllib builds Proxy-Authorization.
+            user = unquote(parsed.username)
+            password = unquote(parsed.password) if parsed.password is not None else ""
+            token = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
+            auth = f"Basic {token}"
+        if parsed.port is None:
+            # http.client silently defaults a missing port to 443 (HTTPS) / 80 (HTTP); an operator
+            # who set HTTPS_PROXY=proxy.corp.local expecting 3128/8080 would otherwise hit a
+            # confusing connection failure. Surface the implicit default.
+            print(
+                f"warning: proxy {parsed.hostname} has no explicit port; defaulting to "
+                f"{443 if https else 80}",
+                file=sys.stderr,
+            )
+        return (parsed.hostname, parsed.port, auth)
+
+    def _connect(self) -> http.client.HTTPConnection:
+        if self._proxy is not None:
+            proxy_host, proxy_port = self._proxy
+            if self._https:
+                # CONNECT-tunnel the TLS session through the proxy so the certificate is still
+                # validated against the real Forge host rather than the proxy. Proxy credentials
+                # (if any) ride on the CONNECT request itself via set_tunnel's headers.
+                conn = http.client.HTTPSConnection(proxy_host, proxy_port, timeout=self._timeout)
+                tunnel_headers = {"Proxy-Authorization": self._proxy_auth} if self._proxy_auth else {}
+                conn.set_tunnel(self._host, self._port, headers=tunnel_headers)
+                return conn
+            return http.client.HTTPConnection(proxy_host, proxy_port, timeout=self._timeout)
+        if self._https:
+            return http.client.HTTPSConnection(self._host, self._port, timeout=self._timeout)
+        return http.client.HTTPConnection(self._host, self._port, timeout=self._timeout)
+
+    def post(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST JSON to url over the held connection; raises SystemExit on HTTP/network errors."""
+        # Through a plain-HTTP proxy the request line must carry the absolute URL (RFC 7230 5.3.2);
+        # direct and HTTPS-tunneled connections use the origin-form path.
+        if self._proxy is not None and not self._https:
+            request_target = url
+        else:
+            request_target = urlsplit(url).path or "/"
+        body = json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        # Plain-HTTP proxy: auth rides the request; HTTPS auth already rode the CONNECT tunnel.
+        if self._proxy is not None and not self._https and self._proxy_auth:
+            headers["Proxy-Authorization"] = self._proxy_auth
+        # Retry once: the server may have dropped an idle keep-alive connection between polls.
+        for attempt in (1, 2):
+            if self._conn is None:
+                self._conn = self._connect()
+            try:
+                self._conn.request("POST", request_target, body=body, headers=headers)
+                resp = self._conn.getresponse()
+                data = resp.read(_MAX_RESPONSE_BYTES)
+                if resp.status >= 400:
+                    detail = _printable(data.decode("utf-8", "replace"))
+                    # Close before raising: _RequestError (a BaseException) escapes the except below,
+                    # so an undrained connection would defeat keep-alive.
+                    self.close()
+                    raise _RequestError(f"request to {url} failed ({resp.status}): {detail}", status=resp.status)
+                return _loads_json_object(url, data.decode("utf-8", "replace"))
+            except (http.client.HTTPException, OSError) as exc:
+                self.close()
+                if attempt == 2:
+                    raise _RequestError(f"could not reach {url}: {exc}") from exc
+        raise _RequestError(f"could not reach {url}")  # unreachable: the loop returns or raises
+
+    def close(self) -> None:
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            finally:
+                self._conn = None
 
 
 def run_link(
@@ -172,7 +440,7 @@ def run_link(
     parsed = urlparse(forge_url)
     if (
         parsed.scheme != "https"
-        and parsed.hostname not in ("localhost", "127.0.0.1")
+        and parsed.hostname not in _LOOPBACK_HOSTS
         and not insecure
     ):
         print(
@@ -181,7 +449,23 @@ def run_link(
             file=sys.stderr,
         )
         return 1
-    keys = discover_keys(secrets_path)
+    if parsed.path and parsed.path != "/":
+        # The /api/v1/wallet-link/... prefix is appended below, so a forge-url carrying a path
+        # (e.g. https://forge.allora.network/api/v1) would produce a double /api/v1 and a confusing
+        # 404. Reject it up front with an actionable message instead.
+        print(
+            f"forge_url must be a scheme+host with no path; got path={parsed.path!r}. "
+            "Use e.g. https://forge.allora.network (the /api/v1 prefix is added automatically).",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        keys = discover_keys(secrets_path)
+    except SecretsLoadError as exc:
+        # A corrupt / unreadable secrets file is a distinct failure from "no keys yet"; report it
+        # instead of the misleading "create a worker first" hint.
+        print(str(exc), file=sys.stderr)
+        return 1
     if not keys:
         print(
             f"No worker keys found in {secrets_path}. Create a worker first "
@@ -193,7 +477,15 @@ def run_link(
     selected = addresses or list(keys.keys())
     missing = [a for a in selected if a not in keys]
     if missing:
-        print(f"No local key for: {', '.join(missing)}", file=sys.stderr)
+        # A managed-custody worker has no local key file, so it legitimately won't appear
+        # here. Spell that out rather than leave the operator thinking a valid worker is
+        # broken: managed workers are linked automatically via the backend, not via this CLI.
+        print(
+            f"No local key for: {', '.join(missing)}\n"
+            "  (this command links LOCAL-custody workers only; a managed-custody worker is "
+            "linked automatically by the Forge backend and needs no local signing)",
+            file=sys.stderr,
+        )
         return 1
 
     # Validate key files up front so a stale secrets entry fails before we
@@ -213,8 +505,11 @@ def run_link(
         f"{forge_url}/api/v1/wallet-link/device/start", {"addresses": selected}
     )
     for field in ("device_code", "user_code", "verification_uri_complete"):
-        if not start.get(field):
-            print(f"server response missing required field: {field}", file=sys.stderr)
+        value = start.get(field)
+        # Require a non-empty string, not just truthiness: a non-string (e.g. an int from an
+        # over-eager JSON marshaler) would later crash urlparse()/_printable() with a raw traceback.
+        if not value or not isinstance(value, str):
+            print(f"server response missing or malformed required field: {field}", file=sys.stderr)
             return 1
     device_code = start["device_code"]
     user_code = start["user_code"]
@@ -235,11 +530,16 @@ def run_link(
     # a file://, javascript:, or app-launcher URI to the OS handler.
     verification = urlparse(verification_uri_complete)
     same_host = verification.hostname == parsed.hostname
+    # The port is part of the origin: pin it too (using the scheme default when unspecified) so a
+    # compromised server can't redirect to an arbitrary port on the same host.
+    same_port = (verification.port or _default_port(verification.scheme)) == (
+        parsed.port or _default_port(parsed.scheme)
+    )
     safe_scheme = verification.scheme == "https" or (
         verification.scheme == "http"
-        and (verification.hostname in ("localhost", "127.0.0.1") or insecure)
+        and (verification.hostname in _LOOPBACK_HOSTS or insecure)
     )
-    if not (same_host and safe_scheme):
+    if not (same_host and same_port and safe_scheme):
         print(
             f"refusing to open untrusted verification URL: {verification_uri_complete}",
             file=sys.stderr,
@@ -263,10 +563,14 @@ def run_link(
             {"address": address, "pubkey": pubkey_b64, "signature": signature_b64}
         )
 
-    _post_json(
+    submit = _post_json(
         f"{forge_url}/api/v1/wallet-link/device/submit",
         {"device_code": device_code, "signatures": signatures},
     )
+    rejection = _submit_rejection(submit)
+    if rejection is not None:
+        print(rejection, file=sys.stderr)
+        return 1
 
     # 3. Hand off to the browser for the logged-in user to approve.
     print()
@@ -293,31 +597,60 @@ def run_link(
     except (TypeError, ValueError):
         timeout = _POLL_TIMEOUT_SECONDS
     timeout = max(1, min(timeout, _POLL_TIMEOUT_SECONDS))
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        time.sleep(max(1, interval))
-        try:
-            poll = _post_json(
-                f"{forge_url}/api/v1/wallet-link/device/poll", {"device_code": device_code}
-            )
-        except SystemExit as exc:
-            # Transient HTTP/network error (502/503/429, DNS blip): keep polling
-            # until our wall-clock deadline instead of aborting the whole flow.
-            print(f"  (poll error: {exc}; retrying...)", file=sys.stderr)
-            continue
-        status = poll.get("status")
-        if status == "approved":
-            linked = poll.get("linked", [])
-            print(f"\nLinked {len(linked)} verified worker(s):")
-            for addr in linked:
-                print(f"  + {addr}")
-            return 0
-        if status == "denied":
-            print("\nLink request was denied in the browser.", file=sys.stderr)
-            return 1
-        if status == "expired":
-            print("\nLink request expired before approval.", file=sys.stderr)
-            return 1
+    # Monotonic deadline: immune to NTP steps / manual clock changes / DST that a wall-clock
+    # time.time() deadline would let silently extend or prematurely abort the session.
+    deadline = time.monotonic() + timeout
+    # Reuse one keep-alive connection across the (up to ~120) polls to the same Forge host
+    # instead of a fresh TCP+TLS handshake per poll.
+    poller = _JsonPoster(forge_url)
+    try:
+        while time.monotonic() < deadline:
+            time.sleep(max(1, interval))
+            try:
+                poll = poller.post(
+                    f"{forge_url}/api/v1/wallet-link/device/poll", {"device_code": device_code}
+                )
+            except SystemExit as exc:
+                if _is_terminal_poll_error(exc):
+                    # Stop now with the server's explanation instead of spamming "retrying..."
+                    # until the deadline — a terminal 4xx returns the same response every poll.
+                    print(f"\nLink failed: {exc}", file=sys.stderr)
+                    return 1
+                # Transient (5xx / 408 / 429 / DNS blip / malformed body): keep polling until our
+                # monotonic deadline instead of aborting the whole flow.
+                print(f"  (poll error: {exc}; retrying...)", file=sys.stderr)
+                continue
+            status = poll.get("status")
+            if status == "approved":
+                # Coerce defensively: a server emitting {"linked": null} would make
+                # poll.get("linked", []) return None (the key exists) and crash len(None).
+                linked_raw = poll.get("linked")
+                linked = linked_raw if isinstance(linked_raw, list) else []
+                # Server-controlled strings: filter terminal escapes so a malicious 'linked' entry
+                # can't render a clickable OSC-8 hyperlink disguised as a bech32 address.
+                linked_addrs = {a for a in linked if isinstance(a, str)}
+                missing = [a for a in selected if a not in linked_addrs]
+                if missing:
+                    # Approved but the backend linked only a subset (or none): a partial link is a
+                    # failure, not a silent exit 0 that signals success to a CI pipeline.
+                    print(
+                        f"\nLink reported approved but {len(missing)} requested address(es) "
+                        "were not linked:\n  " + "\n  ".join(_printable(a) for a in missing),
+                        file=sys.stderr,
+                    )
+                    return 1
+                print(f"\nLinked {len(linked_addrs)} verified worker(s):")
+                for addr in sorted(linked_addrs):
+                    print(f"  + {_printable(addr)}")
+                return 0
+            if status == "denied":
+                print("\nLink request was denied in the browser.", file=sys.stderr)
+                return 1
+            if status == "expired":
+                print("\nLink request expired before approval.", file=sys.stderr)
+                return 1
+    finally:
+        poller.close()
 
     print("\nTimed out waiting for browser approval.", file=sys.stderr)
     return 1
@@ -326,7 +659,13 @@ def run_link(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="allora-forge-link",
-        description="Prove ownership of local worker wallets and link them to Allora Forge.",
+        description=(
+            "Prove ownership of LOCAL-custody worker wallets and link them to Allora Forge. "
+            "This command applies only to workers whose signing key lives in a local key file "
+            "(listed in the WorkerManager secrets file). Managed-custody workers are linked "
+            "automatically by the Forge backend, hold no local key to prove, and are therefore "
+            "neither required nor handled here."
+        ),
     )
     parser.add_argument("--forge-url", default=DEFAULT_FORGE_URL, help="Forge base URL")
     parser.add_argument(
