@@ -577,6 +577,15 @@ class WorkerManager:
 
         Returns:
             A :class:`DeployResult` describing the assigned address and the action taken.
+
+        Note:
+            Idempotent artifact reuse (``action='reused'`` on a byte-identical redeploy without
+            ``replace``) is a **managed-custody** guarantee, resting on the one-wallet-per-topic
+            invariant. **Local** custody is intentionally asymmetric: a redeploy without ``replace``
+            either allocates a new address (``mode='auto'``) or raises (``mode='strict'``), and
+            ``replace=True`` always rotates — it never short-circuits to ``reused`` on a matching
+            hash. The hash infra (``_artifact_sha256`` / ``artifact_hash``) is general-purpose, but
+            the reuse logic is deliberately managed-only.
         """
         artifact = Path(artifact_path)
         if not artifact.exists():
