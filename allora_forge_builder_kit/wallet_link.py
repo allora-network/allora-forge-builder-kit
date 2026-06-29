@@ -438,8 +438,11 @@ def run_link(
         f"{forge_url}/api/v1/wallet-link/device/start", {"addresses": selected}
     )
     for field in ("device_code", "user_code", "verification_uri_complete"):
-        if not start.get(field):
-            print(f"server response missing required field: {field}", file=sys.stderr)
+        value = start.get(field)
+        # Require a non-empty string, not just truthiness: a non-string (e.g. an int from an
+        # over-eager JSON marshaler) would later crash urlparse()/_printable() with a raw traceback.
+        if not value or not isinstance(value, str):
+            print(f"server response missing or malformed required field: {field}", file=sys.stderr)
             return 1
     device_code = start["device_code"]
     user_code = start["user_code"]
