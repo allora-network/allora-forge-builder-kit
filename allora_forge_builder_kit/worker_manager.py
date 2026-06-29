@@ -175,6 +175,9 @@ class WorkerManager:
         # separate from _cleanup_sem so teardown pressure can't fail deploys and vice-versa.
         self._provision_sem = threading.BoundedSemaphore(8)
         self._runners: dict[tuple[int, str], dict] = {}
+        # Memoized ALLORA_API_KEY-present precheck (see _ensure_allora_api_key_present): resolved
+        # once on first use so reconcile() doesn't re-read the key file per worker.
+        self._api_key_present_cache: bool | None = None
         self._init_db()
         if reconcile_on_start:
             self.reconcile()
@@ -804,6 +807,18 @@ class WorkerManager:
                 continue
         return False
 
+    def _ensure_allora_api_key_present(self) -> bool:
+        """Cached wrapper around :meth:`_allora_api_key_present`.
+
+        The precheck does up to two file reads on a miss, and ``reconcile()`` runs it once per
+        worker — a file-keyed fleet would do N×(env lookup + up to 2 reads) per reconcile. The
+        result is stable for the process lifetime, so resolve it once (lazily, after construction)
+        and reuse it.
+        """
+        if self._api_key_present_cache is None:
+            self._api_key_present_cache = self._allora_api_key_present()
+        return self._api_key_present_cache
+
     def _build_run_command(
         self,
         topic_id: int,
@@ -832,7 +847,7 @@ class WorkerManager:
         # surfaced by start_worker/reconcile — instead of the subprocess raising
         # "ALLORA_API_KEY not found" right after the DB row is marked 'running', defeating the
         # same fail-before-running guarantee the Forge-credential prechecks provide.
-        if not self._allora_api_key_present():
+        if not self._ensure_allora_api_key_present():
             raise ValueError(
                 f"worker topic={topic_id} address={address} requires ALLORA_API_KEY; set it in the "
                 "environment or create a .allora_api_key file before starting the worker"
