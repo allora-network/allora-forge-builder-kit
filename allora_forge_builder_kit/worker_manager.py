@@ -164,6 +164,10 @@ class WorkerManager:
         self._forge_backend_url = forge_backend_url or os.environ.get("FORGE_BACKEND_URL")
         self._forge_client_cache = forge_client
         self._lock = threading.RLock()
+        # Bounds concurrent in-flight clear-association daemon threads (see _release_managed_binding):
+        # a degraded backend makes each timed-out teardown leave a thread blocked on the SDK call, so
+        # without a cap a batch teardown would accumulate unbounded stuck threads.
+        self._cleanup_sem = threading.BoundedSemaphore(8)
         self._runners: dict[tuple[int, str], dict] = {}
         self._init_db()
         if reconcile_on_start:
@@ -313,14 +317,30 @@ class WorkerManager:
         even though the local state is already gone. The backend get-or-create is idempotent, so a
         binding left unreleased here is reused on the next deploy rather than leaking. Never raises:
         decommission cleanup must neither block on nor be aborted by the backend.
+
+        When ``join`` below times out the daemon thread keeps running on the degraded backend, so a
+        ``BoundedSemaphore`` caps how many such threads can be in flight at once. If the cap is
+        reached the backend release is skipped (still safe — the idempotent get-or-create reuses the
+        binding on the next deploy) rather than spawning yet another stuck thread. Daemon threads
+        keep process exit non-blocking.
         """
         result: dict[str, BaseException] = {}
+
+        if not self._cleanup_sem.acquire(blocking=False):
+            logger.warning(
+                "too many in-flight clear-association threads; skipping backend release for managed "
+                "wallet %s (topic %s) — the stale binding is reused on the next deploy",
+                signing_wallet_id, topic_id,
+            )
+            return
 
         def _clear() -> None:
             try:
                 self._forge_client().clear_association(signing_wallet_id)
             except BaseException as e:  # noqa: BLE001 - surfaced via result; must not escape the thread
                 result["error"] = e
+            finally:
+                self._cleanup_sem.release()
 
         worker = threading.Thread(
             target=_clear, name=f"clear-association-{signing_wallet_id}", daemon=True

@@ -706,6 +706,19 @@ def test_release_managed_binding_bounds_slow_backend(tmp_path: Path):
     assert elapsed < 5.0  # returned at ~0.5s, not blocked on the 30s backend call
 
 
+def test_release_managed_binding_caps_concurrent_threads(tmp_path: Path):
+    """When the cleanup semaphore is saturated (8 in-flight clears against a degraded backend),
+    the next release is skipped rather than spawning yet another stuck daemon thread."""
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    # Saturate the cap so the next release cannot acquire.
+    for _ in range(8):
+        assert manager._cleanup_sem.acquire(blocking=False)
+
+    manager._release_managed_binding("wallet-x", topic_id=1, timeout=0.1)
+    assert client.cleared == []  # skipped (cap reached), not cleared, and no thread spawned
+
+
 def test_deploy_managed_rejects_malformed_backend_wallet(tmp_path: Path):
     class _BadClient(_FakeForgeClient):
         def provision_wallet(self, topic_id: int, label: str | None = None):
