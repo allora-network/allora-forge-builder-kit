@@ -82,6 +82,26 @@ def test_resolve_wallet_cfg_local_without_mnemonic_is_none(fake_wallet_config):
     assert fake_wallet_config.from_env_calls == 0
 
 
+def test_resolve_wallet_cfg_managed_validates_env_at_the_seam(fake_wallet_config, monkeypatch):
+    # Managed-env diagnostics now travel with the wallet-cfg seam, not only the CLI main(), so a
+    # programmatic caller of _resolve_wallet_cfg('managed', ...) gets the same warnings.
+    monkeypatch.delenv("FORGE_BACKEND_URL", raising=False)
+    monkeypatch.delenv("FEE_GRANTER", raising=False)
+    monkeypatch.delenv("FORGE_MASTER_GRANTER_ADDRESS", raising=False)
+    with pytest.warns(UserWarning) as records:
+        _resolve_wallet_cfg("managed", None)
+    msgs = " ".join(str(r.message) for r in records)
+    assert "FORGE_BACKEND_URL" in msgs
+    assert "fee granter" in msgs.lower()
+
+
+def test_resolve_wallet_cfg_local_does_not_validate_managed_env(fake_wallet_config, monkeypatch, recwarn):
+    monkeypatch.delenv("FORGE_BACKEND_URL", raising=False)
+    monkeypatch.delenv("FEE_GRANTER", raising=False)
+    _resolve_wallet_cfg("local", None)
+    assert len(recwarn) == 0
+
+
 def test_main_managed_with_mnemonic_file_errors(monkeypatch):
     monkeypatch.setattr(
         "sys.argv",

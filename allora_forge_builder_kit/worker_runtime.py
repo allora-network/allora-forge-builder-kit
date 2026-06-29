@@ -56,20 +56,48 @@ def _build_network(network: str, no_faucet: bool) -> AlloraNetworkConfig:
     return cfg
 
 
+def _validate_managed_env() -> None:
+    """Warn about managed-custody env gaps the SDK would otherwise paper over silently.
+
+    Lives on the wallet-config seam rather than only in ``main`` so a programmatic caller of
+    ``_resolve_wallet_cfg('managed', ...)`` (a notebook, test harness, or other entry point) gets
+    the same diagnostics as the CLI.
+    """
+    if not os.environ.get("FORGE_BACKEND_URL", "").strip():
+        # WorkerManager-spawned managed workers always get FORGE_BACKEND_URL injected, but a direct
+        # entry point may not. The SDK's AlloraWalletConfig.from_env() silently defaults an unset
+        # URL to the public production backend, so warn loudly to avoid signing against prod when a
+        # staging / self-hosted instance was intended.
+        warnings.warn(
+            "FORGE_BACKEND_URL is not set: managed custody will default to the public production "
+            "backend (https://forge.allora.network); set it explicitly to target a staging or "
+            "self-hosted Forge instance.",
+            stacklevel=2,
+        )
+    if not os.environ.get("FEE_GRANTER"):
+        warnings.warn(
+            "FEE_GRANTER is not set: a managed wallet holds no ALLO, so gasless submission needs "
+            "a fee granter — transactions may fail with 'insufficient fees' without one.",
+            stacklevel=2,
+        )
+
+
 def _resolve_wallet_cfg(
     custody: Literal["local", "managed"], mnemonic_file: str | None
 ) -> AlloraWalletConfig | None:
     """Resolve the signing-wallet config for the chosen custody mode.
 
-    Managed custody runs ``AlloraWalletConfig.from_env()``. With ``FORGE_API_KEY`` set and no
-    ``FORGE_SIGNING_WALLET_ID``, the SDK returns a deferred managed config (no local key) and the
-    worker get-or-creates a wallet bound to its topic at startup (ENGN-8646). The managed branch is
-    taken before any ``PRIVATE_KEY`` / ``MNEMONIC`` is read, so ``FORGE_API_KEY`` always takes
-    precedence — there is no silent local-key fallback. ``from_env()`` performs a blocking
-    wallet-info fetch, so it is resolved here in sync code (called from ``main`` before the event
-    loop starts) rather than inside the async worker.
+    Managed custody validates the managed-custody env (:func:`_validate_managed_env`) and runs
+    ``AlloraWalletConfig.from_env()``. With ``FORGE_API_KEY`` set and no ``FORGE_SIGNING_WALLET_ID``,
+    the SDK returns a deferred managed config (no local key) and the worker get-or-creates a wallet
+    bound to its topic at startup (ENGN-8646). The managed branch is taken before any
+    ``PRIVATE_KEY`` / ``MNEMONIC`` is read, so ``FORGE_API_KEY`` always takes precedence — there is
+    no silent local-key fallback. ``from_env()`` performs a blocking wallet-info fetch, so it is
+    resolved here in sync code (called from ``main`` before the event loop starts) rather than
+    inside the async worker.
     """
     if custody == "managed":
+        _validate_managed_env()
         return AlloraWalletConfig.from_env()
     return AlloraWalletConfig(mnemonic_file=mnemonic_file) if mnemonic_file else None
 
@@ -222,26 +250,9 @@ def main() -> None:
             "(the SDK provisions a topic-bound managed wallet from it)"
         )
 
-    if args.custody == "managed" and not os.environ.get("FORGE_BACKEND_URL", "").strip():
-        # WorkerManager-spawned managed workers always get FORGE_BACKEND_URL injected, but this
-        # direct CLI entry point does not. The SDK's AlloraWalletConfig.from_env() silently defaults
-        # an unset URL to the public production backend, so warn loudly to avoid signing against
-        # prod when a staging / self-hosted instance was intended.
-        warnings.warn(
-            "FORGE_BACKEND_URL is not set: managed custody will default to the public production "
-            "backend (https://forge.allora.network); set it explicitly to target a staging or "
-            "self-hosted Forge instance.",
-            stacklevel=2,
-        )
-
-    if args.custody == "managed" and not os.environ.get("FEE_GRANTER"):
-        warnings.warn(
-            "FEE_GRANTER is not set: a managed wallet holds no ALLO, so gasless submission needs "
-            "a fee granter — transactions may fail with 'insufficient fees' without one.",
-            stacklevel=2,
-        )
-
     api_key = _load_api_key(args.api_key)
+    # _resolve_wallet_cfg validates the managed-custody env (FORGE_BACKEND_URL default-to-prod and
+    # fee-granter warnings) on the seam, so those diagnostics fire for any caller, not just the CLI.
     wallet_cfg = _resolve_wallet_cfg(args.custody, args.mnemonic_file)
     asyncio.run(_run(
         topic_id=args.topic,
