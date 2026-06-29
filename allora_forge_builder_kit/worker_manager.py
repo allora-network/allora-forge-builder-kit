@@ -208,17 +208,16 @@ class WorkerManager:
                 "managed custody requires a Forge API key and backend URL; set "
                 "$FORGE_API_KEY and $FORGE_BACKEND_URL or pass forge_api_key/forge_backend_url"
             )
-        # Imported lazily: local-custody installs need not import the SDK signing client.
-        # @@TODO: this targets the internal module allora_sdk.rpc_client.remote_signer; an SDK
-        # refactor moving ForgeBackendClient would silently break it. allora-sdk-py should add a
-        # public re-export (allora_sdk.ForgeBackendClient) so this becomes `from allora_sdk import
-        # ForgeBackendClient` and the path coupling goes away (cross-repo follow-up).
+        # Imported lazily: local-custody installs need not import the SDK signing client. Use the
+        # public re-export (allora_sdk.ForgeBackendClient, added in allora-sdk-py#83) rather than the
+        # internal allora_sdk.rpc_client.remote_signer path, so an SDK refactor moving the class
+        # can't silently break this import.
         try:
-            from allora_sdk.rpc_client.remote_signer import ForgeBackendClient
+            from allora_sdk import ForgeBackendClient
         except ImportError as e:
             raise ValueError(
                 "managed custody requires the 'allora-sdk' package "
-                "(allora_sdk.rpc_client.remote_signer.ForgeBackendClient); install it to deploy "
+                "(allora_sdk.ForgeBackendClient); install it to deploy "
                 "managed workers"
             ) from e
 
