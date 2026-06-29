@@ -656,6 +656,20 @@ class WorkerManager:
                 message=f"Replaced managed worker artifact for topic {topic_id} (wallet {address})",
             )
 
+        # One wallet per topic (ENGN-8646): if a managed worker already exists for this topic at a
+        # DIFFERENT address — e.g. the backend rotated the Privy wallet via clear_association +
+        # re-provision — refuse rather than insert a second row that would silently violate the
+        # invariant (both rows could start and both monitor bindings go active). Remove the existing
+        # worker first if a rotation is intended.
+        existing_managed = self._get_managed_address_for_topic(topic_id)
+        if existing_managed is not None and existing_managed != address:
+            raise RuntimeError(
+                f"topic {topic_id} already has a managed worker at {existing_managed}, but the "
+                f"backend returned a different address {address}; refusing to create a second "
+                "managed worker for the same topic (one wallet per topic) — remove the existing "
+                "worker first if a wallet rotation is intended"
+            )
+
         spec = WorkerSpec(
             topic_id,
             topic_desc,
@@ -1151,6 +1165,15 @@ class WorkerManager:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute("SELECT 1 FROM workers WHERE topic_id=? AND address=?", (topic_id, address)).fetchone()
         return row is not None
+
+    def _get_managed_address_for_topic(self, topic_id: int) -> str | None:
+        """Return the address of an existing managed worker for ``topic_id``, else None."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT address FROM workers WHERE topic_id=? AND custody='managed' LIMIT 1",
+                (topic_id,),
+            ).fetchone()
+        return row[0] if row else None
 
     def _get_custody(self, topic_id: int, address: str) -> tuple[CustodyMode, str | None]:
         """Return ``(custody, signing_wallet_id)`` for a worker; ``("local", None)`` if absent."""

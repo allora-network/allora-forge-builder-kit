@@ -289,6 +289,33 @@ def test_provision_wallet_bounded_raises_on_hang(tmp_path: Path):
         manager._provision_wallet_bounded(client, 7, "label", timeout=0.2)
 
 
+def test_deploy_managed_refuses_second_row_on_address_drift(tmp_path: Path):
+    # If the backend returns a different address for the same topic (e.g. a rotated Privy wallet),
+    # the create path must refuse rather than insert a second managed row, violating one-per-topic.
+    class _RotatingClient(_FakeForgeClient):
+        def __init__(self):
+            super().__init__()
+            self._n = 0
+
+        def provision_wallet(self, topic_id: int, label: str | None = None):
+            self._n += 1
+            self.provisioned.append((topic_id, label))
+            return SimpleNamespace(
+                id=f"wallet-{topic_id}-{self._n}", address=f"allo1addr{self._n}", pubkey="ab" * 33
+            )
+
+    client = _RotatingClient()
+    manager = _managed_manager(tmp_path, client)
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+
+    first = manager.deploy_worker(topic_id=5, artifact_path=artifact, custody="managed")
+    assert first.address_assigned == "allo1addr1"
+    with pytest.raises(RuntimeError, match="one wallet per topic"):
+        manager.deploy_worker(topic_id=5, artifact_path=artifact, custody="managed")
+    assert len([w for w in manager.status_all() if w["topic_id"] == 5]) == 1
+
+
 def test_provision_wallet_bounded_returns_wallet(tmp_path: Path):
     client = _FakeForgeClient()
     manager = _managed_manager(tmp_path, client)
