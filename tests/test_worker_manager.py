@@ -16,7 +16,7 @@ class _FakeForgeClient:
         self.provisioned: list[tuple[int, str | None]] = []
         self.cleared: list[str] = []
 
-    def provision_wallet(self, topic_id: int, label: str | None = None):
+    def provision_wallet(self, topic_id: int, label: str | None = None) -> SimpleNamespace:
         self.provisioned.append((topic_id, label))
         return SimpleNamespace(
             id=f"wallet-{topic_id}",
