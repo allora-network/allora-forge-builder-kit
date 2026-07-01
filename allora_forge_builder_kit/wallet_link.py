@@ -41,6 +41,12 @@ DEFAULT_SECRETS_PATH = "worker_secrets.json"
 # server still considers live (e.g. an approval delayed by MFA or a device switch).
 _POLL_TIMEOUT_SECONDS = 1800
 _MAX_RESPONSE_BYTES = 512 * 1024
+# Recognized "keep polling" statuses from /device/poll. forge-v2 returns "authorization_pending";
+# "pending"/"slow_down" are accepted defensively for forward-compat with the RFC 8628 device flow.
+_POLL_PENDING_STATUSES = frozenset({"authorization_pending", "pending", "slow_down"})
+# Give up after this many consecutive non-progress polls (transport/parse errors or an unrecognized
+# status) so a persistently broken response fails fast instead of polling until the deadline.
+_MAX_CONSECUTIVE_POLL_FAILURES = 10
 # Loopback hosts treated as safe for plaintext HTTP / verification-URL origin pinning. Includes the
 # IPv6 loopback ::1 (urlparse('http://[::1]/').hostname == '::1', no brackets) so a local Forge bound
 # to [::1] on a dual-stack host doesn't require --insecure.
@@ -701,6 +707,9 @@ def run_link(
     # Reuse one keep-alive connection across the (up to ~120) polls to the same Forge host
     # instead of a fresh TCP+TLS handshake per poll.
     poller = _JsonPoster(forge_url)
+    # Bound consecutive non-progress polls (transport/parse errors or an unrecognized status) so a
+    # persistently broken response can't silently poll — and flood stderr — until the deadline.
+    consecutive_unexpected = 0
     try:
         while time.monotonic() < deadline:
             time.sleep(max(1, interval))
@@ -711,11 +720,19 @@ def run_link(
             except SystemExit as exc:
                 if _is_terminal_poll_error(exc):
                     # Stop now with the server's explanation instead of spamming "retrying..."
-                    # until the deadline — a terminal 4xx returns the same response every poll.
+                    # until the deadline — a terminal 3xx/4xx returns the same response every poll.
                     print(f"\nLink failed: {exc}", file=sys.stderr)
                     return 1
-                # Transient (5xx / 408 / 429 / DNS blip / malformed body): keep polling until our
-                # monotonic deadline instead of aborting the whole flow.
+                # Transient (5xx / 408 / 429 / DNS blip / malformed body): keep polling, but give up
+                # if it never recovers so a consistently broken response can't burn the full window.
+                consecutive_unexpected += 1
+                if consecutive_unexpected >= _MAX_CONSECUTIVE_POLL_FAILURES:
+                    print(
+                        f"\nLink failed: {consecutive_unexpected} consecutive poll errors "
+                        f"(last: {exc}); giving up.",
+                        file=sys.stderr,
+                    )
+                    return 1
                 print(f"  (poll error: {exc}; retrying...)", file=sys.stderr)
                 continue
             status = poll.get("status")
@@ -747,6 +764,26 @@ def run_link(
             if status == "expired":
                 print("\nLink request expired before approval.", file=sys.stderr)
                 return 1
+            if status in _POLL_PENDING_STATUSES:
+                # Explicit "keep waiting" status (forge-v2 returns authorization_pending): the flow
+                # is healthy, so reset the non-progress counter and poll again.
+                consecutive_unexpected = 0
+                continue
+            # Unrecognized status (a typo, a {"status":"error"} body, or a client/server version
+            # skew): don't poll silently. Count it toward the same bound so a server stuck on an
+            # unknown status fails fast instead of at the deadline.
+            consecutive_unexpected += 1
+            if consecutive_unexpected >= _MAX_CONSECUTIVE_POLL_FAILURES:
+                print(
+                    f"\nLink failed: server returned an unrecognized poll status "
+                    f"{_printable(str(status))!r} {consecutive_unexpected} times; giving up.",
+                    file=sys.stderr,
+                )
+                return 1
+            print(
+                f"  (unexpected poll status {_printable(str(status))!r}; retrying...)",
+                file=sys.stderr,
+            )
     finally:
         poller.close()
 
