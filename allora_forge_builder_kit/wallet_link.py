@@ -65,10 +65,13 @@ def build_adr036_sign_doc(signer: str, message: str) -> bytes:
     Must match the Go verifier and Keplr byte-for-byte: keys sorted alphabetically
     at every level, no whitespace, ``data`` = standard-base64 of the raw message.
     """
-    # signer is concatenated unescaped; restrict it to the bech32 grammar so a
-    # stray quote/backslash/control byte can't corrupt or inject into the JSON.
+    # signer is concatenated unescaped; restrict it to lowercase ASCII alphanumerics so a stray
+    # quote/backslash/control byte can't corrupt or inject into the JSON. This is an injection
+    # guard, NOT bech32 validation (r"[a-z0-9]+" accepts "alloabc" with no separator); full bech32
+    # structure (HRP + "1" separator + checksummed data) is enforced upstream by cosmpy's
+    # LocalWallet.from_mnemonic, whose derived address must equal this signer.
     if not re.fullmatch(r"[a-z0-9]+", signer):
-        raise ValueError(f"invalid bech32 signer: {signer!r}")
+        raise ValueError(f"invalid signer (must be lowercase alphanumeric): {signer!r}")
     data = base64.standard_b64encode(message.encode("utf-8")).decode("ascii")
     return (
         '{"account_number":"0","chain_id":"","fee":{"amount":[],"gas":"0"},'
@@ -158,11 +161,20 @@ class SecretsLoadError(Exception):
 
 
 def discover_keys(secrets_path: str | Path) -> dict[str, _KeyEntry]:
-    """Load WorkerManager secrets: {address: {"alias", "key_file"}}.
+    """Load WorkerManager worker keys from the secrets file.
 
-    Returns an empty mapping when the file is absent. Raises :class:`SecretsLoadError` when a
-    present file is unreadable, not valid JSON, or not a JSON object, so a corrupt secrets file is
-    not masked as "no keys".
+    Args:
+        secrets_path: Path to the WorkerManager ``worker_secrets.json`` file.
+
+    Returns:
+        A mapping ``{address: {"alias", "key_file"}}`` of every valid local key. It is empty in two
+        distinct cases: the file is absent (no workers created yet), or the file is present but
+        holds no valid ``{address, key_file}`` entries (malformed entries are skipped with a stderr
+        warning). A duplicate address keeps the last alias, also with a warning.
+
+    Raises:
+        SecretsLoadError: The file is present but unreadable, not valid JSON, or not a JSON object —
+            surfaced instead of being masked as the misleading "no keys" case.
     """
     path = Path(secrets_path)
     if not path.exists():
@@ -857,6 +869,14 @@ def add_link_arguments(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse CLI arguments and run the device-flow wallet-link (``allora-forge-link`` entry point).
+
+    Args:
+        argv: Argument list to parse; ``None`` uses ``sys.argv`` (pass a list in tests).
+
+    Returns:
+        Process exit code from :func:`run_link` (0 on success, 1 on error).
+    """
     parser = argparse.ArgumentParser(
         prog="allora-forge-link",
         description=(
