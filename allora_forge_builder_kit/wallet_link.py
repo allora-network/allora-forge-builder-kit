@@ -234,7 +234,9 @@ def _loads_json_object(url: str, raw: str) -> dict[str, Any]:
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"request to {url} returned non-JSON: {raw[:200]!r}") from exc
+        # Sanitize the server-controlled body through _printable before it reaches stderr, matching
+        # the HTTP-error path; otherwise a non-JSON response could inject terminal escape sequences.
+        raise SystemExit(f"request to {url} returned non-JSON: {_printable(raw[:200])!r}") from exc
     if not isinstance(parsed, dict):
         raise SystemExit(f"request to {url} returned unexpected JSON type: {type(parsed).__name__}")
     return parsed
