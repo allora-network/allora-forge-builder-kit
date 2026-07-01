@@ -74,6 +74,16 @@ def build_adr036_sign_doc(signer: str, message: str) -> bytes:
     ).encode("utf-8")
 
 
+class WalletSignError(ValueError):
+    """A signing failure whose message is guaranteed free of key material.
+
+    Subclasses ``ValueError`` for backward compatibility. Raised only for failures whose message is
+    known to contain no mnemonic bytes (e.g. a derived-address mismatch), so ``run_link`` can echo
+    it verbatim while treating every *other* signing exception as opaque (type name only) to keep
+    private key material out of stderr and logs.
+    """
+
+
 def sign_challenge(mnemonic: str, address: str, message: str) -> tuple[str, str]:
     """Sign an ADR-036 challenge with the mnemonic's key.
 
@@ -93,7 +103,9 @@ def sign_challenge(mnemonic: str, address: str, message: str) -> tuple[str, str]
     wallet = LocalWallet.from_mnemonic(mnemonic, "allo")
     derived = str(wallet.address())
     if derived != address:
-        raise ValueError(
+        # WalletSignError (not a bare ValueError): its message holds only bech32 addresses, so the
+        # caller may show it verbatim, unlike a cosmpy exception that could embed mnemonic bytes.
+        raise WalletSignError(
             f"key derives address {derived}, which does not match requested {address}"
         )
 
@@ -554,10 +566,33 @@ def run_link(
             print(f"Server returned no challenge for {address}", file=sys.stderr)
             return 1
         try:
-            mnemonic = Path(keys[address]["key_file"]).read_text().strip()
+            # utf-8 (not the platform default) so a BOM/exotic-locale key file fails with a clear
+            # UnicodeDecodeError here rather than a confusing downstream error.
+            mnemonic = Path(keys[address]["key_file"]).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            # OSError messages describe the file (path/permissions), never key material.
+            print(f"failed to read key file for {address}: {exc}", file=sys.stderr)
+            return 1
+        if not mnemonic:
+            # Catch this before cosmpy, which would otherwise raise a confusing internal error.
+            print(f"key file for {address} is empty: {keys[address]['key_file']}", file=sys.stderr)
+            return 1
+        try:
             pubkey_b64, signature_b64 = sign_challenge(mnemonic, address, message)
-        except (ValueError, OSError) as exc:
+        except WalletSignError as exc:
+            # Raised by sign_challenge only with a key-material-free message (e.g. address mismatch).
             print(f"failed to sign challenge for {address}: {exc}", file=sys.stderr)
+            return 1
+        except Exception as exc:
+            # Any other signing/derivation failure (cosmpy ValueError, Bip39/secp256k1 errors, a bad
+            # UTF-8 mnemonic, ...) can embed mnemonic fragments in its message or args, so surface
+            # only the exception *type* — never str(exc) — keeping key material out of stderr/logs.
+            print(
+                f"failed to sign challenge for {address}: {type(exc).__name__} "
+                "(detail withheld to avoid leaking key material; ensure the key file holds a "
+                "valid BIP-39 mnemonic for this address)",
+                file=sys.stderr,
+            )
             return 1
         signatures.append(
             {"address": address, "pubkey": pubkey_b64, "signature": signature_b64}
