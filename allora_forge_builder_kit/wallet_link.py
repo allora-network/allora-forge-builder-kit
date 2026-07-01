@@ -510,6 +510,19 @@ def run_link(
         )
         return 1
 
+    # Pre-validate the optional cosmpy dependency here, before /device/start opens a server-side
+    # session. sign_challenge imports cosmpy lazily; without this check a missing wallet-link extra
+    # would fail only after the session exists, orphaning it until the janitor reaps it (~15 min).
+    try:
+        from cosmpy.aerial.wallet import LocalWallet  # noqa: F401
+    except ImportError:
+        print(
+            "cosmpy is required to sign. Install the wallet-link extra "
+            "(pip install 'allora-forge-builder-kit[wallet-link]') or cosmpy==0.11.1.",
+            file=sys.stderr,
+        )
+        return 1
+
     print(f"Linking {len(selected)} worker address(es) to Allora Forge at {forge_url}")
 
     # 1. Start the device session.
