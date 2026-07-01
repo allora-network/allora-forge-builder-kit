@@ -501,7 +501,23 @@ def run_link(
     open_browser: bool = True,
     insecure: bool = False,
 ) -> int:
-    """Drive the full device flow. Returns a process exit code."""
+    """Drive the full device-flow wallet-link process.
+
+    Signs an ADR-036 challenge for each selected worker key on disk, opens the browser for the
+    logged-in Forge user to approve, and polls to completion. The mnemonic never leaves the machine.
+
+    Args:
+        forge_url: Base URL of the Allora Forge API (scheme + host, no path). Must be ``https://``
+            unless ``insecure`` is set or the host is loopback.
+        secrets_path: Path to the WorkerManager secrets file (``worker_secrets.json``).
+        addresses: Specific ``allo1...`` addresses to link. ``None`` links every local key
+            (duplicates removed); an explicit empty list is an error (links nothing), not "all".
+        open_browser: When True (default), auto-open the verification URL in the system browser.
+        insecure: Allow a plaintext ``http://`` forge URL (local dev only).
+
+    Returns:
+        Process exit code: 0 on success, 1 on any error.
+    """
     forge_url = forge_url.rstrip("/")
     parsed = urlparse(forge_url)
     if (
@@ -540,7 +556,17 @@ def run_link(
         )
         return 1
 
-    selected = addresses or list(keys.keys())
+    if addresses is None:
+        selected = list(keys.keys())
+    elif not addresses:
+        # Distinguish None (link all) from [] (explicit empty): an empty list must fail closed
+        # rather than fall through the old `or` idiom and silently link every local wallet.
+        print("no addresses specified (--address was given with an empty selection)", file=sys.stderr)
+        return 1
+    else:
+        # Dedup while preserving order: repeated `--address X --address X` would otherwise submit
+        # duplicate signatures and consume 2x the server's per-address rate-limit budget.
+        selected = list(dict.fromkeys(addresses))
     missing = [a for a in selected if a not in keys]
     if missing:
         # A managed-custody worker has no local key file, so it legitimately won't appear
