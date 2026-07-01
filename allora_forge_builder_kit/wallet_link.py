@@ -215,12 +215,13 @@ class _RequestError(SystemExit):
 def _is_terminal_poll_error(exc: BaseException) -> bool:
     """True when a poll error should stop the device flow immediately rather than be retried.
 
-    Terminal = a 4xx client error other than 408/429 (e.g. the device code is expired, invalid, or
-    already used): every retry returns the same response until the deadline. 5xx, 408, 429, network
-    blips, and malformed-body errors (no ``status``) are transient and keep polling.
+    Terminal = a 3xx redirect (an origin/scheme misconfiguration that never resolves by retrying) or
+    a 4xx client error other than 408/429 (e.g. the device code is expired, invalid, or already
+    used): every retry returns the same response until the deadline. 5xx, 408, 429, network blips,
+    and malformed-body errors (no ``status``) are transient and keep polling.
     """
     status = getattr(exc, "status", None)
-    return status is not None and 400 <= status < 500 and status not in (408, 429)
+    return status is not None and 300 <= status < 500 and status not in (408, 429)
 
 
 def _loads_json_object(url: str, raw: str) -> dict[str, Any]:
@@ -449,19 +450,30 @@ class _JsonPoster:
             headers["Proxy-Authorization"] = self._proxy_auth
         # Retry once: the server may have dropped an idle keep-alive connection between polls.
         for attempt in (1, 2):
-            if self._conn is None:
-                self._conn = self._connect()
             try:
+                if self._conn is None:
+                    # Inside the try so a DNS/proxy/connect failure (OSError/HTTPException) becomes a
+                    # retryable _RequestError rather than an unhandled traceback escaping the loop.
+                    self._conn = self._connect()
                 self._conn.request("POST", request_target, body=body, headers=headers)
                 resp = self._conn.getresponse()
                 data = resp.read(_MAX_RESPONSE_BYTES)
-                if resp.status >= 400:
+                if resp.status >= 300:
+                    # >= 300 (not just >= 400): the poll endpoint always answers 200, so a 3xx is a
+                    # misconfiguration (e.g. an http->https redirect). Treating it as an error stops
+                    # it falling through to _loads_json_object and spinning the loop to the deadline.
                     detail = _printable(data.decode("utf-8", "replace"))
                     # Close before raising: _RequestError (a BaseException) escapes the except below,
                     # so an undrained connection would defeat keep-alive.
                     self.close()
                     raise _RequestError(f"request to {url} failed ({resp.status}): {detail}", status=resp.status)
-                return _loads_json_object(url, data.decode("utf-8", "replace"))
+                try:
+                    return _loads_json_object(url, data.decode("utf-8", "replace"))
+                except SystemExit:
+                    # A malformed 200 body raises SystemExit (a BaseException the except below won't
+                    # catch); close so the next poll reconnects instead of reusing a dirty socket.
+                    self.close()
+                    raise
             except (http.client.HTTPException, OSError) as exc:
                 self.close()
                 if attempt == 2:
