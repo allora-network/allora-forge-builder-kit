@@ -276,6 +276,40 @@ def _post_json(url: str, payload: dict[str, Any], timeout: float = 15.0) -> dict
         raise _RequestError(f"could not reach {url}: {exc.reason}") from exc
 
 
+def _post_json_retrying(
+    url: str, payload: dict[str, Any], *, attempts: int = 3, backoff: float = 2.0
+) -> dict[str, Any]:
+    """POST JSON with a bounded retry on transient (non-terminal) failures.
+
+    Retries a network error or a transient HTTP status (5xx / 408 / 429) up to ``attempts`` times
+    with ``backoff`` seconds between tries, and re-raises a terminal 4xx immediately (retrying an
+    expired/invalid device code just returns the same error). Used for ``/device/submit`` so a
+    single network blip after the challenges are signed doesn't abort the run and orphan the
+    server-side session — the server's ``MarkChallengeProven`` is idempotent, so replaying the same
+    signatures is safe.
+
+    Args:
+        url: Absolute request URL.
+        payload: JSON-serializable request body.
+        attempts: Maximum number of tries (>= 1).
+        backoff: Seconds to sleep between tries.
+
+    Returns:
+        The parsed JSON object from the first successful response.
+
+    Raises:
+        _RequestError: On a terminal failure or after the final attempt.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            return _post_json(url, payload)
+        except _RequestError as exc:
+            if attempt == attempts or _is_terminal_poll_error(exc):
+                raise
+            time.sleep(backoff)
+    raise _RequestError(f"could not reach {url}")  # unreachable: the loop returns or raises
+
+
 def _printable(text: str) -> str:
     """Drop non-printable chars so server strings can't inject terminal escapes."""
     return "".join(c for c in text if c.isprintable())
@@ -613,7 +647,9 @@ def run_link(
             {"address": address, "pubkey": pubkey_b64, "signature": signature_b64}
         )
 
-    submit = _post_json(
+    # Retry submit on a transient failure: the challenges are already signed, so a single network
+    # blip here would otherwise abort the run and orphan the server session. Idempotent server-side.
+    submit = _post_json_retrying(
         f"{forge_url}/api/v1/wallet-link/device/submit",
         {"device_code": device_code, "signatures": signatures},
     )
