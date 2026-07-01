@@ -727,6 +727,10 @@ def run_link(
     except (TypeError, ValueError):
         timeout = _POLL_TIMEOUT_SECONDS
     timeout = max(1, min(timeout, _POLL_TIMEOUT_SECONDS))
+    # Clamp the interval to the deadline so at least one poll fires within the window even for a
+    # pathological server response (e.g. expires_in=1 + interval=60), which would otherwise sleep
+    # clean past the deadline. interval stays >= 1, so the sleep below needs no floor.
+    interval = min(interval, max(1, timeout // 2))
     # Monotonic deadline: immune to NTP steps / manual clock changes / DST that a wall-clock
     # time.time() deadline would let silently extend or prematurely abort the session.
     deadline = time.monotonic() + timeout
@@ -738,7 +742,8 @@ def run_link(
     consecutive_unexpected = 0
     try:
         while time.monotonic() < deadline:
-            time.sleep(max(1, interval))
+            # interval is already clamped to [1, timeout//2] above, so no inner max(1, ...) floor.
+            time.sleep(interval)
             try:
                 poll = poller.post(
                     f"{forge_url}/api/v1/wallet-link/device/poll", {"device_code": device_code}
