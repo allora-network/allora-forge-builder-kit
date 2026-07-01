@@ -822,6 +822,40 @@ def run_link(
     return 1
 
 
+def add_link_arguments(
+    parser: argparse.ArgumentParser, *, secrets_default: Any = DEFAULT_SECRETS_PATH
+) -> None:
+    """Register the shared wallet-link CLI flags on ``parser``.
+
+    Called by both the standalone ``allora-forge-link`` entry point and the ``workerctl link``
+    subcommand so the two flag surfaces can't drift out of sync.
+
+    Args:
+        parser: The (sub)parser to add ``--forge-url``, ``--secrets-path``, ``--address``,
+            ``--no-browser`` and ``--insecure`` to.
+        secrets_default: Default for ``--secrets-path``. ``workerctl`` passes
+            ``argparse.SUPPRESS`` so a subcommand-level flag doesn't clobber a top-level
+            ``--secrets-path`` given before the subcommand; the standalone entry point uses the
+            real default path.
+    """
+    parser.add_argument("--forge-url", default=DEFAULT_FORGE_URL, help="Forge base URL")
+    parser.add_argument(
+        "--secrets-path", default=secrets_default, help="WorkerManager secrets file"
+    )
+    parser.add_argument(
+        "--address",
+        action="append",
+        dest="addresses",
+        help="Limit to specific allo1... address(es); repeatable. Default: all local keys.",
+    )
+    parser.add_argument("--no-browser", action="store_true", help="Do not auto-open a browser")
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Allow a plaintext http:// forge URL (local dev only)",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="allora-forge-link",
@@ -833,24 +867,7 @@ def main(argv: list[str] | None = None) -> int:
             "neither required nor handled here."
         ),
     )
-    parser.add_argument("--forge-url", default=DEFAULT_FORGE_URL, help="Forge base URL")
-    parser.add_argument(
-        "--secrets-path", default=DEFAULT_SECRETS_PATH, help="WorkerManager secrets file"
-    )
-    parser.add_argument(
-        "--address",
-        action="append",
-        dest="addresses",
-        help="Limit to specific allo1... address(es); repeatable. Default: all local keys.",
-    )
-    parser.add_argument(
-        "--no-browser", action="store_true", help="Do not auto-open a browser"
-    )
-    parser.add_argument(
-        "--insecure",
-        action="store_true",
-        help="Allow a plaintext http:// forge URL (local dev only)",
-    )
+    add_link_arguments(parser)
     args = parser.parse_args(argv)
     return run_link(
         forge_url=args.forge_url,
