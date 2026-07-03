@@ -203,7 +203,7 @@ Mainnet topics and their testnet equivalents:
 |-----------|-------------|-----------|-------------|
 | 1  | BTC/USD - Log Returns - 8h  | 83 | BTC/USD - 8h Log-Return Prediction |
 | 2  | ETH/USD - Log Returns - 8h  | 84 | ETH/USD - 8h Log-Return Prediction |
-| 3  | SOL/USD - Log Returns - 8h  | 57 | 8h SOL/USD Log-Return Prediction |
+| 3  | SOL/USD - Log Returns - 8h  | 58 | 8h SOL/USD Log-Return Prediction |
 | 9  | ETH/USD - Price Prediction - 8h | 41 | ETH/USD - 8h Price Prediction |
 | 10 | SOL/USD - Price Prediction - 8h | 38 | SOL/USD - 8h Price Prediction |
 | 14 | BTC/USD - Price Prediction - 8h | 42 | BTC/USD - 8h Price Prediction |
