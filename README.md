@@ -189,12 +189,15 @@ Playground topics (testnet only) are the recommended starting point — no white
 |-----------|------|-------------|-------|
 | **69** | BTC/USD - 1 Day Price Prediction | Price | Playground — example walkthroughs use this |
 | **77** | BTC/USD - 5 Min Price Prediction | Price | Playground Fast |
+
+Voltility Topics (may require whitelist)
+
+| Testnet ID | Name | Target type | Notes |
+|-----------|------|-------------|-------|
 | **79** | BTC/USD - 15 Min Volatility Prediction | Volatility | Std of 1-min log returns over 15-min horizon |
 | **80** | ETH/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, ETH pair |
 | **81** | XRP/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, XRP pair |
 | **82** | SOL/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, SOL pair |
-| **83** | BTC/USD - 8h Log-Return Prediction | Log-return | 8h BTC/USD log return — testnet equivalent of mainnet topic 1 |
-| **84** | ETH/USD - 8h Log-Return Prediction | Log-return | 8h ETH/USD log return — testnet equivalent of mainnet topic 2 |
 | **85** | ETH/USD - 4h Volatility Prediction | Volatility | Std of 1-min log returns over 4-hour horizon |
 
 Mainnet topics and their testnet equivalents:
