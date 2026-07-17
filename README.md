@@ -161,6 +161,13 @@ lines = wm.get_worker_log_tail(topic_id=69, address="allo1...", lines=50)
 print("\n".join(lines))
 ```
 
+> **Managed-custody security:** when `WorkerManager` uses `FORGE_API_KEY`, that key is a
+> managed-wallet signing credential, not a transaction-scoped permission. The underlying
+> remote signer can sign arbitrary SignDoc bytes and 32-byte digests, so possession of the key
+> authorizes any transaction the managed wallet can sign. Disabling Forge's optional
+> `/transfer` convenience route does not constrain `/sign`. Protect and revoke the API key as
+> carefully as a private wallet key.
+
 ### Step 5 — Deploy other topics
 
 ```bash
