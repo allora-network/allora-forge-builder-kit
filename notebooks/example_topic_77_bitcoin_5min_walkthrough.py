@@ -208,35 +208,33 @@ except Exception as e:
 
 # Feature Engineering: Add log returns to base features
 # For detailed TA indicators and visualizations, see: feature_engineering_example.py
+#
+# Engineered features are computed by the shared apply_engineered_features module
+# so the training path here and the serving path in predict() below are identical
+# by construction (guards against train/serve skew).
+from allora_forge_builder_kit import apply_engineered_features
 
-def engineer_returns(row):
-    """Add log return features over multiple horizons (no data leakage - same row only)"""
-    # NOTE: Base features are already normalized (z-scored) by the workflow
-    closes = np.array([row[f'feature_close_{i}'] for i in range(NUMBER_OF_INPUT_BARS)])
-    
-    # Log returns over different time horizons
-    returns = {}
-    returns['log_return_5m'] = np.log(closes[-1] + 1e-8) - np.log(closes[-2] + 1e-8) if NUMBER_OF_INPUT_BARS >= 2 else 0
-    returns['log_return_15m'] = np.log(closes[-1] + 1e-8) - np.log(closes[-4] + 1e-8) if NUMBER_OF_INPUT_BARS >= 4 else 0
-    returns['log_return_30m'] = np.log(closes[-1] + 1e-8) - np.log(closes[-7] + 1e-8) if NUMBER_OF_INPUT_BARS >= 7 else 0
-    returns['log_return_60m'] = np.log(closes[-1] + 1e-8) - np.log(closes[-13] + 1e-8) if NUMBER_OF_INPUT_BARS >= 13 else 0
-    
-    return pd.Series(returns)
+# Recipe-style spec: multi-horizon log returns (5m/15m/30m/60m on 5m bars)
+ENGINEERED_SPECS = [
+    {"kind": "log_return", "window_bars": 1},
+    {"kind": "log_return", "window_bars": 3},
+    {"kind": "log_return", "window_bars": 6},
+    {"kind": "log_return", "window_bars": 12},
+]
 
 # Get base features
 base_feature_cols = [col for col in df_all.columns if col.startswith('feature_')]
 
-# Apply feature engineering
+# Apply feature engineering (shared module)
 print("   Engineering log return features...")
-engineered_features = df_all.apply(engineer_returns, axis=1)
-df_all = pd.concat([df_all, engineered_features], axis=1)
+df_all, engineered_cols = apply_engineered_features(df_all, ENGINEERED_SPECS, NUMBER_OF_INPUT_BARS)
 
 # Use base features + engineered returns
-feature_cols = base_feature_cols + list(engineered_features.columns)
+feature_cols = base_feature_cols + engineered_cols
 df_all = df_all.dropna(subset=feature_cols + ['target'])
 
 print(f"✅ Dataset: {len(df_all):,} samples ({df_all['open_time'].min().date()} to {df_all['open_time'].max().date()})")
-print(f"   Features: {len(base_feature_cols)} base + {len(engineered_features.columns)} returns = {len(feature_cols)} total")
+print(f"   Features: {len(base_feature_cols)} base + {len(engineered_cols)} returns = {len(feature_cols)} total")
 print(f"   📚 See feature_engineering_example.py for more TA indicators")
 
 # Setup time series cross-validation
@@ -380,11 +378,12 @@ def predict(nonce: int = None) -> float:
     if live_row is None or len(live_row) == 0:
         raise ValueError("Could not get live features")
     
-    # Engineer return features from live data (same as training)
-    live_returns = engineer_returns(live_row.iloc[0])
-    
+    # Engineer return features from live data via the SAME shared module as
+    # training — identical spec, identical computation.
+    live_row, _ = apply_engineered_features(live_row, ENGINEERED_SPECS, NUMBER_OF_INPUT_BARS)
+
     # Combine base features + engineered returns
-    live_features = pd.concat([live_row[base_feature_cols].iloc[0], live_returns])
+    live_features = live_row[feature_cols].iloc[0]
     
     # Get current price from live feature context (remote-only path)
     current_price = float(live_row.attrs.get("current_price", np.nan))
