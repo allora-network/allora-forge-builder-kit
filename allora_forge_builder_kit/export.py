@@ -264,10 +264,10 @@ def _timeframe() -> str:
 
 
 def _workflow() -> AlloraMLWorkflow:
-    # api_key is only valid for the allora/atlas data source; the binance data
+    # api_key is only valid for the allora data source; the binance data
     # manager rejects unknown kwargs, so pass it only when it applies.
     kwargs = {}
-    if SOURCE in ("allora", "atlas"):
+    if SOURCE == "allora":
         kwargs["api_key"] = os.environ.get("ALLORA_API_KEY")
     return AlloraMLWorkflow(
         tickers=[_pair()],
@@ -309,7 +309,8 @@ class ForgeModel(BaseModel):
         df, feature_cols = _feature_columns(df)
         df = df.dropna(subset=feature_cols + ["target"])
 
-        model = LGBMRegressor(random_state=42, verbose=-1, **HYPERPARAMETERS)
+        params = {"random_state": 42, "verbose": -1, **HYPERPARAMETERS}
+        model = LGBMRegressor(**params)
         model.fit(df[feature_cols], df["target"])
         logger.info("trained on %d samples, %d features", len(df), len(feature_cols))
 

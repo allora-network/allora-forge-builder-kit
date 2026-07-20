@@ -57,7 +57,18 @@ def test_api_key_not_passed_unconditionally(tmp_path):
     export_package(_spec(data_source="binance"), tmp_path)
     src = (tmp_path / "forge_model" / "model.py").read_text()
     assert "api_key=os.environ" not in src  # never unconditional
-    assert 'if SOURCE in ("allora", "atlas")' in src  # gated by source
+    assert 'if SOURCE == "allora"' in src  # gated by source
+
+
+def test_hyperparameters_can_override_defaults_without_duplicate_kwargs(tmp_path):
+    # Regression: the generated train_model builds a params dict so user-supplied
+    # random_state/verbose win instead of raising "multiple values for keyword
+    # argument". The template must not pass them positionally to LGBMRegressor.
+    export_package(_spec(hyperparameters={"random_state": 7, "verbose": 1}), tmp_path)
+    src = (tmp_path / "forge_model" / "model.py").read_text()
+    assert 'params = {"random_state": 42, "verbose": -1, **HYPERPARAMETERS}' in src
+    assert "LGBMRegressor(**params)" in src
+    assert "LGBMRegressor(random_state=42, verbose=-1, **HYPERPARAMETERS)" not in src
 
 
 def test_pyproject_contract(tmp_path):
