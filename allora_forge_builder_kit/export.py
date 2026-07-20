@@ -135,15 +135,17 @@ def export_package(
     )
     (out / ".dockerignore").write_text(_DOCKERIGNORE)
 
-    # 3. Optional bundled weights.
+    # 3. Optional bundled weights. Always reset weights/ so re-exporting the same
+    # out_dir without weights_dir can't leave a stale dir behind manifest's
+    # has_weights=false.
     has_weights = weights_dir is not None
+    dst = out / "weights"
+    if dst.exists():
+        shutil.rmtree(dst)
     if has_weights:
         src = Path(weights_dir)
         if not src.is_dir() or not any(src.iterdir()):
             raise ValueError(f"weights_dir {src} is missing or empty")
-        dst = out / "weights"
-        if dst.exists():
-            shutil.rmtree(dst)
         shutil.copytree(src, dst)
 
     # 4. Manifest (model-only; code_hash excludes weights/, matching .dockerignore).

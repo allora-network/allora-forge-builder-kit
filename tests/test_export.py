@@ -102,6 +102,24 @@ def test_bundled_weights(tmp_path):
     assert m["has_weights"] is True
 
 
+def test_reexport_without_weights_clears_stale_weights(tmp_path):
+    # Regression: exporting WITH weights then re-exporting the SAME out_dir
+    # WITHOUT weights must not leave a stale weights/ dir behind manifest's
+    # has_weights=false (weights/ is excluded from code_hash, so it would drift
+    # silently).
+    weights = tmp_path / "w"
+    weights.mkdir()
+    (weights / "model.joblib").write_bytes(b"x")
+    out = tmp_path / "pkg"
+
+    export_package(_spec(), out, weights_dir=weights)
+    assert (out / "weights" / "model.joblib").exists()
+
+    export_package(_spec(), out)  # no weights this time
+    assert not (out / "weights").exists()
+    assert json.loads((out / "manifest.json").read_text())["has_weights"] is False
+
+
 def test_empty_weights_dir_rejected(tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
