@@ -9,6 +9,7 @@ from .utils import get_api_key
 from .evaluation import PerformanceEvaluator
 from .topic_discovery import AlloraTopicDiscovery, TopicInfo
 from .engineered_features import apply_engineered_features, engineered_feature_names
+from .export import ModelSpec, export_package
 from .worker_manager import WorkerManager, WorkerSpec, DeployResult, Identity, build_topic_desc_resolver
 from .worker_monitor import WorkerMonitor, MonitorTarget, AlloraSDKEventFetcher
 
@@ -26,6 +27,8 @@ __all__ = [
     "TopicInfo",
     "apply_engineered_features",
     "engineered_feature_names",
+    "ModelSpec",
+    "export_package",
     "WorkerManager",
     "WorkerSpec",
     "DeployResult",
