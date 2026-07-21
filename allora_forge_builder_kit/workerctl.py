@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from .worker_manager import WorkerManager
 from .worker_monitor import WorkerMonitor, AlloraSDKEventFetcher
+from .wallet_link import add_link_arguments, run_link
 
 
 def _make_manager(
@@ -75,12 +76,27 @@ def main() -> None:
     sub.add_parser("start-all", help="Start all enabled workers")
     sub.add_parser("stop-all", help="Stop running workers")
 
+    p_link = sub.add_parser("link", help="Link local worker wallets to your Allora Forge account")
+    # Shared flag definitions live in wallet_link.add_link_arguments so this subcommand and the
+    # standalone allora-forge-link entry point can't drift. SUPPRESS keeps a subcommand-level
+    # --secrets-path from clobbering a top-level --secrets-path given before the subcommand.
+    add_link_arguments(p_link, secrets_default=argparse.SUPPRESS)
+
     args = parser.parse_args()
     mgr_kwargs = dict(db_path=args.db_path, secrets_path=args.secrets_path, network=args.network)
 
     if args.cmd == "dashboard":
         cmd_dashboard(with_monitor=not args.no_monitor, running_only=not args.all, **mgr_kwargs)
         return
+
+    if args.cmd == "link":
+        raise SystemExit(run_link(
+            forge_url=args.forge_url,
+            secrets_path=args.secrets_path,
+            addresses=args.addresses,
+            open_browser=not args.no_browser,
+            insecure=args.insecure,
+        ))
 
     wm, _ = _make_manager(with_monitor=False, **mgr_kwargs)
     if args.cmd == "reconcile":
