@@ -392,6 +392,11 @@ dependencies = [
 [project.entry-points."allora_worker.models"]
 {model_type} = "{pkg}.model:ForgeModel"
 
+# allora-forge-builder-kit is a direct (git) reference; hatchling refuses to
+# build a project with direct-reference deps unless this is explicitly allowed.
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["{pkg}"]
 '''
