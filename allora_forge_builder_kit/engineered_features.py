@@ -17,6 +17,8 @@ previously duplicated inline in the walkthrough notebooks.
 
 from __future__ import annotations
 
+import numbers
+
 import numpy as np
 import pandas as pd
 
@@ -34,10 +36,13 @@ def _window_bars(spec: dict) -> int:
     which would train/serve a different feature than the recipe requested.
     """
     raw = spec["window_bars"]
-    if isinstance(raw, bool) or (isinstance(raw, float) and not raw.is_integer()):
+    if isinstance(raw, bool) or not isinstance(raw, numbers.Number):
         raise ValueError(f"window_bars must be a positive integer, got {raw!r}")
-    window = int(raw)
-    if window < 1:
+    try:
+        window = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"window_bars must be a positive integer, got {raw!r}")
+    if window != raw or window < 1:
         raise ValueError(f"window_bars must be a positive integer, got {raw!r}")
     return window
 

@@ -10,6 +10,9 @@ guaranteed by construction — this test proves it, needs no network / API key,
 and would fail loudly if the two paths ever diverged again.
 """
 
+from decimal import Decimal
+from fractions import Fraction
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -104,3 +107,32 @@ def test_unsupported_kind_raises():
 def test_engineered_feature_names_rejects_unsupported():
     with pytest.raises(ValueError, match="unsupported"):
         engineered_feature_names([{"kind": "ema", "window_bars": 5}])
+
+
+@pytest.mark.parametrize(
+    "bad_window",
+    [
+        1.5,
+        np.float32(1.5),
+        np.float64(2.5),
+        Decimal("1.5"),
+        Fraction(3, 2),
+        True,
+        0,
+        -1,
+        complex(6, 0),
+    ],
+)
+def test_window_bars_rejects_non_positive_integer(bad_window):
+    with pytest.raises(ValueError, match="positive integer"):
+        engineered_feature_names([{"kind": "log_return", "window_bars": bad_window}])
+
+
+@pytest.mark.parametrize(
+    "good_window",
+    [6, 6.0, np.int64(6), np.float32(6.0), Decimal("6"), Fraction(6, 1)],
+)
+def test_window_bars_accepts_integral_numeric_types(good_window):
+    assert engineered_feature_names(
+        [{"kind": "log_return", "window_bars": good_window}]
+    ) == ["log_return_6"]
