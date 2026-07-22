@@ -51,15 +51,99 @@ def test_model_is_generic_over_pair_and_timeframe(tmp_path):
     py_compile.compile(str(tmp_path / "forge_model" / "model.py"), doraise=True)
 
 
-def test_prediction_kind_is_env_driven(tmp_path):
+def test_output_kind_driven_by_submit_returns(tmp_path):
     export_package(_spec(), tmp_path)
     src = (tmp_path / "forge_model" / "model.py").read_text()
-    # Prediction kind is per-deployment (like PAIR/TIMEFRAME), read from the env,
-    # defaulting to the model's native log-return output.
-    assert 'os.environ.get("PREDICTION_KIND", "log_return")' in src
-    # price conversion is gated on that kind, not merely on current_price presence.
-    assert '_prediction_kind() == "price"' in src
+    # Output kind is the SDK-derived per-topic signal, not a bespoke env: the
+    # config exposes submit_returns (so the SDK's hasattr gate passes) and reads
+    # SUBMIT_RETURNS for the explicit-override path.
+    assert "submit_returns" in src
+    assert 'os.environ.get("SUBMIT_RETURNS"' in src
+    # the abandoned bespoke mechanism must be gone.
+    assert "PREDICTION_KIND" not in src
     py_compile.compile(str(tmp_path / "forge_model" / "model.py"), doraise=True)
+
+
+def _load_generated_model(tmp_path):
+    """Import the generated forge_model/model.py as a standalone module."""
+    import importlib.util
+
+    export_package(_spec(), tmp_path)
+    mod_path = tmp_path / "forge_model" / "model.py"
+    spec = importlib.util.spec_from_file_location("generated_forge_model", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _run_inference(mod, submit_returns, current_price, monkeypatch):
+    import asyncio
+
+    import numpy as np
+    import pandas as pd
+
+    monkeypatch.setenv("PAIR", "BTCUSD")
+    monkeypatch.setenv("TIMEFRAME", "5min")
+
+    # Passthrough features + a fake workflow/model so get_inference exercises only
+    # the output-kind branch, not data fetching or feature engineering.
+    monkeypatch.setattr(mod, "apply_engineered_features", lambda df, specs, n: (df, []))
+
+    live_row = pd.DataFrame({"feature_close_0": [1.0]})
+    live_row.attrs["current_price"] = current_price
+
+    class _WF:
+        def get_live_features(self, ticker):
+            return live_row
+
+    monkeypatch.setattr(mod, "_workflow", lambda: _WF())
+
+    class _M:
+        def predict(self, x):
+            return np.array([0.02])  # predicted log-return
+
+    model = mod.ForgeModel(mod.ForgeModelConfig(submit_returns=submit_returns))
+    model._bundle = {"model": _M(), "feature_cols": []}
+    return asyncio.run(model.get_inference("BTCUSD"))
+
+
+def test_submit_returns_true_publishes_raw_log_return(tmp_path, monkeypatch):
+    mod = _load_generated_model(tmp_path)
+    out = _run_inference(mod, submit_returns=True, current_price=100.0, monkeypatch=monkeypatch)
+    assert out["prediction"] == pytest.approx(0.02)  # native output, no exp()
+
+
+def test_submit_returns_false_publishes_absolute_price(tmp_path, monkeypatch):
+    import math
+
+    mod = _load_generated_model(tmp_path)
+    out = _run_inference(mod, submit_returns=False, current_price=100.0, monkeypatch=monkeypatch)
+    assert out["prediction"] == pytest.approx(100.0 * math.exp(0.02))
+
+
+def test_submit_returns_false_requires_positive_current_price(tmp_path, monkeypatch):
+    mod = _load_generated_model(tmp_path)
+    with pytest.raises(ValueError, match="current_price"):
+        _run_inference(mod, submit_returns=False, current_price=float("nan"), monkeypatch=monkeypatch)
+
+
+def test_default_config_exposes_submit_returns_for_sdk_gate(tmp_path):
+    # The SDK only auto-resolves SUBMIT_RETURNS when hasattr(config, "submit_returns").
+    mod = _load_generated_model(tmp_path)
+    cfg = mod.ForgeModel.default_config(timeframe="5min")
+    assert hasattr(cfg, "submit_returns")
+
+
+def test_submit_returns_defaults_to_log_return(tmp_path, monkeypatch):
+    monkeypatch.delenv("SUBMIT_RETURNS", raising=False)
+    mod = _load_generated_model(tmp_path)
+    assert mod.ForgeModel.default_config().submit_returns is True
+
+
+def test_explicit_submit_returns_false_env_is_honored(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUBMIT_RETURNS", "false")
+    mod = _load_generated_model(tmp_path)
+    assert mod.ForgeModel.default_config().submit_returns is False
 
 
 def test_api_key_not_passed_unconditionally(tmp_path):
