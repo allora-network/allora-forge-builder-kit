@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from allora_forge_builder_kit.worker_monitor import WorkerMonitor
+from allora_forge_builder_kit.worker_monitor import WorkerMonitor, AlloraSDKEventFetcher
 
 
 def test_register_and_list_targets(tmp_path: Path):
@@ -102,3 +102,32 @@ def test_summary_rollups(tmp_path: Path):
     assert summary["reward_count"] == 1
     assert summary["rewards_total"] == 2.5
     assert summary["last_inference"]["value_text"] == "0.001"
+
+
+def test_sync_accepts_async_fetcher(tmp_path: Path):
+    """WorkerMonitor.sync_once must transparently handle an async event fetcher."""
+    import inspect
+
+    async def async_fetcher(topic_id, address, since):
+        return [
+            {
+                "event_id": "af1",
+                "event_type": "submission",
+                "status": "success",
+                "observed_at": "2026-07-22T00:00:00Z",
+            }
+        ]
+
+    assert inspect.iscoroutinefunction(async_fetcher)
+
+    monitor = WorkerMonitor(db_path=tmp_path / "state.db", event_fetcher=async_fetcher)
+    monitor.register_target(topic_id=42, address="allo1test", deployed_at="2026-07-22T00:00:00Z")
+
+    result = monitor.sync_once()
+    assert result["inserted"] == 1
+
+
+def test_allora_sdk_event_fetcher_call_is_async():
+    """AlloraSDKEventFetcher.__call__ must be a coroutine function so WorkerMonitor can await it."""
+    import inspect
+    assert inspect.iscoroutinefunction(AlloraSDKEventFetcher.__call__)
