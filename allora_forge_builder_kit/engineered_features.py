@@ -40,7 +40,7 @@ def _window_bars(spec: dict) -> int:
         raise ValueError(f"window_bars must be a positive integer, got {raw!r}")
     try:
         window = int(raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise ValueError(f"window_bars must be a positive integer, got {raw!r}")
     if window != raw or window < 1:
         raise ValueError(f"window_bars must be a positive integer, got {raw!r}")

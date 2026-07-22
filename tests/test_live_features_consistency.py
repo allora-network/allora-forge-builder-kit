@@ -121,6 +121,9 @@ def test_engineered_feature_names_rejects_unsupported():
         0,
         -1,
         complex(6, 0),
+        float("inf"),
+        float("nan"),
+        np.float32("inf"),
     ],
 )
 def test_window_bars_rejects_non_positive_integer(bad_window):
