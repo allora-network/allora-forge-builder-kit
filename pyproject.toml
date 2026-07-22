@@ -39,6 +39,9 @@ dev = [
 binance = [
     "websocket-client",
 ]
+wallet-link = [
+    "cosmpy==0.11.1",
+]
 
 [project.scripts]
 allora-forge-export = "allora_forge_builder_kit.export:main"
