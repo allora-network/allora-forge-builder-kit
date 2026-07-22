@@ -27,15 +27,32 @@ def _log_return_column_name(window_bars: int) -> str:
     return f"log_return_{window_bars}"
 
 
+def _window_bars(spec: dict) -> int:
+    """Validate and return ``spec['window_bars']`` as a positive integer.
+
+    Rejects non-integral values (e.g. ``1.5``) rather than silently truncating,
+    which would train/serve a different feature than the recipe requested.
+    """
+    raw = spec["window_bars"]
+    if isinstance(raw, bool) or (isinstance(raw, float) and not raw.is_integer()):
+        raise ValueError(f"window_bars must be a positive integer, got {raw!r}")
+    window = int(raw)
+    if window < 1:
+        raise ValueError(f"window_bars must be a positive integer, got {raw!r}")
+    return window
+
+
 def engineered_feature_names(specs: list[dict]) -> list[str]:
     """Return the column names ``apply_engineered_features`` will add, in order."""
     names: list[str] = []
     for spec in specs:
         kind = spec["kind"]
-        if kind == "log_return":
-            names.append(_log_return_column_name(int(spec["window_bars"])))
-        else:
+        if kind != "log_return":
             raise ValueError(f"unsupported engineered feature kind: {kind!r}")
+        name = _log_return_column_name(_window_bars(spec))
+        if name in names:
+            raise ValueError(f"duplicate engineered feature: {name!r}")
+        names.append(name)
     return names
 
 
@@ -67,8 +84,10 @@ def apply_engineered_features(
         kind = spec["kind"]
         if kind != "log_return":
             raise ValueError(f"unsupported engineered feature kind: {kind!r}")
-        window = int(spec["window_bars"])
+        window = _window_bars(spec)
         name = _log_return_column_name(window)
+        if name in added:
+            raise ValueError(f"duplicate engineered feature: {name!r}")
 
         if number_of_input_bars < window + 1:
             # Window doesn't fit the lookback → 0.0 (matches the notebooks' guard).

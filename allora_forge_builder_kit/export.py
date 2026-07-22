@@ -73,11 +73,20 @@ class ModelSpec:
             raise ValueError("target_bars must be >= 1")
         if self.days_of_history < 1:
             raise ValueError("days_of_history must be >= 1")
+        seen: set[str] = set()
         for i, spec in enumerate(self.engineered_specs):
             if spec.get("kind") != "log_return":
                 raise ValueError(f"engineered_specs[{i}].kind must be 'log_return' (v1)")
-            if int(spec.get("window_bars", 0)) < 1:
+            raw = spec.get("window_bars", 0)
+            if isinstance(raw, bool) or (isinstance(raw, float) and not raw.is_integer()):
+                raise ValueError(f"engineered_specs[{i}].window_bars must be a positive integer")
+            window = int(raw)
+            if window < 1:
                 raise ValueError(f"engineered_specs[{i}].window_bars must be >= 1")
+            name = f"log_return_{window}"
+            if name in seen:
+                raise ValueError(f"engineered_specs[{i}] duplicates feature {name!r}")
+            seen.add(name)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "ModelSpec":
@@ -265,10 +274,15 @@ def _timeframe() -> str:
 
 def _workflow() -> AlloraMLWorkflow:
     # api_key is only valid for the allora data source; the binance data
-    # manager rejects unknown kwargs, so pass it only when it applies.
+    # manager rejects unknown kwargs, so pass it only when it applies. Resolve
+    # from the environment (non-interactive: the builder-kit get_api_key would
+    # fall back to a getpass prompt, which hangs a serving container).
     kwargs = {}
     if SOURCE == "allora":
-        kwargs["api_key"] = os.environ.get("ALLORA_API_KEY")
+        api_key = os.environ.get("ALLORA_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("ALLORA_API_KEY env var is required for the allora data source")
+        kwargs["api_key"] = api_key
     return AlloraMLWorkflow(
         tickers=[_pair()],
         number_of_input_bars=NUMBER_OF_INPUT_BARS,
