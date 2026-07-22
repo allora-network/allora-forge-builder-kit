@@ -91,6 +91,7 @@ def save_run_artifacts(df_eval, best_result, best_params, run_dir, feature_cols)
         "max_depths": MAX_DEPTHS,
         "num_leaves": NUM_LEAVES,
         "best_params": best_params,
+        "engineered_specs": ENGINEERED_SPECS,
         "feature_count": len(feature_cols),
     }
     with open(os.path.join(run_dir, "config.json"), "w") as f:
