@@ -15,6 +15,10 @@ dependencies = [
     "pandas",
     "numpy",
     "lightgbm",
+    # lightgbm's sklearn API (LGBMRegressor, used by workflow.py) imports
+    # scikit-learn at runtime; without it training dies with "scikit-learn is
+    # required for lightgbm.sklearn". It is a hard runtime dep, not dev-only.
+    "scikit-learn",
     "requests",
     "dill",
     "polars",
@@ -30,7 +34,6 @@ dependencies = [
 dev = [
     "pytest",
     "websocket-client",
-    "scikit-learn",
     "matplotlib",
 ]
 binance = [
