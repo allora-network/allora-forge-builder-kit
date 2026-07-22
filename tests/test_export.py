@@ -51,6 +51,17 @@ def test_model_is_generic_over_pair_and_timeframe(tmp_path):
     py_compile.compile(str(tmp_path / "forge_model" / "model.py"), doraise=True)
 
 
+def test_prediction_kind_is_env_driven(tmp_path):
+    export_package(_spec(), tmp_path)
+    src = (tmp_path / "forge_model" / "model.py").read_text()
+    # Prediction kind is per-deployment (like PAIR/TIMEFRAME), read from the env,
+    # defaulting to the model's native log-return output.
+    assert 'os.environ.get("PREDICTION_KIND", "log_return")' in src
+    # price conversion is gated on that kind, not merely on current_price presence.
+    assert '_prediction_kind() == "price"' in src
+    py_compile.compile(str(tmp_path / "forge_model" / "model.py"), doraise=True)
+
+
 def test_api_key_not_passed_unconditionally(tmp_path):
     # Regression: the binance data-manager factory rejects unknown kwargs, so the
     # generated model must NOT pass api_key= unconditionally (it crashed binance).
