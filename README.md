@@ -10,6 +10,7 @@ Build, evaluate, and deploy ML inference workers on the [Allora Network](https:/
 - [What is the Allora Forge?](#what-is-the-allora-forge)
 - [What you get](#what-you-get)
 - [Zero to deploy](#zero-to-deploy)
+- [Deploy to the hosting platform (export)](#deploy-to-the-hosting-platform-export)
 - [Python API (quick reference)](#python-api-quick-reference)
 - [The learning problem](#the-learning-problem)
 - [Evaluation metrics](#evaluation-metrics)
@@ -205,6 +206,65 @@ Mainnet topics and their testnet equivalents:
 
 ---
 
+## Deploy to the hosting platform (export)
+
+The [Zero to deploy](#zero-to-deploy) flow runs a worker **locally** with `WorkerManager`. The other path is to let the Allora **hosting platform** run the worker for you in a container. Instead of a running process, you produce a *package* — worker code + `pyproject.toml` + `manifest.json` (+ an optional `weights/` dir) — and upload it to forge.
+
+See [`notebooks/export_to_hosting.py`](notebooks/export_to_hosting.py) for a runnable walkthrough. The essentials:
+
+```python
+from allora_forge_builder_kit import ModelSpec, export_package
+
+# Model-INTRINSIC config (baked into the package's config.json). Pair/timeframe/
+# topic are NOT here — they are chosen per deployment (see env vars below).
+spec = ModelSpec(
+    model_type="my_lgbm",                          # entry-point name; [a-z0-9_-]
+    engineered_specs=[{"kind": "log_return", "window_bars": 6}],
+    number_of_input_bars=24,
+    target_bars=24,
+    hyperparameters={"n_estimators": 500},
+    data_source="binance",                          # "binance" | "allora"
+    supports_training=True,                         # train-on-platform (no weights)
+)
+export_package(spec, "build/my_lgbm_package")       # writes the package dir
+```
+
+Or from the command line, which can also produce the upload-ready zip:
+
+```bash
+allora-forge-export --config model.json --out build/my_lgbm_package --zip
+# then upload build/my_lgbm_package.zip to forge (POST /api/v1/models)
+```
+
+`--zip` writes the package **contents** at the archive root, so forge finds `manifest.json` at the extraction root. The generated worker is **generic over pair/timeframe** — one package can be deployed against many pairs/timeframes/topics.
+
+### Two deployment modes
+
+Exactly **one** of these must hold (forge rejects the package otherwise; `export_package` enforces it and fails loudly):
+
+| Mode | Set | Weights | Who trains |
+|------|-----|---------|-----------|
+| **Train-on-platform** | `supports_training=True` (default) | none | the platform |
+| **Train-locally** | `supports_training=False` (or `--no-training`) + `--weights <dir>` | bundled | you, before export |
+
+- **Train-on-platform.** The platform runs training as an `allora-worker train` job on a schedule the operator configures (it is not an in-process timer). Each run skips retraining if the current artifact is younger than 12h (unless `FORCE_RETRAIN=true`). Training only runs while `supports_training` is true. **Before the first successful training run there is no artifact**, and the generated worker's inference raises `model artifact not found` until one exists — expect the first inferences to fail until training completes and writes weights.
+- **Train-locally.** `supports_training=False` means the platform never retrains; it serves the weights you bundled (imported into storage by the platform's import step). Updating those weights means re-exporting/re-importing — the generated worker does not hot-reload weights in this mode (the SDK's model watcher only runs for models that report a watchable artifact, which the generated model ties to `supports_training`).
+
+### Deployment env vars
+
+`pair`/`timeframe`/`topic` are **deploy-time** parameters the operator injects as env vars, never baked into the package. The hosted worker reads:
+
+| Env var | Purpose | Default |
+|---------|---------|---------|
+| `PAIR` | Trading pair, e.g. `BTCUSD` | `ETHUSD` |
+| `TIMEFRAME` | Bar interval, e.g. `5min`, `1h` | `5min` |
+| `ALLORA_TOPIC_ID` | Target topic | `69` |
+| `ALLORA_API_KEY` | Required only for the `allora` data source | — |
+| `SUBMIT_RETURNS` | `true`/`false` to force log-return vs price output; unset/`auto` derives it from the topic's on-chain loss method | `auto` |
+| `DATA_BASE_PATH` | Where the worker reads/writes model artifacts | `./data` |
+
+---
+
 ## Python API (quick reference)
 
 ```python
@@ -225,6 +285,16 @@ df = workflow.get_full_feature_target_dataframe()
 from allora_forge_builder_kit import PerformanceEvaluator
 evaluator = PerformanceEvaluator(workflow)
 grade = evaluator.evaluate(predict_fn)
+
+# Shared engineered features (identical at train and serve — the anti-skew guard)
+from allora_forge_builder_kit import apply_engineered_features, engineered_feature_names
+specs = [{"kind": "log_return", "window_bars": 6}]
+df, added_cols = apply_engineered_features(df, specs, number_of_input_bars=48)
+
+# Package a model for the hosting platform (see "Deploy to the hosting platform")
+from allora_forge_builder_kit import ModelSpec, export_package
+export_package(ModelSpec(model_type="my_lgbm", engineered_specs=specs,
+                         number_of_input_bars=48, target_bars=24), "build/pkg")
 ```
 
 ---
@@ -324,7 +394,10 @@ All three produce a complete, runnable pipeline and satisfy the same nine method
 | `notebooks/deploy_worker.py` | Deploy any topic with WorkerManager (`TOPIC_ID=N python deploy_worker.py`) |
 | `notebooks/deploy_worker_raw.py` | Minimal SDK-only deployment reference (no WorkerManager) |
 | `notebooks/feature_engineering_example.py` | Standalone feature engineering reference |
+| `notebooks/export_to_hosting.py` | Export a model into a hosting-deployable package (`ModelSpec` → `export_package`) |
 | `allora_forge_builder_kit/workflow.py` | Data + feature pipeline |
+| `allora_forge_builder_kit/engineered_features.py` | Shared engineered-feature computation (train == serve; the guard against skew) |
+| `allora_forge_builder_kit/export.py` | Package a model for the hosting platform (`ModelSpec`, `export_package`, `allora-forge-export` CLI) |
 | `allora_forge_builder_kit/evaluation.py` | Model scoring (7 primary metrics + grading) |
 | `allora_forge_builder_kit/topic_discovery.py` | Query live topics on testnet/mainnet |
 | `allora_forge_builder_kit/worker_manager.py` | Wallet creation, key management, process lifecycle |
