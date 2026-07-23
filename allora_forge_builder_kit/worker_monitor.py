@@ -277,7 +277,8 @@ class WorkerMonitor:
 
     def get_submission_timeline(self, topic_id: int, address: str, deployment_id: Optional[str] = None, hours: int = 24, max_slots: int = 25) -> dict:
         # Prefer exact chain windows (nonce slots) when SDK fetcher supports it.
-        expected_nonces = self._expected_worker_nonces(topic_id, address, max_slots=max_slots)
+        import asyncio as _asyncio
+        expected_nonces = _asyncio.run(self._expected_worker_nonces(topic_id, address, max_slots=max_slots))
 
         q = """
             SELECT observed_at, status, value_text, tx_hash, details_json
@@ -333,19 +334,19 @@ class WorkerMonitor:
             "source": "sdk_exact_nonce_windows",
         }
 
-    def _expected_worker_nonces(self, topic_id: int, address: str, max_slots: int = 25) -> list[dict]:
+    async def _expected_worker_nonces(self, topic_id: int, address: str, max_slots: int = 25) -> list[dict]:
         # Try SDK-backed exact windows via fetcher internals.
         fetcher = self._event_fetcher
         client = getattr(fetcher, "client", None)
         if client is None:
             return []
         try:
-            from allora_sdk.protos.emissions.v9 import GetTopicRequest, GetWorkerSubmissionWindowStatusRequest
+            from allora_sdk.rpc_client.protos.emissions.v10 import GetTopicRequest, GetWorkerSubmissionWindowStatusRequest
 
-            topic = client.emissions.query.get_topic(GetTopicRequest(topic_id=topic_id))
+            topic = await client.emissions.query.get_topic(GetTopicRequest(topic_id=topic_id))
             t = getattr(topic, "topic", None)
             epoch_len = int(getattr(t, "epoch_length", 0) or 0)
-            ws = client.emissions.query.get_worker_submission_window_status(
+            ws = await client.emissions.query.get_worker_submission_window_status(
                 GetWorkerSubmissionWindowStatusRequest(topic_id=topic_id, address=address)
             )
             cur = int(getattr(ws, "current_nonce_block_height", 0) or 0)
@@ -473,7 +474,10 @@ class WorkerMonitor:
         deployed_at, deployment_id, last_sync_at = row
         cursor_since = since or last_sync_at or deployed_at
 
-        events = self._event_fetcher(topic_id, address, cursor_since)
+        import asyncio as _asyncio
+        import inspect as _inspect
+        _fetcher_result = self._event_fetcher(topic_id, address, cursor_since)
+        events = _asyncio.run(_fetcher_result) if _inspect.isawaitable(_fetcher_result) else _fetcher_result
         inserted = 0
         with sqlite3.connect(self.db_path) as conn:
             for ev in events:
@@ -588,13 +592,13 @@ class AlloraSDKEventFetcher:
         self.max_pages = max_pages
         self.page_limit = page_limit
 
-    def __call__(self, topic_id: int, address: str, since: Optional[str]) -> list[dict]:
-        from allora_sdk.protos.cosmos.tx.v1beta1 import GetTxsEventRequest, OrderBy
-        from allora_sdk.protos.emissions.v9 import (
+    async def __call__(self, topic_id: int, address: str, since: Optional[str]) -> list[dict]:
+        from allora_sdk.rpc_client.protos.cosmos.tx.v1beta1 import GetTxsEventRequest, OrderBy
+        from allora_sdk.rpc_client.protos.emissions.v10 import (
             CanSubmitWorkerPayloadRequest,
             GetInfererScoreEmaRequest,
             GetPreviousInferenceRewardFractionRequest,
-            GetWorkerLatestInferenceByTopicIdRequest,
+            GetWorkerLatestInputInferenceByTopicIdRequest,
             IsWhitelistedTopicWorkerRequest,
         )
 
@@ -609,7 +613,7 @@ class AlloraSDKEventFetcher:
         query = f"message.sender='{address}'"
         for page in range(1, self.max_pages + 1):
             try:
-                txs = self.client.tx.get_txs_event(
+                txs = await self.client.tx.query.get_txs_event(
                     GetTxsEventRequest(
                         query=query,
                         order_by=OrderBy.DESC,
@@ -635,7 +639,7 @@ class AlloraSDKEventFetcher:
                     continue
 
                 for ev in getattr(tx, "events", []):
-                    if ev.type != "emissions.v9.EventInsertInfererPayload":
+                    if ev.type != "emissions.v10.EventInsertInfererPayload":
                         continue
                     attrs = {a.key: a.value for a in ev.attributes}
                     ev_topic = str(attrs.get("topic_id", "")).strip('"')
@@ -672,8 +676,8 @@ class AlloraSDKEventFetcher:
 
         # 2) Latest point-in-time signals
         try:
-            latest = self.client.emissions.query.get_worker_latest_inference_by_topic_id(
-                GetWorkerLatestInferenceByTopicIdRequest(topic_id=topic_id, worker_address=address)
+            latest = await self.client.emissions.query.get_worker_latest_input_inference_by_topic_id(
+                GetWorkerLatestInputInferenceByTopicIdRequest(topic_id=topic_id, worker_address=address)
             )
             li = getattr(latest, "latest_inference", None)
             if li:
@@ -692,7 +696,7 @@ class AlloraSDKEventFetcher:
             pass
 
         try:
-            s = self.client.emissions.query.get_inferer_score_ema(
+            s = await self.client.emissions.query.get_inferer_score_ema(
                 GetInfererScoreEmaRequest(topic_id=topic_id, inferer=address)
             )
             score = getattr(getattr(s, "score", None), "score", None)
@@ -713,7 +717,7 @@ class AlloraSDKEventFetcher:
             pass
 
         try:
-            r = self.client.emissions.query.get_previous_inference_reward_fraction(
+            r = await self.client.emissions.query.get_previous_inference_reward_fraction(
                 GetPreviousInferenceRewardFractionRequest(topic_id=topic_id, worker=address)
             )
             rf = getattr(r, "reward_fraction", None)
@@ -735,7 +739,7 @@ class AlloraSDKEventFetcher:
             pass
 
         try:
-            w = self.client.emissions.query.is_whitelisted_topic_worker(
+            w = await self.client.emissions.query.is_whitelisted_topic_worker(
                 IsWhitelistedTopicWorkerRequest(topic_id=topic_id, address=address)
             )
             out.append(
@@ -752,7 +756,7 @@ class AlloraSDKEventFetcher:
             pass
 
         try:
-            c = self.client.emissions.query.can_submit_worker_payload(
+            c = await self.client.emissions.query.can_submit_worker_payload(
                 CanSubmitWorkerPayloadRequest(topic_id=topic_id, address=address)
             )
             out.append(
