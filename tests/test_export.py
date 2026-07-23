@@ -249,6 +249,8 @@ def test_empty_weights_dir_rejected(tmp_path):
     dict(model_type="ok", model_family="xgboost"),
     dict(model_type="ok", data_source="coinbase"),
     dict(model_type="ok", number_of_input_bars=0),
+    dict(model_type="ok", supports_training="true"),  # non-bool would bypass the XOR check
+    dict(model_type="ok", supports_training=1),
 ])
 def test_validation_rejects(over, tmp_path):
     with pytest.raises(ValueError):

@@ -74,6 +74,13 @@ class ModelSpec:
             raise ValueError("target_bars must be >= 1")
         if self.days_of_history < 1:
             raise ValueError("days_of_history must be >= 1")
+        # supports_training must be a real bool: the manifest XOR check compares it
+        # against has_weights with ==, so a non-bool (e.g. "true" or 1) would slip
+        # through and bake a malformed value into the manifest/config.
+        if not isinstance(self.supports_training, bool):
+            raise ValueError(
+                f"supports_training must be a bool, got {type(self.supports_training).__name__}"
+            )
         if not isinstance(self.engineered_specs, list):
             raise ValueError(f"engineered_specs must be a list, got {type(self.engineered_specs).__name__}")
         seen: set[str] = set()
