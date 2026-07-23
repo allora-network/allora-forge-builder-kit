@@ -2,11 +2,12 @@
 
 import json
 import py_compile
+import zipfile
 from pathlib import Path
 
 import pytest
 
-from allora_forge_builder_kit.export import ModelSpec, export_package
+from allora_forge_builder_kit.export import ModelSpec, export_package, main
 
 
 def _spec(**over):
@@ -190,22 +191,35 @@ def test_supports_training_flag(tmp_path):
     a_model = (tmp_path / "a" / "forge_model" / "model.py").read_text()
     assert "SUPPORTS_TRAINING = _CONFIG.get(" in a_model  # method reads config
 
-    # Inference-only: manifest + config both reflect it.
-    export_package(_spec(supports_training=False), tmp_path / "b")
+    # Inference-only: manifest + config both reflect it. Must bundle weights, since
+    # forge requires exactly one of supports_training/has_weights.
+    export_package(_spec(supports_training=False), tmp_path / "b", weights_dir=_weights(tmp_path / "w"))
     assert json.loads((tmp_path / "b" / "manifest.json").read_text())["supports_training"] is False
     cfg = json.loads((tmp_path / "b" / "forge_model" / "config.json").read_text())
     assert cfg["supports_training"] is False
 
 
+def _weights(path):
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "model.joblib").write_bytes(b"x")
+    return path
+
+
 def test_bundled_weights(tmp_path):
-    weights = tmp_path / "w"
-    weights.mkdir()
-    (weights / "model.joblib").write_bytes(b"x")
     out = tmp_path / "pkg"
-    export_package(_spec(), out, weights_dir=weights)
+    # weights ⇒ inference-only (XOR with supports_training).
+    export_package(_spec(supports_training=False), out, weights_dir=_weights(tmp_path / "w"))
     assert (out / "weights" / "model.joblib").exists()
     m = json.loads((out / "manifest.json").read_text())
     assert m["has_weights"] is True
+
+
+@pytest.mark.parametrize("supports_training, with_weights", [(True, True), (False, False)])
+def test_manifest_xor_enforced(tmp_path, supports_training, with_weights):
+    # Forge (hosting/manifest.go) requires exactly one of the two true.
+    weights = _weights(tmp_path / "w") if with_weights else None
+    with pytest.raises(ValueError, match="exactly one"):
+        export_package(_spec(supports_training=supports_training), tmp_path / "pkg", weights_dir=weights)
 
 
 def test_reexport_without_weights_clears_stale_weights(tmp_path):
@@ -213,15 +227,12 @@ def test_reexport_without_weights_clears_stale_weights(tmp_path):
     # WITHOUT weights must not leave a stale weights/ dir behind manifest's
     # has_weights=false (weights/ is excluded from code_hash, so it would drift
     # silently).
-    weights = tmp_path / "w"
-    weights.mkdir()
-    (weights / "model.joblib").write_bytes(b"x")
     out = tmp_path / "pkg"
 
-    export_package(_spec(), out, weights_dir=weights)
+    export_package(_spec(supports_training=False), out, weights_dir=_weights(tmp_path / "w"))
     assert (out / "weights" / "model.joblib").exists()
 
-    export_package(_spec(), out)  # no weights this time
+    export_package(_spec(), out)  # train-only, no weights this time
     assert not (out / "weights").exists()
     assert json.loads((out / "manifest.json").read_text())["has_weights"] is False
 
@@ -229,8 +240,8 @@ def test_reexport_without_weights_clears_stale_weights(tmp_path):
 def test_empty_weights_dir_rejected(tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
-    with pytest.raises(ValueError):
-        export_package(_spec(), tmp_path / "pkg", weights_dir=empty)
+    with pytest.raises(ValueError, match="missing or empty"):
+        export_package(_spec(supports_training=False), tmp_path / "pkg", weights_dir=empty)
 
 
 @pytest.mark.parametrize("over", [
@@ -250,3 +261,51 @@ def test_from_dict_rejects_unknown_keys():
             "model_type": "ok", "engineered_specs": [], "number_of_input_bars": 1,
             "target_bars": 1, "surprise": True,
         })
+
+
+def test_from_dict_missing_required_key_is_clean_value_error():
+    # Missing model_type would surface as a TypeError from the dataclass ctor; it
+    # must be re-raised as ValueError so main() prints the clean "export failed:".
+    with pytest.raises(ValueError):
+        ModelSpec.from_dict({"engineered_specs": [], "number_of_input_bars": 1, "target_bars": 1})
+
+
+@pytest.mark.parametrize("bad_specs", ["notalist", [42], ["log_return"]])
+def test_validate_rejects_malformed_engineered_specs(bad_specs):
+    # Non-list / non-object specs used to raise AttributeError; now a clean ValueError.
+    with pytest.raises(ValueError):
+        _spec(engineered_specs=bad_specs).validate()
+
+
+def _write_config(tmp_path, **over):
+    base = dict(
+        model_type="my_lgbm",
+        engineered_specs=[{"kind": "log_return", "window_bars": 6}],
+        number_of_input_bars=24,
+        target_bars=24,
+    )
+    base.update(over)
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps(base))
+    return cfg
+
+
+def test_main_malformed_config_returns_clean_error(tmp_path, capsys):
+    cfg = _write_config(tmp_path, engineered_specs="notalist")
+    rc = main(["--config", str(cfg), "--out", str(tmp_path / "pkg")])
+    assert rc == 1
+    assert "export failed:" in capsys.readouterr().err
+
+
+def test_main_zip_writes_flat_archive(tmp_path):
+    cfg = _write_config(tmp_path)
+    out = tmp_path / "pkg"
+    rc = main(["--config", str(cfg), "--out", str(out), "--zip"])
+    assert rc == 0
+    archive = Path(str(out) + ".zip")
+    assert archive.exists()
+    with zipfile.ZipFile(archive) as zf:
+        names = zf.namelist()
+    # manifest.json must sit at the archive root (forge extracts flat), not nested.
+    assert "manifest.json" in names
+    assert "forge_model/model.py" in names

@@ -28,6 +28,7 @@ import os
 import re
 import shutil
 import sys
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -73,8 +74,12 @@ class ModelSpec:
             raise ValueError("target_bars must be >= 1")
         if self.days_of_history < 1:
             raise ValueError("days_of_history must be >= 1")
+        if not isinstance(self.engineered_specs, list):
+            raise ValueError(f"engineered_specs must be a list, got {type(self.engineered_specs).__name__}")
         seen: set[str] = set()
         for i, spec in enumerate(self.engineered_specs):
+            if not isinstance(spec, dict):
+                raise ValueError(f"engineered_specs[{i}] must be an object, got {type(spec).__name__}")
             if spec.get("kind") != "log_return":
                 raise ValueError(f"engineered_specs[{i}].kind must be 'log_return' (v1)")
             raw = spec.get("window_bars", 0)
@@ -94,7 +99,12 @@ class ModelSpec:
         unknown = set(d) - known
         if unknown:
             raise ValueError(f"unknown config keys: {sorted(unknown)}")
-        return cls(**d)
+        try:
+            return cls(**d)
+        except TypeError as e:
+            # Missing a required key (e.g. model_type) surfaces as a TypeError from
+            # the dataclass constructor; re-raise as ValueError for the clean path.
+            raise ValueError(f"invalid config: {e}") from e
 
     def config_json(self) -> dict[str, Any]:
         """The subset baked into forge_model/config.json (read by the model at runtime)."""
@@ -148,6 +158,16 @@ def export_package(
     # out_dir without weights_dir can't leave a stale dir behind manifest's
     # has_weights=false.
     has_weights = weights_dir is not None
+    # Forge rejects a package unless exactly one of supports_training/has_weights
+    # is true (see forge-v2 hosting/manifest.go): both-true is ambiguous, both-false
+    # leaves the worker with no artifact. Fail here so it surfaces at export, not
+    # at upload.
+    if has_weights == spec.supports_training:
+        raise ValueError(
+            "exactly one of supports_training and has_weights must be true "
+            f"(got supports_training={spec.supports_training}, has_weights={has_weights}); "
+            "bundle --weights for an inference-only model, or drop --weights for a trainable one"
+        )
     dst = out / "weights"
     if dst.exists():
         shutil.rmtree(dst)
@@ -183,6 +203,18 @@ def _code_hash(out: Path) -> str:
     return "sha256:" + h.hexdigest()
 
 
+def _zip_package(out: Path) -> Path:
+    """Zip the package *contents* (files at the archive root, not nested under the
+    out dir) so forge finds ``manifest.json`` at the extraction root. Returns the
+    archive path (``<out>.zip``)."""
+    archive = out.with_suffix(out.suffix + ".zip") if out.suffix else Path(str(out) + ".zip")
+    files = sorted(p for p in out.rglob("*") if p.is_file())
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in files:
+            zf.write(p, arcname=str(p.relative_to(out)))
+    return archive
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="allora-forge-export",
@@ -191,11 +223,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--config", required=True, help="Path to a model config JSON (see ModelSpec fields).")
     ap.add_argument("--out", required=True, help="Output directory for the package.")
     ap.add_argument("--weights", default=None, help="Optional directory of pre-trained weights to bundle.")
-    ap.add_argument("--builder-kit-ref", default="main", help="git ref the package installs builder-kit from.")
+    ap.add_argument(
+        "--builder-kit-ref",
+        default="main",
+        help="git ref the package installs builder-kit from (pin a sha/tag for reproducible production serving).",
+    )
     ap.add_argument(
         "--no-training",
         action="store_true",
         help="Inference-only: the platform never retrains; it serves bundled/imported weights.",
+    )
+    ap.add_argument(
+        "--zip",
+        action="store_true",
+        help="Also write <out>.zip with the package contents at the root (ready to upload to forge).",
     )
     args = ap.parse_args(argv)
 
@@ -203,13 +244,11 @@ def main(argv: list[str] | None = None) -> int:
         spec = ModelSpec.from_dict(json.loads(Path(args.config).read_text()))
         if args.no_training:
             spec.supports_training = False
-        if not spec.supports_training and args.weights is None:
-            print(
-                "warning: inference-only model (supports_training=false) has no bundled "
-                "--weights; it will serve nothing until weights are imported into storage.",
-                file=sys.stderr,
-            )
         out = export_package(spec, args.out, weights_dir=args.weights, builder_kit_ref=args.builder_kit_ref)
+        if args.zip:
+            archive = _zip_package(out)
+            print(f"exported package to {out} and wrote {archive}")
+            return 0
     except (ValueError, OSError, json.JSONDecodeError) as e:
         print(f"export failed: {e}", file=sys.stderr)
         return 1
