@@ -1,1 +1,1 @@
-allora-forge-builder-kit[dev,wallet-link] @ git+https://github.com/allora-network/allora-forge-builder-kit.git@sdk-v10-upgrade
+allora-forge-builder-kit[dev,wallet-link] @ git+https://github.com/allora-network/allora-forge-builder-kit.git@main

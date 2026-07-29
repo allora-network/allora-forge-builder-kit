@@ -1,24 +1,21 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol, runtime_checkable
+from typing import Any, Awaitable, Callable, Optional, Protocol, runtime_checkable
 
 
 @runtime_checkable
 class EventFetcherProtocol(Protocol):
-    """Protocol for event fetchers used by WorkerMonitor.
+    """Protocol for event fetchers used by WorkerMonitor."""
 
-    Implementers must be callable with (topic_id, address, since) -> list[dict].
-    Optionally expose a ``client`` attribute for SDK-backed nonce window queries.
-    """
-    client: Optional[Any]
-
-    def __call__(self, topic_id: int, address: str, since: Optional[str]) -> list[dict]: ...
+    async def __call__(self, topic_id: int, address: str, since: Optional[str]) -> list[dict]: ...
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +52,7 @@ class WorkerMonitor:
     def __init__(
         self,
         db_path: str | Path = "worker_state.db",
-        event_fetcher: Optional[EventFetcherProtocol | Callable[[int, str, Optional[str]], list[dict]]] = None,
+        event_fetcher: Optional[EventFetcherProtocol | Callable[[int, str, Optional[str]], Awaitable[list[dict]] | list[dict]]] = None,
     ):
         self.db_path = Path(db_path)
         self._event_fetcher = event_fetcher or self._default_event_fetcher
@@ -277,8 +274,7 @@ class WorkerMonitor:
 
     def get_submission_timeline(self, topic_id: int, address: str, deployment_id: Optional[str] = None, hours: int = 24, max_slots: int = 25) -> dict:
         # Prefer exact chain windows (nonce slots) when SDK fetcher supports it.
-        import asyncio as _asyncio
-        expected_nonces = _asyncio.run(self._expected_worker_nonces(topic_id, address, max_slots=max_slots))
+        expected_nonces = asyncio.run(self._expected_worker_nonces(topic_id, address, max_slots=max_slots))
 
         q = """
             SELECT observed_at, status, value_text, tx_hash, details_json
@@ -335,13 +331,15 @@ class WorkerMonitor:
         }
 
     async def _expected_worker_nonces(self, topic_id: int, address: str, max_slots: int = 25) -> list[dict]:
-        # Try SDK-backed exact windows via fetcher internals.
+        # Try SDK-backed exact windows when the fetcher is an AlloraSDKEventFetcher.
         fetcher = self._event_fetcher
-        client = getattr(fetcher, "client", None)
-        if client is None:
+        cfg = getattr(fetcher, "_cfg", None)
+        if cfg is None:
             return []
         try:
+            from allora_sdk.rpc_client.client import AlloraRPCClient
             from allora_sdk.rpc_client.protos.emissions.v10 import GetTopicRequest, GetWorkerSubmissionWindowStatusRequest
+            client = AlloraRPCClient(network=cfg)
 
             topic = await client.emissions.query.get_topic(GetTopicRequest(topic_id=topic_id))
             t = getattr(topic, "topic", None)
@@ -474,10 +472,8 @@ class WorkerMonitor:
         deployed_at, deployment_id, last_sync_at = row
         cursor_since = since or last_sync_at or deployed_at
 
-        import asyncio as _asyncio
-        import inspect as _inspect
         _fetcher_result = self._event_fetcher(topic_id, address, cursor_since)
-        events = _asyncio.run(_fetcher_result) if _inspect.isawaitable(_fetcher_result) else _fetcher_result
+        events = asyncio.run(_fetcher_result) if inspect.isawaitable(_fetcher_result) else _fetcher_result
         inserted = 0
         with sqlite3.connect(self.db_path) as conn:
             for ev in events:
@@ -585,14 +581,14 @@ class AlloraSDKEventFetcher:
     """
 
     def __init__(self, network: str = "testnet", max_pages: int = 5, page_limit: int = 50):
-        from allora_sdk.rpc_client.client import AlloraNetworkConfig, AlloraRPCClient
+        from allora_sdk.rpc_client.client import AlloraNetworkConfig
 
-        cfg = AlloraNetworkConfig.mainnet() if network.lower() == "mainnet" else AlloraNetworkConfig.testnet()
-        self.client = AlloraRPCClient(network=cfg)
+        self._cfg = AlloraNetworkConfig.mainnet() if network.lower() == "mainnet" else AlloraNetworkConfig.testnet()
         self.max_pages = max_pages
         self.page_limit = page_limit
 
     async def __call__(self, topic_id: int, address: str, since: Optional[str]) -> list[dict]:
+        from allora_sdk.rpc_client.client import AlloraRPCClient
         from allora_sdk.rpc_client.protos.cosmos.tx.v1beta1 import GetTxsEventRequest, OrderBy
         from allora_sdk.rpc_client.protos.emissions.v10 import (
             CanSubmitWorkerPayloadRequest,
@@ -601,6 +597,8 @@ class AlloraSDKEventFetcher:
             GetWorkerLatestInputInferenceByTopicIdRequest,
             IsWhitelistedTopicWorkerRequest,
         )
+
+        client = AlloraRPCClient(network=self._cfg)
 
         since_dt = _parse_dt(since)
         if since_dt is not None:
@@ -613,7 +611,7 @@ class AlloraSDKEventFetcher:
         query = f"message.sender='{address}'"
         for page in range(1, self.max_pages + 1):
             try:
-                txs = await self.client.tx.query.get_txs_event(
+                txs = await client.tx.query.get_txs_event(
                     GetTxsEventRequest(
                         query=query,
                         order_by=OrderBy.DESC,
@@ -676,7 +674,7 @@ class AlloraSDKEventFetcher:
 
         # 2) Latest point-in-time signals
         try:
-            latest = await self.client.emissions.query.get_worker_latest_input_inference_by_topic_id(
+            latest = await client.emissions.query.get_worker_latest_input_inference_by_topic_id(
                 GetWorkerLatestInputInferenceByTopicIdRequest(topic_id=topic_id, worker_address=address)
             )
             li = getattr(latest, "latest_inference", None)
@@ -696,7 +694,7 @@ class AlloraSDKEventFetcher:
             pass
 
         try:
-            s = await self.client.emissions.query.get_inferer_score_ema(
+            s = await client.emissions.query.get_inferer_score_ema(
                 GetInfererScoreEmaRequest(topic_id=topic_id, inferer=address)
             )
             score = getattr(getattr(s, "score", None), "score", None)
@@ -717,7 +715,7 @@ class AlloraSDKEventFetcher:
             pass
 
         try:
-            r = await self.client.emissions.query.get_previous_inference_reward_fraction(
+            r = await client.emissions.query.get_previous_inference_reward_fraction(
                 GetPreviousInferenceRewardFractionRequest(topic_id=topic_id, worker=address)
             )
             rf = getattr(r, "reward_fraction", None)
@@ -739,7 +737,7 @@ class AlloraSDKEventFetcher:
             pass
 
         try:
-            w = await self.client.emissions.query.is_whitelisted_topic_worker(
+            w = await client.emissions.query.is_whitelisted_topic_worker(
                 IsWhitelistedTopicWorkerRequest(topic_id=topic_id, address=address)
             )
             out.append(
@@ -756,7 +754,7 @@ class AlloraSDKEventFetcher:
             pass
 
         try:
-            c = await self.client.emissions.query.can_submit_worker_payload(
+            c = await client.emissions.query.can_submit_worker_payload(
                 CanSubmitWorkerPayloadRequest(topic_id=topic_id, address=address)
             )
             out.append(

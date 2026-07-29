@@ -23,9 +23,9 @@ Build, evaluate, and deploy ML inference workers on the [Allora Network](https:/
 > pip install -r requirements.txt
 > ```
 >
-> **Mainnet users** — the network is still on emissions v9. Use the last stable builder kit release, which installs `allora-sdk` from PyPI:
+> **Mainnet users** — the network is still on emissions v9. Use the last stable builder kit release:
 > ```bash
-> pip install allora-forge-builder-kit
+> pip install "allora-forge-builder-kit @ git+https://github.com/allora-network/allora-forge-builder-kit.git@8ef3200"
 > ```
 
 ## Contents

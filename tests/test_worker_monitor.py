@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from allora_forge_builder_kit.worker_monitor import WorkerMonitor, AlloraSDKEventFetcher
 
@@ -131,3 +132,45 @@ def test_allora_sdk_event_fetcher_call_is_async():
     """AlloraSDKEventFetcher.__call__ must be a coroutine function so WorkerMonitor can await it."""
     import inspect
     assert inspect.iscoroutinefunction(AlloraSDKEventFetcher.__call__)
+
+
+def _make_mock_client(_network):
+    """Return a mock AlloraRPCClient with async stubs for all queried methods."""
+    mock = MagicMock()
+    mock.tx.query.get_txs_event = AsyncMock(return_value=MagicMock(tx_responses=[]))
+    mock.emissions.query.get_worker_latest_input_inference_by_topic_id = AsyncMock(
+        return_value=MagicMock(latest_inference=None)
+    )
+    mock.emissions.query.get_inferer_score_ema = AsyncMock(side_effect=Exception("no score"))
+    mock.emissions.query.get_previous_inference_reward_fraction = AsyncMock(side_effect=Exception("no reward"))
+    mock.emissions.query.is_whitelisted_topic_worker = AsyncMock(side_effect=Exception())
+    mock.emissions.query.can_submit_worker_payload = AsyncMock(side_effect=Exception())
+    return mock
+
+
+def test_event_fetcher_creates_fresh_client_per_asyncio_run():
+    """FIND-001: AlloraSDKEventFetcher must create a fresh AlloraRPCClient on each __call__
+    invocation. A shared client (created in __init__) captures grpclib's self._loop outside
+    any asyncio.run() context. Every subsequent asyncio.run() runs a different loop, so
+    _create_connection registers I/O on the wrong loop and raises
+    'Future attached to a different loop' — silently swallowed, blacking out all monitoring.
+    """
+    import asyncio
+
+    clients_created: list = []
+
+    def tracking_make_client(network):
+        client = _make_mock_client(network)
+        clients_created.append(client)
+        return client
+
+    with patch("allora_sdk.rpc_client.client.AlloraRPCClient", side_effect=tracking_make_client):
+        fetcher = AlloraSDKEventFetcher()
+        asyncio.run(fetcher(topic_id=1, address="allo1test", since=None))
+        asyncio.run(fetcher(topic_id=1, address="allo1test", since=None))
+
+    assert len(clients_created) >= 2, (
+        f"Expected a fresh AlloraRPCClient per asyncio.run() call, got {len(clients_created)}. "
+        "A shared client causes 'Future attached to a different loop' RuntimeError, silently "
+        "swallowed by the bare except blocks, permanently blacking out monitoring."
+    )
