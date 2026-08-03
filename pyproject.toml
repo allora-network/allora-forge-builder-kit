@@ -33,9 +33,6 @@ dev = [
     "scikit-learn",
     "matplotlib",
 ]
-binance = [
-    "websocket-client",
-]
 wallet-link = [
     "cosmpy==0.11.1",
 ]

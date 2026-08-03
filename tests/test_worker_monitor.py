@@ -137,6 +137,7 @@ def test_allora_sdk_event_fetcher_call_is_async():
 def _make_mock_client(_network):
     """Return a mock AlloraRPCClient with async stubs for all queried methods."""
     mock = MagicMock()
+    mock.close = AsyncMock()
     mock.tx.query.get_txs_event = AsyncMock(return_value=MagicMock(tx_responses=[]))
     mock.emissions.query.get_worker_latest_input_inference_by_topic_id = AsyncMock(
         return_value=MagicMock(latest_inference=None)

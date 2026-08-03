@@ -81,8 +81,7 @@ cd allora-forge-builder-kit
 python3.11 -m venv .venv
 source .venv/bin/activate
 
-python -m pip install .
-python -m pip install -r requirements.txt
+pip install -e ".[dev,wallet-link]"
 ```
 
 Get a free API key from [developer.allora.network](https://developer.allora.network) and save it:

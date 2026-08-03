@@ -336,11 +336,10 @@ class WorkerMonitor:
         cfg = getattr(fetcher, "_cfg", None)
         if cfg is None:
             return []
+        from allora_sdk.rpc_client.client import AlloraRPCClient
+        from allora_sdk.rpc_client.protos.emissions.v10 import GetTopicRequest, GetWorkerSubmissionWindowStatusRequest
+        client = AlloraRPCClient(network=cfg)
         try:
-            from allora_sdk.rpc_client.client import AlloraRPCClient
-            from allora_sdk.rpc_client.protos.emissions.v10 import GetTopicRequest, GetWorkerSubmissionWindowStatusRequest
-            client = AlloraRPCClient(network=cfg)
-
             topic = await client.emissions.query.get_topic(GetTopicRequest(topic_id=topic_id))
             t = getattr(topic, "topic", None)
             epoch_len = int(getattr(t, "epoch_length", 0) or 0)
@@ -366,6 +365,8 @@ class WorkerMonitor:
             return out
         except Exception:
             return []
+        finally:
+            await client.close()
 
     def _latest_event_value(self, topic_id: int, address: str, event_type: str, deployment_id: Optional[str]) -> Optional[dict]:
         q = """
@@ -589,6 +590,14 @@ class AlloraSDKEventFetcher:
 
     async def __call__(self, topic_id: int, address: str, since: Optional[str]) -> list[dict]:
         from allora_sdk.rpc_client.client import AlloraRPCClient
+
+        client = AlloraRPCClient(network=self._cfg)
+        try:
+            return await self._fetch(client, topic_id, address, since)
+        finally:
+            await client.close()
+
+    async def _fetch(self, client: Any, topic_id: int, address: str, since: Optional[str]) -> list[dict]:
         from allora_sdk.rpc_client.protos.cosmos.tx.v1beta1 import GetTxsEventRequest, OrderBy
         from allora_sdk.rpc_client.protos.emissions.v10 import (
             CanSubmitWorkerPayloadRequest,
@@ -597,8 +606,6 @@ class AlloraSDKEventFetcher:
             GetWorkerLatestInputInferenceByTopicIdRequest,
             IsWhitelistedTopicWorkerRequest,
         )
-
-        client = AlloraRPCClient(network=self._cfg)
 
         since_dt = _parse_dt(since)
         if since_dt is not None:
