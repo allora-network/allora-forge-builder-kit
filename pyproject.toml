@@ -22,14 +22,14 @@ dependencies = [
     "pytz",
     "numba",
     "scipy",
-    "allora-sdk>=1.1.0",
+    "allora-sdk>=1.3.0",
     "cloudpickle",
+    "websocket-client",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
-    "websocket-client",
     "scikit-learn",
     "matplotlib",
 ]

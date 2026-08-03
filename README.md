@@ -5,22 +5,11 @@
 Build, evaluate, and deploy ML inference workers on the [Allora Network](https://allora.network).
 
 > [!IMPORTANT]
-> **SDK v10 — Testnet only.** This version of the builder kit targets the Allora testnet after its emissions v9 → v10 chain upgrade. It requires `allora-sdk` v1.1.0, which is **not yet published to PyPI** — the SDK's gRPC protos must be generated locally before installing.
+> **SDK v10 — Testnet only.** This version of the builder kit targets the Allora testnet after its emissions v9 → v10 chain upgrade. It requires `allora-sdk>=1.3.0`, now available on PyPI.
 >
 > **Testnet / v10 install:**
 > ```bash
-> # 1. Install protoc (once)
-> sudo apt-get install -y protobuf-compiler   # Linux
-> # brew install protobuf                     # macOS
->
-> # 2. Clone, generate protos, and install the SDK
-> git clone https://github.com/allora-network/allora-sdk-py.git
-> cd allora-sdk-py
-> pip install ".[codegen]" && make codegen && pip install -e .
-> cd ..
->
-> # 3. Install the builder kit
-> pip install -r requirements.txt
+> pip install "allora-forge-builder-kit @ git+https://github.com/allora-network/allora-forge-builder-kit.git@main"
 > ```
 >
 > **Mainnet users** — the network is still on emissions v9. Use the last stable builder kit release:
