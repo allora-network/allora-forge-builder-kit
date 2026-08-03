@@ -336,10 +336,11 @@ class WorkerMonitor:
         cfg = getattr(fetcher, "_cfg", None)
         if cfg is None:
             return []
-        from allora_sdk.rpc_client.client import AlloraRPCClient
-        from allora_sdk.rpc_client.protos.emissions.v10 import GetTopicRequest, GetWorkerSubmissionWindowStatusRequest
-        client = AlloraRPCClient(network=cfg)
+        client = None
         try:
+            from allora_sdk.rpc_client.client import AlloraRPCClient
+            from allora_sdk.rpc_client.protos.emissions.v10 import GetTopicRequest, GetWorkerSubmissionWindowStatusRequest
+            client = AlloraRPCClient(network=cfg)
             topic = await client.emissions.query.get_topic(GetTopicRequest(topic_id=topic_id))
             t = getattr(topic, "topic", None)
             epoch_len = int(getattr(t, "epoch_length", 0) or 0)
@@ -366,7 +367,8 @@ class WorkerMonitor:
         except Exception:
             return []
         finally:
-            await client.close()
+            if client is not None:
+                await client.close()
 
     def _latest_event_value(self, topic_id: int, address: str, event_type: str, deployment_id: Optional[str]) -> Optional[dict]:
         q = """
