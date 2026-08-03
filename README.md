@@ -4,6 +4,19 @@
 
 Build, evaluate, and deploy ML inference workers on the [Allora Network](https://allora.network).
 
+> [!IMPORTANT]
+> **SDK v10 — Testnet only.** This version of the builder kit targets the Allora testnet after its emissions v9 → v10 chain upgrade. It requires `allora-sdk>=1.3.0`, now available on PyPI.
+>
+> **Testnet / v10 install:**
+> ```bash
+> pip install "allora-forge-builder-kit @ git+https://github.com/allora-network/allora-forge-builder-kit.git@main"
+> ```
+>
+> **Mainnet users** — the network is still on emissions v9. Use the last stable builder kit release:
+> ```bash
+> pip install "allora-forge-builder-kit @ git+https://github.com/allora-network/allora-forge-builder-kit.git@8ef3200"
+> ```
+
 ## Contents
 
 - [What is Allora?](#what-is-allora)
@@ -68,8 +81,7 @@ cd allora-forge-builder-kit
 python3.11 -m venv .venv
 source .venv/bin/activate
 
-python -m pip install .
-python -m pip install -r requirements.txt
+pip install -e ".[dev,wallet-link]"
 ```
 
 Get a free API key from [developer.allora.network](https://developer.allora.network) and save it:

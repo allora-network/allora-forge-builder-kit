@@ -8,6 +8,7 @@ import cloudpickle
 
 from allora_sdk.worker import AlloraWorker
 from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
+from allora_sdk.worker.context import RunContext
 
 
 def _load_api_key(explicit: str | None) -> str:
@@ -50,8 +51,8 @@ async def _run(
     with open(artifact_path, "rb") as f:
         raw_fn = cloudpickle.load(f)
 
-    def run_fn(nonce: int):
-        value = raw_fn(nonce)
+    def run_fn(ctx: RunContext):
+        value = raw_fn(ctx.nonce)
         try:
             v = float(value)
         except Exception as e:
@@ -64,7 +65,7 @@ async def _run(
 
     wallet_cfg = AlloraWalletConfig(mnemonic_file=mnemonic_file) if mnemonic_file else None
     net_cfg = _build_network(network, no_faucet)
-    worker = AlloraWorker(run=run_fn, topic_id=topic_id, api_key=api_key, wallet=wallet_cfg, network=net_cfg, debug=debug)
+    worker = AlloraWorker.inferer(run=run_fn, topic_id=topic_id, api_key=api_key, wallet=wallet_cfg, network=net_cfg, debug=debug)
     async for _ in worker.run():
         pass
 
