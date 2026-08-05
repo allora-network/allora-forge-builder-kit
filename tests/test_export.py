@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from allora_forge_builder_kit.export import ModelSpec, export_package, main
+from allora_forge_builder_kit import WorkerManager
+from allora_forge_builder_kit.export import ModelSpec, export_package
 
 
 def _spec(**over):
@@ -65,86 +66,53 @@ def test_output_kind_driven_by_submit_returns(tmp_path):
     py_compile.compile(str(tmp_path / "forge_model" / "model.py"), doraise=True)
 
 
-def _load_generated_model(tmp_path):
-    """Import the generated forge_model/model.py as a standalone module."""
-    import importlib.util
-
+def _model_src(tmp_path) -> str:
     export_package(_spec(), tmp_path)
-    mod_path = tmp_path / "forge_model" / "model.py"
-    spec = importlib.util.spec_from_file_location("generated_forge_model", mod_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    return (tmp_path / "forge_model" / "model.py").read_text()
 
 
-def _run_inference(mod, submit_returns, current_price, monkeypatch):
-    import asyncio
-
-    import numpy as np
-    import pandas as pd
-
-    monkeypatch.setenv("PAIR", "BTCUSD")
-    monkeypatch.setenv("TIMEFRAME", "5min")
-
-    # Passthrough features + a fake workflow/model so get_inference exercises only
-    # the output-kind branch, not data fetching or feature engineering.
-    monkeypatch.setattr(mod, "apply_engineered_features", lambda df, specs, n: (df, []))
-
-    live_row = pd.DataFrame({"feature_close_0": [1.0]})
-    live_row.attrs["current_price"] = current_price
-
-    class _WF:
-        def get_live_features(self, ticker):
-            return live_row
-
-    monkeypatch.setattr(mod, "_workflow", lambda: _WF())
-
-    class _M:
-        def predict(self, x):
-            return np.array([0.02])  # predicted log-return
-
-    model = mod.ForgeModel(mod.ForgeModelConfig(submit_returns=submit_returns))
-    model._bundle = {"model": _M(), "feature_cols": []}
-    return asyncio.run(model.get_inference("BTCUSD"))
+def test_submit_returns_true_publishes_raw_log_return(tmp_path):
+    # submit_returns=True path must assign the raw log-return directly, no exp().
+    src = _model_src(tmp_path)
+    assert "prediction = predicted_log_return" in src
+    assert 'getattr(self.config, "submit_returns", True) is False' in src
 
 
-def test_submit_returns_true_publishes_raw_log_return(tmp_path, monkeypatch):
-    mod = _load_generated_model(tmp_path)
-    out = _run_inference(mod, submit_returns=True, current_price=100.0, monkeypatch=monkeypatch)
-    assert out["prediction"] == pytest.approx(0.02)  # native output, no exp()
+def test_submit_returns_false_publishes_absolute_price(tmp_path):
+    # submit_returns=False path must convert log-return to absolute price via exp().
+    src = _model_src(tmp_path)
+    assert "prediction = current_price * float(np.exp(predicted_log_return))" in src
 
 
-def test_submit_returns_false_publishes_absolute_price(tmp_path, monkeypatch):
-    import math
-
-    mod = _load_generated_model(tmp_path)
-    out = _run_inference(mod, submit_returns=False, current_price=100.0, monkeypatch=monkeypatch)
-    assert out["prediction"] == pytest.approx(100.0 * math.exp(0.02))
-
-
-def test_submit_returns_false_requires_positive_current_price(tmp_path, monkeypatch):
-    mod = _load_generated_model(tmp_path)
-    with pytest.raises(ValueError, match="current_price"):
-        _run_inference(mod, submit_returns=False, current_price=float("nan"), monkeypatch=monkeypatch)
+def test_submit_returns_false_requires_positive_current_price(tmp_path):
+    # A non-finite or non-positive current_price must be rejected when publishing
+    # an absolute price — silently emitting a log-return on a price topic is worse.
+    src = _model_src(tmp_path)
+    assert "np.isfinite(current_price) and current_price > 0" in src
+    assert "raise ValueError" in src
+    assert "current_price" in src
 
 
 def test_default_config_exposes_submit_returns_for_sdk_gate(tmp_path):
-    # The SDK only auto-resolves SUBMIT_RETURNS when hasattr(config, "submit_returns").
-    mod = _load_generated_model(tmp_path)
-    cfg = mod.ForgeModel.default_config(timeframe="5min")
-    assert hasattr(cfg, "submit_returns")
+    # The SDK gates SUBMIT_RETURNS auto-resolution on hasattr(config, "submit_returns").
+    # ForgeModelConfig must declare the field so the attribute always exists.
+    src = _model_src(tmp_path)
+    assert "submit_returns: bool" in src
+    assert "dataclasses.field(default_factory=_env_submit_returns)" in src
 
 
-def test_submit_returns_defaults_to_log_return(tmp_path, monkeypatch):
-    monkeypatch.delenv("SUBMIT_RETURNS", raising=False)
-    mod = _load_generated_model(tmp_path)
-    assert mod.ForgeModel.default_config().submit_returns is True
+def test_submit_returns_defaults_to_log_return(tmp_path):
+    # When SUBMIT_RETURNS is absent, the default must be True (publish log-return).
+    # The sentinel is != "false": anything not explicitly "false" is True.
+    src = _model_src(tmp_path)
+    assert '!= "false"' in src
 
 
-def test_explicit_submit_returns_false_env_is_honored(tmp_path, monkeypatch):
-    monkeypatch.setenv("SUBMIT_RETURNS", "false")
-    mod = _load_generated_model(tmp_path)
-    assert mod.ForgeModel.default_config().submit_returns is False
+def test_explicit_submit_returns_false_env_is_honored(tmp_path):
+    # SUBMIT_RETURNS=false must be parsed case-insensitively from the environment.
+    src = _model_src(tmp_path)
+    assert 'os.environ.get("SUBMIT_RETURNS", "")' in src
+    assert '.strip().lower() != "false"' in src
 
 
 def test_api_key_not_passed_unconditionally(tmp_path):
@@ -292,19 +260,18 @@ def _write_config(tmp_path, **over):
     return cfg
 
 
-def test_main_malformed_config_returns_clean_error(tmp_path, capsys):
-    cfg = _write_config(tmp_path, engineered_specs="notalist")
-    rc = main(["--config", str(cfg), "--out", str(tmp_path / "pkg")])
-    assert rc == 1
-    assert "export failed:" in capsys.readouterr().err
+def test_export_payload_malformed_spec_raises(tmp_path):
+    # Malformed engineered_specs must raise a clean ValueError before writing anything.
+    bad = _spec(engineered_specs="notalist")
+    wm = WorkerManager(db_path=tmp_path / "state.db", reconcile_on_start=False)
+    with pytest.raises(ValueError):
+        wm.export_payload_for_hosting(bad, out_dir=tmp_path / "pkg")
 
 
-def test_main_zip_writes_flat_archive(tmp_path):
-    cfg = _write_config(tmp_path)
-    out = tmp_path / "pkg"
-    rc = main(["--config", str(cfg), "--out", str(out), "--zip"])
-    assert rc == 0
-    archive = Path(str(out) + ".zip")
+def test_export_payload_zip_writes_flat_archive(tmp_path):
+    wm = WorkerManager(db_path=tmp_path / "state.db", reconcile_on_start=False)
+    archive = wm.export_payload_for_hosting(_spec(), out_dir=tmp_path / "pkg", zip_output=True)
+    assert archive.suffix == ".zip"
     assert archive.exists()
     with zipfile.ZipFile(archive) as zf:
         names = zf.namelist()

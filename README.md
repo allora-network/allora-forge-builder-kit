@@ -213,7 +213,7 @@ The [Zero to deploy](#zero-to-deploy) flow runs a worker **locally** with `Worke
 See [`notebooks/export_to_hosting.py`](notebooks/export_to_hosting.py) for a runnable walkthrough. The essentials:
 
 ```python
-from allora_forge_builder_kit import ModelSpec, export_package
+from allora_forge_builder_kit import WorkerManager, ModelSpec
 
 # Model-INTRINSIC config (baked into the package's config.json). Pair/timeframe/
 # topic are NOT here — they are chosen per deployment (see env vars below).
@@ -226,13 +226,14 @@ spec = ModelSpec(
     data_source="binance",                          # "binance" | "allora"
     supports_training=True,                         # train-on-platform (no weights)
 )
-export_package(spec, "build/my_lgbm_package")       # writes the package dir
+wm = WorkerManager(reconcile_on_start=False)
+wm.export_payload_for_hosting(spec, out_dir="build/my_lgbm_package")
 ```
 
 Or from the command line, which can also produce the upload-ready zip:
 
 ```bash
-allora-forge-export --config model.json --out build/my_lgbm_package --zip
+workerctl export-payload --config model.json --out build/my_lgbm_package --zip
 # then upload build/my_lgbm_package.zip to forge (POST /api/v1/models)
 ```
 
@@ -240,7 +241,7 @@ allora-forge-export --config model.json --out build/my_lgbm_package --zip
 
 ### Two deployment modes
 
-Exactly **one** of these must hold (forge rejects the package otherwise; `export_package` enforces it and fails loudly):
+Exactly **one** of these must hold (forge rejects the package otherwise; `export_payload_for_hosting` enforces it and fails loudly):
 
 | Mode | Set | Weights | Who trains |
 |------|-----|---------|-----------|
@@ -292,9 +293,10 @@ specs = [{"kind": "log_return", "window_bars": 6}]
 df, added_cols = apply_engineered_features(df, specs, number_of_input_bars=48)
 
 # Package a model for the hosting platform (see "Deploy to the hosting platform")
-from allora_forge_builder_kit import ModelSpec, export_package
-export_package(ModelSpec(model_type="my_lgbm", engineered_specs=specs,
-                         number_of_input_bars=48, target_bars=24), "build/pkg")
+from allora_forge_builder_kit import WorkerManager, ModelSpec
+wm = WorkerManager(reconcile_on_start=False)
+wm.export_payload_for_hosting(ModelSpec(model_type="my_lgbm", engineered_specs=specs,
+                                        number_of_input_bars=48, target_bars=24), out_dir="build/pkg")
 ```
 
 ---
@@ -394,10 +396,10 @@ All three produce a complete, runnable pipeline and satisfy the same nine method
 | `notebooks/deploy_worker.py` | Deploy any topic with WorkerManager (`TOPIC_ID=N python deploy_worker.py`) |
 | `notebooks/deploy_worker_raw.py` | Minimal SDK-only deployment reference (no WorkerManager) |
 | `notebooks/feature_engineering_example.py` | Standalone feature engineering reference |
-| `notebooks/export_to_hosting.py` | Export a model into a hosting-deployable package (`ModelSpec` → `export_package`) |
+| `notebooks/export_to_hosting.py` | Export a model into a hosting-deployable package (`ModelSpec` → `WorkerManager.export_payload_for_hosting`) |
 | `allora_forge_builder_kit/workflow.py` | Data + feature pipeline |
 | `allora_forge_builder_kit/engineered_features.py` | Shared engineered-feature computation (train == serve; the guard against skew) |
-| `allora_forge_builder_kit/export.py` | Package a model for the hosting platform (`ModelSpec`, `export_package`, `allora-forge-export` CLI) |
+| `allora_forge_builder_kit/export.py` | Package a model for the hosting platform (`ModelSpec`, internal packaging logic) |
 | `allora_forge_builder_kit/evaluation.py` | Model scoring (7 primary metrics + grading) |
 | `allora_forge_builder_kit/topic_discovery.py` | Query live topics on testnet/mainnet |
 | `allora_forge_builder_kit/worker_manager.py` | Wallet creation, key management, process lifecycle |

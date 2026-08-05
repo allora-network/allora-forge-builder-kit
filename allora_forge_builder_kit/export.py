@@ -21,13 +21,11 @@ user trains with — so train and serve are identical by construction.
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import os
 import re
 import shutil
-import sys
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -220,47 +218,6 @@ def _zip_package(out: Path) -> Path:
         for p in files:
             zf.write(p, arcname=str(p.relative_to(out)))
     return archive
-
-
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(
-        prog="allora-forge-export",
-        description="Export a builder-kit model into a hosting-deployable package (.zip contents).",
-    )
-    ap.add_argument("--config", required=True, help="Path to a model config JSON (see ModelSpec fields).")
-    ap.add_argument("--out", required=True, help="Output directory for the package.")
-    ap.add_argument("--weights", default=None, help="Optional directory of pre-trained weights to bundle.")
-    ap.add_argument(
-        "--builder-kit-ref",
-        default="main",
-        help="git ref the package installs builder-kit from (pin a sha/tag for reproducible production serving).",
-    )
-    ap.add_argument(
-        "--no-training",
-        action="store_true",
-        help="Inference-only: the platform never retrains; it serves bundled/imported weights.",
-    )
-    ap.add_argument(
-        "--zip",
-        action="store_true",
-        help="Also write <out>.zip with the package contents at the root (ready to upload to forge).",
-    )
-    args = ap.parse_args(argv)
-
-    try:
-        spec = ModelSpec.from_dict(json.loads(Path(args.config).read_text()))
-        if args.no_training:
-            spec.supports_training = False
-        out = export_package(spec, args.out, weights_dir=args.weights, builder_kit_ref=args.builder_kit_ref)
-        if args.zip:
-            archive = _zip_package(out)
-            print(f"exported package to {out} and wrote {archive}")
-            return 0
-    except (ValueError, OSError, json.JSONDecodeError) as e:
-        print(f"export failed: {e}", file=sys.stderr)
-        return 1
-    print(f"exported package to {out} (zip its contents to upload)")
-    return 0
 
 
 # The generated model. Static (no per-model templating) — model-intrinsic values

@@ -3,6 +3,11 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 
+import json
+import sys
+from pathlib import Path
+
+from .export import ModelSpec
 from .worker_manager import WorkerManager
 from .worker_monitor import WorkerMonitor, AlloraSDKEventFetcher
 from .wallet_link import add_link_arguments, run_link
@@ -76,6 +81,14 @@ def main() -> None:
     sub.add_parser("start-all", help="Start all enabled workers")
     sub.add_parser("stop-all", help="Stop running workers")
 
+    p_export = sub.add_parser("export-payload", help="Build a hosting-platform payload from a ModelSpec config")
+    p_export.add_argument("--config", required=True, help="Path to model config JSON (ModelSpec fields)")
+    p_export.add_argument("--out", default=None, help="Output directory (default: forge_exports/<model_type>)")
+    p_export.add_argument("--weights", default=None, help="Directory of pre-trained weights to bundle")
+    p_export.add_argument("--builder-kit-ref", default="main", help="git ref pinned in generated pyproject.toml")
+    p_export.add_argument("--no-training", action="store_true", help="Inference-only: set supports_training=False")
+    p_export.add_argument("--zip", action="store_true", help="Also write a .zip ready to upload")
+
     p_link = sub.add_parser("link", help="Link local worker wallets to your Allora Forge account")
     # Shared flag definitions live in wallet_link.add_link_arguments so this subcommand and the
     # standalone allora-forge-link entry point can't drift. SUPPRESS keeps a subcommand-level
@@ -87,6 +100,24 @@ def main() -> None:
 
     if args.cmd == "dashboard":
         cmd_dashboard(with_monitor=not args.no_monitor, running_only=not args.all, **mgr_kwargs)
+        return
+
+    if args.cmd == "export-payload":
+        try:
+            spec = ModelSpec.from_dict(json.loads(Path(args.config).read_text()))
+            if args.no_training:
+                spec.supports_training = False
+        except (ValueError, OSError, json.JSONDecodeError) as e:
+            print(f"export-payload failed: {e}", file=sys.stderr)
+            raise SystemExit(1)
+        wm = WorkerManager(reconcile_on_start=False)
+        wm.export_payload_for_hosting(
+            spec,
+            out_dir=args.out,
+            weights_dir=args.weights,
+            builder_kit_ref=args.builder_kit_ref,
+            zip_output=args.zip,
+        )
         return
 
     if args.cmd == "link":

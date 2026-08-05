@@ -8,8 +8,8 @@ path: packaging a model so the Allora **hosting platform** runs the worker for
 you in a container.
 
 The unit the platform deploys is a *package*: worker code + `pyproject.toml` +
-`manifest.json` (+ an optional `weights/` dir). `export_package` builds that
-package from a `ModelSpec`. The generated worker is generic over pair/timeframe —
+`manifest.json` (+ an optional `weights/` dir). `WorkerManager.export_payload_for_hosting`
+builds that package from a `ModelSpec`. The generated worker is generic over pair/timeframe —
 `PAIR`/`TIMEFRAME` are supplied per deployment as env vars, so one package can be
 deployed against many pairs/timeframes/topics.
 
@@ -22,16 +22,19 @@ Two modes:
 
 The platform requires **exactly one** of `supports_training` / bundled weights —
 a trainable package must NOT bundle weights, and a weights package must set
-`supports_training=False`. `export_package` enforces this and fails loudly.
+`supports_training=False`. `export_payload_for_hosting` enforces this and fails loudly.
 
 Run:
     python notebooks/export_to_hosting.py
+
+Or via workerctl CLI:
+    workerctl export-payload --config model.json --out build/my_lgbm_package [--zip]
 """
 
 import json
 from pathlib import Path
 
-from allora_forge_builder_kit import ModelSpec, export_package
+from allora_forge_builder_kit import WorkerManager, ModelSpec
 
 print("=" * 80)
 print("Export to hosting — build a deployable package")
@@ -54,18 +57,19 @@ spec = ModelSpec(
     supports_training=True,                # train-on-platform (no bundled weights)
 )
 
-# `validate()` runs inside export_package too; calling it here surfaces config
-# errors early with a clean message.
+# `validate()` runs inside export_payload_for_hosting too; calling it here
+# surfaces config errors early with a clean message.
 spec.validate()
 
+manager = WorkerManager(reconcile_on_start=False)
 out = Path("build/my_lgbm_package")
 
 # 2a. Train-on-platform: no weights. The platform trains via a scheduled
 #     `allora-worker train` job; the worker serves the artifact once it exists.
-pkg = export_package(spec, out)
-print(f"\nExported train-on-platform package to: {pkg}")
+pkg = manager.export_payload_for_hosting(spec, out_dir=out)
 
 # What the package contains:
+print()
 for p in sorted(pkg.rglob("*")):
     if p.is_file():
         print(f"  {p.relative_to(pkg)}")
@@ -79,18 +83,16 @@ print(f"\nmanifest.json: {json.dumps(manifest, indent=2)}")
 #     and never retrains, so supports_training MUST be False (exactly-one rule).
 #
 #     weights_out = Path("build/my_lgbm_weights_package")
-#     export_package(
+#     manager.export_payload_for_hosting(
 #         ModelSpec(**{**spec.__dict__, "supports_training": False}),
-#         weights_out,
-#         weights_dir="path/to/trained/weights",  # dir containing model.joblib etc.
+#         out_dir=weights_out,
+#         weights_dir="path/to/trained/weights",
 #     )
 
-# 3. Upload. Zip the package CONTENTS (files at the archive root, so forge finds
-#    manifest.json at the extraction root) and upload to forge. The CLI can do the
-#    zip for you:
+# 3. Upload: zip and POST to the Allora hosting platform.
+#    Use --zip to produce the archive directly:
 #
-#       allora-forge-export --config model.json --out build/my_lgbm_package --zip
-#
-#    then upload build/my_lgbm_package.zip via forge (POST /api/v1/models).
-print("\nTo produce an upload-ready zip, use the CLI with --zip, e.g.:")
-print("  allora-forge-export --config model.json --out build/my_lgbm_package --zip")
+#       workerctl export-payload --config model.json --out build/my_lgbm_package --zip
+print()
+print("To produce an upload-ready zip via CLI:")
+print("  workerctl export-payload --config model.json --out build/my_lgbm_package --zip")
