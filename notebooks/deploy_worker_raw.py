@@ -9,7 +9,7 @@ Useful as a reference or for quick one-off deployments.
 For production use, see deploy_worker.py which uses WorkerManager for
 wallet creation, faucet funding, process management, and the web dashboard.
 
-Compatible with allora_sdk >= 1.0.6.
+Compatible with allora_sdk >= 1.1.0.
 """
 
 import os
@@ -17,6 +17,7 @@ import asyncio
 import traceback
 import cloudpickle
 from allora_sdk.worker import AlloraWorker
+from allora_sdk.worker.context import RunContext
 
 # Configuration
 TOPIC_ID = 69
@@ -54,8 +55,11 @@ async def main():
     """Run the Allora worker with the trained model."""
     print(f"\nStarting Allora worker for Topic {TOPIC_ID}...")
 
-    worker = AlloraWorker(
-        run=predict_fn,
+    def run_fn(ctx: RunContext):
+        return predict_fn(ctx.nonce)
+
+    worker = AlloraWorker.inferer(
+        run=run_fn,
         topic_id=TOPIC_ID,
         api_key=api_key,
         debug=DEBUG_MODE,
@@ -71,7 +75,7 @@ async def main():
             print(tb)
             print("--- exception traceback end ---")
         else:
-            print(f"Prediction submitted: {result.prediction}")
+            print(f"Prediction submitted: {result.submission}")
 
 
 if __name__ == "__main__":
