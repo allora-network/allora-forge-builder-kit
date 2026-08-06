@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 
-from .export import ModelSpec
+from .export import ModelSpec, export_package, _zip_package
 from .worker_manager import WorkerManager
 from .worker_monitor import WorkerMonitor, AlloraSDKEventFetcher
 from .wallet_link import add_link_arguments, run_link
@@ -107,17 +107,22 @@ def main() -> None:
             spec = ModelSpec.from_dict(json.loads(Path(args.config).read_text()))
             if args.no_training:
                 spec.supports_training = False
-        except (ValueError, OSError, json.JSONDecodeError) as e:
+            out_dir = Path(args.out) if args.out else Path("forge_exports") / spec.model_type
+            pkg = export_package(
+                spec,
+                out_dir,
+                weights_dir=args.weights,
+                builder_kit_ref=args.builder_kit_ref,
+            )
+            if args.zip:
+                archive = _zip_package(pkg)
+                print(f"Hosting payload ready: {archive}")
+            else:
+                print(f"Hosting payload ready: {pkg}/")
+            print("Zip the contents and upload to the Allora hosting platform to deploy.")
+        except (ValueError, TypeError, OSError, json.JSONDecodeError) as e:
             print(f"export-payload failed: {e}", file=sys.stderr)
             raise SystemExit(1)
-        wm = WorkerManager(reconcile_on_start=False)
-        wm.export_payload_for_hosting(
-            spec,
-            out_dir=args.out,
-            weights_dir=args.weights,
-            builder_kit_ref=args.builder_kit_ref,
-            zip_output=args.zip,
-        )
         return
 
     if args.cmd == "link":

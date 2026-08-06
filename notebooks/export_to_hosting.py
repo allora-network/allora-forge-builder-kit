@@ -89,10 +89,18 @@ print(f"\nmanifest.json: {json.dumps(manifest, indent=2)}")
 #         weights_dir="path/to/trained/weights",
 #     )
 
-# 3. Upload: zip and POST to the Allora hosting platform.
-#    Use --zip to produce the archive directly:
+# 3. Upload: zip the package and POST to the Allora hosting platform.
 #
+#    Python — pass zip_output=True to get a ready-to-upload archive in one call:
+#
+#       archive = manager.export_payload_for_hosting(spec, out_dir=out, zip_output=True)
+#
+#    CLI — write the spec as JSON first, then use workerctl:
+#
+#       Path("model.json").write_text(json.dumps(spec.__dict__))
 #       workerctl export-payload --config model.json --out build/my_lgbm_package --zip
+#
+#    then POST the resulting .zip to the Allora hosting platform (POST /api/v1/models).
 print()
-print("To produce an upload-ready zip via CLI:")
-print("  workerctl export-payload --config model.json --out build/my_lgbm_package --zip")
+print("To produce an upload-ready zip from Python:")
+print("  manager.export_payload_for_hosting(spec, out_dir=out, zip_output=True)")

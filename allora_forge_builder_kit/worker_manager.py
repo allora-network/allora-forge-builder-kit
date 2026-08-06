@@ -377,12 +377,12 @@ class WorkerManager:
 
         if zip_output:
             archive = _zip_package(pkg)
-            print(f"Hosting payload ready: {archive}")
-            print("Upload to the Allora hosting platform to deploy.")
+            logger.info("Hosting payload ready: %s", archive)
+            logger.info("Upload to the Allora hosting platform to deploy.")
             return archive
 
-        print(f"Hosting payload ready: {pkg}/")
-        print("Zip its contents and upload to the Allora hosting platform to deploy.")
+        logger.info("Hosting payload ready: %s/", pkg)
+        logger.info("Zip its contents and upload to the Allora hosting platform to deploy.")
         return pkg
 
     # ----------------------------

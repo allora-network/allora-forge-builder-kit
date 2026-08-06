@@ -218,7 +218,7 @@ from allora_forge_builder_kit import WorkerManager, ModelSpec
 # Model-INTRINSIC config (baked into the package's config.json). Pair/timeframe/
 # topic are NOT here — they are chosen per deployment (see env vars below).
 spec = ModelSpec(
-    model_type="my_lgbm",                          # entry-point name; [a-z0-9_-]
+    model_type="my_lgbm",                          # entry-point name; [a-z0-9][a-z0-9_-]*
     engineered_specs=[{"kind": "log_return", "window_bars": 6}],
     number_of_input_bars=24,
     target_bars=24,
@@ -237,7 +237,7 @@ workerctl export-payload --config model.json --out build/my_lgbm_package --zip
 # then upload build/my_lgbm_package.zip to forge (POST /api/v1/models)
 ```
 
-`--zip` writes the package **contents** at the archive root, so forge finds `manifest.json` at the extraction root. The generated worker is **generic over pair/timeframe** — one package can be deployed against many pairs/timeframes/topics.
+`--zip` writes the package **contents** at the archive root, so forge finds `manifest.json` at the extraction root. The generated worker code is **generic over pair/timeframe**; code-only (train-on-platform) packages can be deployed against many pairs/timeframes/topics. Bundled-weight packages must use parameters matching how the weights were trained.
 
 ### Two deployment modes
 
@@ -257,8 +257,8 @@ Exactly **one** of these must hold (forge rejects the package otherwise; `export
 
 | Env var | Purpose | Default |
 |---------|---------|---------|
-| `PAIR` | Trading pair, e.g. `BTCUSD` | `ETHUSD` |
-| `TIMEFRAME` | Bar interval, e.g. `5min`, `1h` | `5min` |
+| `PAIR` | Trading pair, e.g. `BTCUSD` | required |
+| `TIMEFRAME` | Bar interval, e.g. `5m`, `1h` | required |
 | `ALLORA_TOPIC_ID` | Target topic | `69` |
 | `ALLORA_API_KEY` | Required only for the `allora` data source | — |
 | `SUBMIT_RETURNS` | `true`/`false` to force log-return vs price output; unset/`auto` derives it from the topic's on-chain loss method | `auto` |

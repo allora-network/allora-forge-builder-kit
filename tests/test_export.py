@@ -72,25 +72,34 @@ def _model_src(tmp_path) -> str:
 
 
 def test_submit_returns_true_publishes_raw_log_return(tmp_path):
-    # submit_returns=True path must assign the raw log-return directly, no exp().
+    # Prove branch wiring: raw log-return is in the else clause, not the is-False
+    # clause. An inverted condition or swapped branch bodies changes relative order.
     src = _model_src(tmp_path)
-    assert "prediction = predicted_log_return" in src
-    assert 'getattr(self.config, "submit_returns", True) is False' in src
+    price_pos = src.index("prediction = current_price * float(np.exp(predicted_log_return))")
+    else_raw = src.index("else:\n            prediction = predicted_log_return")
+    assert price_pos < else_raw
 
 
 def test_submit_returns_false_publishes_absolute_price(tmp_path):
-    # submit_returns=False path must convert log-return to absolute price via exp().
+    # Prove branch wiring: exp() price conversion is inside the is-False clause
+    # (between the condition and the else).
     src = _model_src(tmp_path)
-    assert "prediction = current_price * float(np.exp(predicted_log_return))" in src
+    cond_pos = src.index('getattr(self.config, "submit_returns", True) is False:')
+    price_pos = src.index("prediction = current_price * float(np.exp(predicted_log_return))")
+    else_pos = src.index("else:\n            prediction = predicted_log_return")
+    assert cond_pos < price_pos < else_pos
 
 
 def test_submit_returns_false_requires_positive_current_price(tmp_path):
-    # A non-finite or non-positive current_price must be rejected when publishing
-    # an absolute price — silently emitting a log-return on a price topic is worse.
+    # Prove guard wiring: inside the is-False clause, the price guard + ValueError
+    # appear before the exp() conversion — a bad current_price must be rejected
+    # before any price is computed.
     src = _model_src(tmp_path)
-    assert "np.isfinite(current_price) and current_price > 0" in src
-    assert "raise ValueError" in src
-    assert "current_price" in src
+    cond_pos = src.index('getattr(self.config, "submit_returns", True) is False:')
+    guard_pos = src.index("if not (np.isfinite(current_price) and current_price > 0):")
+    raise_pos = src.index("raise ValueError", guard_pos)
+    price_pos = src.index("prediction = current_price * float(np.exp(predicted_log_return))")
+    assert cond_pos < guard_pos < raise_pos < price_pos
 
 
 def test_default_config_exposes_submit_returns_for_sdk_gate(tmp_path):

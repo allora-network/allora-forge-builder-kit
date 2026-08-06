@@ -458,7 +458,3 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 packages = ["{pkg}"]
 '''
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
