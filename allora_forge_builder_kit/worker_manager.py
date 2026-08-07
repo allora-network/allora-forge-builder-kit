@@ -343,6 +343,48 @@ class WorkerManager:
             message=f"Deployed worker for topic {topic_id} with address {ident.address}",
         )
 
+    def export_payload_for_hosting(
+        self,
+        spec: Any,
+        out_dir: str | Path | None = None,
+        weights_dir: str | Path | None = None,
+        builder_kit_ref: str = "main",
+        zip_output: bool = False,
+    ) -> Path:
+        """Build a hosting-platform payload from a ModelSpec and write it to disk.
+
+        The resulting directory (or zip) is the package to upload to the Allora
+        hosting platform (POST /api/v1/models). The platform handles wallet
+        provisioning and deployment from there.
+
+        Args:
+            spec: ModelSpec describing the model (intrinsic config, not pair/timeframe).
+            out_dir: Output directory. Defaults to ./forge_exports/<model_type>.
+            weights_dir: Optional directory of pre-trained weights to bundle.
+            builder_kit_ref: git ref pinned in the generated pyproject.toml.
+            zip_output: Also write a <out_dir>.zip ready to upload directly.
+
+        Returns:
+            Path to the generated package directory (or zip if zip_output=True).
+        """
+        from .export import export_package, _zip_package
+
+        if out_dir is None:
+            out_dir = Path("forge_exports") / spec.model_type
+        out_dir = Path(out_dir)
+
+        pkg = export_package(spec, out_dir, weights_dir=weights_dir, builder_kit_ref=builder_kit_ref)
+
+        if zip_output:
+            archive = _zip_package(pkg)
+            logger.info("Hosting payload ready: %s", archive)
+            logger.info("Upload to the Allora hosting platform to deploy.")
+            return archive
+
+        logger.info("Hosting payload ready: %s/", pkg)
+        logger.info("Zip its contents and upload to the Allora hosting platform to deploy.")
+        return pkg
+
     # ----------------------------
     # Lifecycle (persistent managed process runner)
     # ----------------------------

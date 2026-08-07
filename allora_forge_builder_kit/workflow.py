@@ -8,7 +8,7 @@ from .data_manager_factory import DataManager
 from .base_data_manager import BaseDataManager
 
 
-@jit(nopython=True, cache=True)
+@jit(nopython=True, cache=False)
 def _extract_features_numba(
     ts_index, 
     data_values, 
