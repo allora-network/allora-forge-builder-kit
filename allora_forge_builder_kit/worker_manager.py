@@ -1245,8 +1245,11 @@ class WorkerManager:
     def _load_secrets(self) -> dict:
         try:
             return json.loads(self.secrets_path.read_text())
-        except Exception:
+        except FileNotFoundError:
             return {}
+        # json.JSONDecodeError / OSError / UnicodeDecodeError: present-but-corrupt is distinct
+        # from absent — re-raise so callers see a real error instead of silently treating all
+        # known identities as gone (which would block new deploys and lose key associations).
 
     def _save_secrets(self, data: dict) -> None:
         content = json.dumps(data, indent=2).encode()
@@ -1316,7 +1319,23 @@ class WorkerManager:
                 return ident, False
         return self.ensure_identity(), True
 
+    @staticmethod
+    def _assert_safe_address(address: str) -> None:
+        """Raise ValueError if address contains characters unsafe for use in filesystem paths.
+
+        Allows alphanumerics, underscores, and hyphens — all safe as path components. Rejects
+        slashes, dots, spaces, and control characters that would allow a backend-supplied or
+        user-supplied address to traverse out of artifact_dir / runtime_log_dir.
+        """
+        import re
+        if not address or not re.fullmatch(r"[a-zA-Z0-9_-]+", address):
+            raise ValueError(
+                f"address {address!r} contains characters unsafe for filesystem paths "
+                "(only alphanumerics, underscores, and hyphens are allowed)"
+            )
+
     def _materialize_artifact(self, topic_id: int, address: str, source_artifact: Path) -> Path:
+        self._assert_safe_address(address)
         target_dir = self.artifact_dir / f"topic_{topic_id}" / address
         target_dir.mkdir(parents=True, exist_ok=True)
         target_path = target_dir / f"predict_{uuid.uuid4().hex}.pkl"

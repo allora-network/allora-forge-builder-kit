@@ -151,7 +151,7 @@ def discover_keys(secrets_path: str | Path) -> dict[str, _KeyEntry]:
         return {}
     try:
         raw = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError) as exc:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
         # Present-but-unreadable/corrupt is distinct from not-found: surface it instead of
         # masking it as the "no worker keys, create one" case.
         raise SecretsLoadError(f"could not read worker secrets at {secrets_path}: {exc}") from exc
@@ -667,7 +667,11 @@ def main(argv: list[str] | None = None) -> int:
             "neither required nor handled here."
         ),
     )
-    parser.add_argument("--forge-url", default=DEFAULT_FORGE_URL, help="Forge base URL")
+    parser.add_argument(
+        "--forge-url",
+        default=os.environ.get("FORGE_BACKEND_URL") or DEFAULT_FORGE_URL,
+        help="Forge base URL (defaults to $FORGE_BACKEND_URL if set, else forge.allora.network)",
+    )
     parser.add_argument(
         "--secrets-path", default=DEFAULT_SECRETS_PATH, help="WorkerManager secrets file"
     )

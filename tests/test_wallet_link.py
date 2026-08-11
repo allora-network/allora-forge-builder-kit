@@ -442,3 +442,94 @@ def test_jsonposter_closes_connection_on_http_error(monkeypatch):
     assert ei.value.status == 403
     assert fake.closed is True       # the dirty connection was closed
     assert poster._conn is None      # so the next poll reconnects fresh
+
+
+# ---------------------------------------------------------------------------
+# Additional gap-coverage tests (added post-review)
+# ---------------------------------------------------------------------------
+
+
+def test_run_link_times_out_when_monotonic_deadline_passes(tmp_path, monkeypatch, capsys):
+    """Poll loop must exit and report timeout when the monotonic deadline is exceeded.
+
+    The poll always returns "pending"; we make time.monotonic() jump past the deadline so the
+    while-condition fails immediately. Exercises the timeout path that time.sleep no-op cannot reach.
+    """
+    from allora_forge_builder_kit import wallet_link
+
+    secrets = _setup_device_flow(monkeypatch, tmp_path, {"status": "pending"})
+
+    _calls: list[float] = []
+
+    def _advancing_monotonic() -> float:
+        _calls.append(0.0)
+        # First call: deadline = 0 + expires_in (5) = 5.
+        # Second call: 10_000 > 5 → while condition fails immediately.
+        return float(len(_calls) * 10_000)
+
+    monkeypatch.setattr(wallet_link.time, "monotonic", _advancing_monotonic)
+
+    rc = wallet_link.run_link(
+        forge_url="https://forge.example",
+        secrets_path=secrets,
+        open_browser=False,
+    )
+    assert rc == 1
+    assert "timed out" in capsys.readouterr().err.lower()
+
+
+def test_run_link_denied_response_exits_nonzero(tmp_path, monkeypatch, capsys):
+    """A "denied" poll response must return exit code 1 with an actionable message."""
+    from allora_forge_builder_kit import wallet_link
+
+    secrets = _setup_device_flow(monkeypatch, tmp_path, {"status": "denied"})
+    rc = wallet_link.run_link(forge_url="https://forge.example", secrets_path=secrets, open_browser=False)
+    assert rc == 1
+    assert "denied" in capsys.readouterr().err.lower()
+
+
+def test_run_link_expired_response_exits_nonzero(tmp_path, monkeypatch, capsys):
+    """A "expired" poll response must return exit code 1 with an actionable message."""
+    from allora_forge_builder_kit import wallet_link
+
+    secrets = _setup_device_flow(monkeypatch, tmp_path, {"status": "expired"})
+    rc = wallet_link.run_link(forge_url="https://forge.example", secrets_path=secrets, open_browser=False)
+    assert rc == 1
+    assert "expired" in capsys.readouterr().err.lower()
+
+
+def test_discover_keys_binary_file_raises_secrets_load_error(tmp_path):
+    """A binary (non-UTF-8) secrets file must raise SecretsLoadError, not UnicodeDecodeError.
+
+    [EXPOSES BUG] discover_keys uses path.read_text() which raises UnicodeDecodeError on binary
+    files; that exception is not caught and leaks through instead of being wrapped as SecretsLoadError.
+    Fix: add UnicodeDecodeError to the except clause.
+    """
+    secrets = tmp_path / "worker_secrets.json"
+    secrets.write_bytes(b"\x80\x81\x82\x83")  # invalid UTF-8
+
+    with pytest.raises(SecretsLoadError):
+        discover_keys(str(secrets))
+
+
+def test_run_link_cli_reads_forge_backend_url_from_env(tmp_path, monkeypatch):
+    """workerctl link CLI must use $FORGE_BACKEND_URL as the default --forge-url.
+
+    [EXPOSES BUG] The argparse default is the hardcoded DEFAULT_FORGE_URL; it ignores
+    $FORGE_BACKEND_URL. Developers on staging who export FORGE_BACKEND_URL will silently link to
+    production instead. Fix: change the argparse default to
+    os.environ.get("FORGE_BACKEND_URL", DEFAULT_FORGE_URL).
+    """
+    from allora_forge_builder_kit import wallet_link
+
+    called_with: list[str] = []
+
+    def capture_run_link(forge_url: str, **kwargs: object) -> int:
+        called_with.append(forge_url)
+        return 0
+
+    monkeypatch.setenv("FORGE_BACKEND_URL", "https://forge-staging.example.com")
+    monkeypatch.setattr(wallet_link, "run_link", capture_run_link)
+
+    wallet_link.main(["--secrets-path", str(tmp_path / "nope.json")])
+    assert called_with == ["https://forge-staging.example.com"]

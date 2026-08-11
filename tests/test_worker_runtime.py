@@ -277,3 +277,46 @@ def test_annotated_context_shape_exact_name_not_substring():
     assert _annotated_context_shape(real) is True
     assert _annotated_context_shape(legacy) is False
     assert _annotated_context_shape(lambda ctx: ctx) is None  # unannotated -> probe at call time
+
+
+# ---------------------------------------------------------------------------
+# _load_api_key resolution order (added post-review)
+# ---------------------------------------------------------------------------
+
+
+def test_load_api_key_explicit_arg_wins(monkeypatch):
+    """Explicit arg must win over env and file."""
+    from allora_forge_builder_kit.worker_runtime import _load_api_key
+
+    monkeypatch.setenv("ALLORA_API_KEY", "env-key")
+    assert _load_api_key("explicit-key") == "explicit-key"
+
+
+def test_load_api_key_env_takes_precedence_over_file(tmp_path, monkeypatch):
+    """Env var must win over file fallback."""
+    from allora_forge_builder_kit.worker_runtime import _load_api_key
+
+    (tmp_path / ".allora_api_key").write_text("file-key")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ALLORA_API_KEY", "env-key")
+    assert _load_api_key(None) == "env-key"
+
+
+def test_load_api_key_whitespace_env_treated_as_absent(tmp_path, monkeypatch):
+    """A whitespace-only ALLORA_API_KEY must fall back to the file, not be returned raw."""
+    from allora_forge_builder_kit.worker_runtime import _load_api_key
+
+    (tmp_path / ".allora_api_key").write_text("file-key")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ALLORA_API_KEY", "   ")
+    assert _load_api_key(None) == "file-key"
+
+
+def test_load_api_key_falls_back_to_file(tmp_path, monkeypatch):
+    """When env is unset, _load_api_key must read from the .allora_api_key file."""
+    from allora_forge_builder_kit.worker_runtime import _load_api_key
+
+    (tmp_path / ".allora_api_key").write_text("file-key\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ALLORA_API_KEY", raising=False)
+    assert _load_api_key(None) == "file-key"
