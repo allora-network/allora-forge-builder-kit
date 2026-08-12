@@ -453,7 +453,7 @@ class WorkerManager:
             raise error
         return result["wallet"]
 
-    def status_worker(self, topic_id: int, address: str) -> dict:
+    def status_worker(self, topic_id: int, address: str) -> dict[str, Any]:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
                 """
@@ -486,7 +486,7 @@ class WorkerManager:
             "reject_zero": bool(row[16]) if row[16] is not None else False,
         }
 
-    def status_all(self, include_desc: bool = True) -> list[dict]:
+    def status_all(self, include_desc: bool = True) -> list[dict[str, Any]]:
         with sqlite3.connect(self.db_path) as conn:
             rows = conn.execute(
                 """
@@ -534,7 +534,7 @@ class WorkerManager:
         except Exception:
             return []
 
-    def status_all_with_logs(self, include_desc: bool = True, tail_lines: int = 20) -> list[dict]:
+    def status_all_with_logs(self, include_desc: bool = True, tail_lines: int = 20) -> list[dict[str, Any]]:
         rows = self.status_all(include_desc=include_desc)
         for r in rows:
             r["log_tail"] = self.get_worker_log_tail(r["topic_id"], r["address"], lines=tail_lines)
@@ -966,8 +966,8 @@ class WorkerManager:
         log_f = os.fdopen(log_fd, "ab")
         try:
             os.chmod(log_path, 0o600)
-        except OSError:
-            pass  # tightening a pre-existing log must not block worker start
+        except OSError as _chmod_err:
+            logger.warning("could not tighten permissions on %s: %s", log_path, _chmod_err)
         try:
             proc = subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT, cwd=str(Path.cwd()), env=env)
         except Exception:
@@ -1459,13 +1459,14 @@ class WorkerManager:
         """
         needles = (b"load_raw", b"Could not get current price from raw data")
         overlap = max(len(n) for n in needles) - 1
-        found = [False, False]
+        found = [False] * len(needles)
         try:
             with artifact_path.open("rb") as f:
                 tail = b""
                 for chunk in iter(lambda: f.read(65536), b""):
                     window = tail + chunk
-                    found = [hit or needle in window for hit, needle in zip(found, needles)]
+                    for i, needle in enumerate(needles):
+                        found[i] = found[i] or needle in window
                     if all(found):
                         break
                     tail = window[-overlap:]

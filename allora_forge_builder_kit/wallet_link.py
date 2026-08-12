@@ -28,6 +28,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import warnings
 import webbrowser
 from pathlib import Path
 from typing import Any, TypedDict
@@ -350,14 +351,12 @@ def _submit_rejection(submit: dict[str, Any]) -> str | None:
     """
     rejected = submit.get("rejected")
     if isinstance(rejected, list) and rejected:
-        lines = ["Server rejected one or more worker signatures:"]
-        for item in rejected:
-            if not isinstance(item, dict):
-                continue
-            addr = _printable(str(item.get("address", "?")))
-            reason = _printable(str(item.get("reason", "no reason given")))
-            lines.append(f"  - {addr}: {reason}")
-        return "\n".join(lines)
+        detail = "\n".join(
+            f"  - {_printable(str(item.get('address', '?')))}: {_printable(str(item.get('reason', 'no reason given')))}"
+            for item in rejected
+            if isinstance(item, dict)
+        )
+        return f"Server rejected one or more worker signatures:\n{detail}"
     error = submit.get("error")
     if error:
         return f"Server rejected the signature submission: {_printable(str(error))}"
@@ -430,10 +429,10 @@ class _JsonPoster:
             # http.client silently defaults a missing port to 443 (HTTPS) / 80 (HTTP); an operator
             # who set HTTPS_PROXY=proxy.corp.local expecting 3128/8080 would otherwise hit a
             # confusing connection failure. Surface the implicit default.
-            print(
-                f"warning: proxy {parsed.hostname} has no explicit port; defaulting to "
+            warnings.warn(
+                f"proxy {parsed.hostname} has no explicit port; defaulting to "
                 f"{443 if https else 80}",
-                file=sys.stderr,
+                stacklevel=3,
             )
         return (parsed.hostname, parsed.port, auth)
 
