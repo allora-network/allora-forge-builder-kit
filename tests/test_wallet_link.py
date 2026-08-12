@@ -182,15 +182,15 @@ def test_jsonposter_selects_https_proxy_from_env(monkeypatch):
     assert poster._proxy == ("proxy.local", 3128)
 
 
-def test_jsonposter_warns_on_proxy_without_explicit_port(monkeypatch):
+def test_jsonposter_warns_on_proxy_without_explicit_port(monkeypatch, capsys):
     from allora_forge_builder_kit import wallet_link
 
     monkeypatch.setattr(wallet_link.urllib.request, "getproxies", lambda: {"https": "http://proxy.local"})
     monkeypatch.setattr(wallet_link.urllib.request, "proxy_bypass", lambda host: False)
-    with pytest.warns(UserWarning, match="no explicit port") as record:
-        poster = wallet_link._JsonPoster("https://forge.example.com")
+    poster = wallet_link._JsonPoster("https://forge.example.com")
     assert poster._proxy == ("proxy.local", None)  # port stays None (http.client defaults it)
-    assert "443" in str(record[0].message)
+    err = capsys.readouterr().err
+    assert "no explicit port" in err and "443" in err
 
 
 def test_jsonposter_no_proxy_when_env_unset(monkeypatch):

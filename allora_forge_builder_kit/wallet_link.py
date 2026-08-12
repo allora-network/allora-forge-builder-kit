@@ -28,7 +28,6 @@ import sys
 import time
 import urllib.error
 import urllib.request
-import warnings
 import webbrowser
 from pathlib import Path
 from typing import Any, TypedDict
@@ -429,10 +428,10 @@ class _JsonPoster:
             # http.client silently defaults a missing port to 443 (HTTPS) / 80 (HTTP); an operator
             # who set HTTPS_PROXY=proxy.corp.local expecting 3128/8080 would otherwise hit a
             # confusing connection failure. Surface the implicit default.
-            warnings.warn(
-                f"proxy {parsed.hostname} has no explicit port; defaulting to "
+            print(
+                f"warning: proxy {parsed.hostname} has no explicit port; defaulting to "
                 f"{443 if https else 80}",
-                stacklevel=3,
+                file=sys.stderr,
             )
         return (parsed.hostname, parsed.port, auth)
 
