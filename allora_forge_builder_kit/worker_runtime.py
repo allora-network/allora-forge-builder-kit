@@ -24,6 +24,7 @@ import cloudpickle
 
 from allora_sdk.worker import AlloraWorker
 from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
+from allora_sdk.worker.context import RunContext
 
 if TYPE_CHECKING:
     from allora_sdk.worker.context import RunContext

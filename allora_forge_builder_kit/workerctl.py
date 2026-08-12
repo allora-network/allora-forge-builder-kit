@@ -3,9 +3,14 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 
+import json
+import sys
+from pathlib import Path
+
+from .export import ModelSpec, export_package, _zip_package
 from .worker_manager import WorkerManager
 from .worker_monitor import WorkerMonitor, AlloraSDKEventFetcher
-from .wallet_link import DEFAULT_FORGE_URL, run_link
+from .wallet_link import add_link_arguments, run_link
 
 
 def _make_manager(
@@ -76,27 +81,48 @@ def main() -> None:
     sub.add_parser("start-all", help="Start all enabled workers")
     sub.add_parser("stop-all", help="Stop running workers")
 
+    p_export = sub.add_parser("export-payload", help="Build a hosting-platform payload from a ModelSpec config")
+    p_export.add_argument("--config", required=True, help="Path to model config JSON (ModelSpec fields)")
+    p_export.add_argument("--out", default=None, help="Output directory (default: forge_exports/<model_type>)")
+    p_export.add_argument("--weights", default=None, help="Directory of pre-trained weights to bundle")
+    p_export.add_argument("--builder-kit-ref", default="main", help="git ref pinned in generated pyproject.toml")
+    p_export.add_argument("--no-training", action="store_true", help="Inference-only: set supports_training=False")
+    p_export.add_argument("--zip", action="store_true", help="Also write a .zip ready to upload")
+
     p_link = sub.add_parser("link", help="Link local worker wallets to your Allora Forge account")
-    p_link.add_argument("--forge-url", default=DEFAULT_FORGE_URL, help="Forge base URL")
-    # SUPPRESS so the subcommand flag doesn't clobber a top-level --secrets-path
-    # given before the subcommand, while still appearing in `link --help`.
-    p_link.add_argument("--secrets-path", default=argparse.SUPPRESS,
-                        help="WorkerManager secrets file (default: worker_secrets.json)")
-    p_link.add_argument(
-        "--address",
-        action="append",
-        dest="addresses",
-        help="Limit to specific allo1... address(es); repeatable. Default: all local keys.",
-    )
-    p_link.add_argument("--no-browser", action="store_true", help="Do not auto-open a browser")
-    p_link.add_argument("--insecure", action="store_true",
-                        help="Allow a plaintext http:// forge URL (local dev only)")
+    # Shared flag definitions live in wallet_link.add_link_arguments so this subcommand and the
+    # standalone allora-forge-link entry point can't drift. SUPPRESS keeps a subcommand-level
+    # --secrets-path from clobbering a top-level --secrets-path given before the subcommand.
+    add_link_arguments(p_link, secrets_default=argparse.SUPPRESS)
 
     args = parser.parse_args()
     mgr_kwargs = dict(db_path=args.db_path, secrets_path=args.secrets_path, network=args.network)
 
     if args.cmd == "dashboard":
         cmd_dashboard(with_monitor=not args.no_monitor, running_only=not args.all, **mgr_kwargs)
+        return
+
+    if args.cmd == "export-payload":
+        try:
+            spec = ModelSpec.from_dict(json.loads(Path(args.config).read_text()))
+            if args.no_training:
+                spec.supports_training = False
+            out_dir = Path(args.out) if args.out else Path("forge_exports") / spec.model_type
+            pkg = export_package(
+                spec,
+                out_dir,
+                weights_dir=args.weights,
+                builder_kit_ref=args.builder_kit_ref,
+            )
+            if args.zip:
+                archive = _zip_package(pkg)
+                print(f"Hosting payload ready: {archive}")
+            else:
+                print(f"Hosting payload ready: {pkg}/")
+            print("Zip the contents and upload to the Allora hosting platform to deploy.")
+        except (ValueError, TypeError, OSError, json.JSONDecodeError) as e:
+            print(f"export-payload failed: {e}", file=sys.stderr)
+            raise SystemExit(1)
         return
 
     if args.cmd == "link":

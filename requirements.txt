@@ -1,8 +1,1 @@
-lightgbm
-scikit-learn
-scipy
-pandas
-numpy
-matplotlib
-cloudpickle
-websocket-client
+allora-forge-builder-kit[dev,wallet-link] @ git+https://github.com/allora-network/allora-forge-builder-kit.git@main

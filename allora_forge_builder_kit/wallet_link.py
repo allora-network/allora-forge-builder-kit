@@ -41,6 +41,12 @@ DEFAULT_SECRETS_PATH = "worker_secrets.json"
 # server still considers live (e.g. an approval delayed by MFA or a device switch).
 _POLL_TIMEOUT_SECONDS = 1800
 _MAX_RESPONSE_BYTES = 512 * 1024
+# Recognized "keep polling" statuses from /device/poll. forge-v2 returns "authorization_pending";
+# "pending"/"slow_down" are accepted defensively for forward-compat with the RFC 8628 device flow.
+_POLL_PENDING_STATUSES = frozenset({"authorization_pending", "pending", "slow_down"})
+# Give up after this many consecutive non-progress polls (transport/parse errors or an unrecognized
+# status) so a persistently broken response fails fast instead of polling until the deadline.
+_MAX_CONSECUTIVE_POLL_FAILURES = 10
 # Loopback hosts treated as safe for plaintext HTTP / verification-URL origin pinning. Includes the
 # IPv6 loopback ::1 (urlparse('http://[::1]/').hostname == '::1', no brackets) so a local Forge bound
 # to [::1] on a dual-stack host doesn't require --insecure.
@@ -59,10 +65,13 @@ def build_adr036_sign_doc(signer: str, message: str) -> bytes:
     Must match the Go verifier and Keplr byte-for-byte: keys sorted alphabetically
     at every level, no whitespace, ``data`` = standard-base64 of the raw message.
     """
-    # signer is concatenated unescaped; restrict it to the bech32 grammar so a
-    # stray quote/backslash/control byte can't corrupt or inject into the JSON.
+    # signer is concatenated unescaped; restrict it to lowercase ASCII alphanumerics so a stray
+    # quote/backslash/control byte can't corrupt or inject into the JSON. This is an injection
+    # guard, NOT bech32 validation (r"[a-z0-9]+" accepts "alloabc" with no separator); full bech32
+    # structure (HRP + "1" separator + checksummed data) is enforced upstream by cosmpy's
+    # LocalWallet.from_mnemonic, whose derived address must equal this signer.
     if not re.fullmatch(r"[a-z0-9]+", signer):
-        raise ValueError(f"invalid bech32 signer: {signer!r}")
+        raise ValueError(f"invalid signer (must be lowercase alphanumeric): {signer!r}")
     data = base64.standard_b64encode(message.encode("utf-8")).decode("ascii")
     return (
         '{"account_number":"0","chain_id":"","fee":{"amount":[],"gas":"0"},'
@@ -72,6 +81,16 @@ def build_adr036_sign_doc(signer: str, message: str) -> bytes:
         + signer
         + '"}}],"sequence":"0"}'
     ).encode("utf-8")
+
+
+class WalletSignError(ValueError):
+    """A signing failure whose message is guaranteed free of key material.
+
+    Subclasses ``ValueError`` for backward compatibility. Raised only for failures whose message is
+    known to contain no mnemonic bytes (e.g. a derived-address mismatch), so ``run_link`` can echo
+    it verbatim while treating every *other* signing exception as opaque (type name only) to keep
+    private key material out of stderr and logs.
+    """
 
 
 def sign_challenge(mnemonic: str, address: str, message: str) -> tuple[str, str]:
@@ -93,7 +112,9 @@ def sign_challenge(mnemonic: str, address: str, message: str) -> tuple[str, str]
     wallet = LocalWallet.from_mnemonic(mnemonic, "allo")
     derived = str(wallet.address())
     if derived != address:
-        raise ValueError(
+        # WalletSignError (not a bare ValueError): its message holds only bech32 addresses, so the
+        # caller may show it verbatim, unlike a cosmpy exception that could embed mnemonic bytes.
+        raise WalletSignError(
             f"key derives address {derived}, which does not match requested {address}"
         )
 
@@ -140,11 +161,20 @@ class SecretsLoadError(Exception):
 
 
 def discover_keys(secrets_path: str | Path) -> dict[str, _KeyEntry]:
-    """Load WorkerManager secrets: {address: {"alias", "key_file"}}.
+    """Load WorkerManager worker keys from the secrets file.
 
-    Returns an empty mapping when the file is absent. Raises :class:`SecretsLoadError` when a
-    present file is unreadable, not valid JSON, or not a JSON object, so a corrupt secrets file is
-    not masked as "no keys".
+    Args:
+        secrets_path: Path to the WorkerManager ``worker_secrets.json`` file.
+
+    Returns:
+        A mapping ``{address: {"alias", "key_file"}}`` of every valid local key. It is empty in two
+        distinct cases: the file is absent (no workers created yet), or the file is present but
+        holds no valid ``{address, key_file}`` entries (malformed entries are skipped with a stderr
+        warning). A duplicate address keeps the last alias, also with a warning.
+
+    Raises:
+        SecretsLoadError: The file is present but unreadable, not valid JSON, or not a JSON object —
+            surfaced instead of being masked as the misleading "no keys" case.
     """
     path = Path(secrets_path)
     if not path.exists():
@@ -203,12 +233,13 @@ class _RequestError(SystemExit):
 def _is_terminal_poll_error(exc: BaseException) -> bool:
     """True when a poll error should stop the device flow immediately rather than be retried.
 
-    Terminal = a 4xx client error other than 408/429 (e.g. the device code is expired, invalid, or
-    already used): every retry returns the same response until the deadline. 5xx, 408, 429, network
-    blips, and malformed-body errors (no ``status``) are transient and keep polling.
+    Terminal = a 3xx redirect (an origin/scheme misconfiguration that never resolves by retrying) or
+    a 4xx client error other than 408/429 (e.g. the device code is expired, invalid, or already
+    used): every retry returns the same response until the deadline. 5xx, 408, 429, network blips,
+    and malformed-body errors (no ``status``) are transient and keep polling.
     """
     status = getattr(exc, "status", None)
-    return status is not None and 400 <= status < 500 and status not in (408, 429)
+    return status is not None and 300 <= status < 500 and status not in (408, 429)
 
 
 def _loads_json_object(url: str, raw: str) -> dict[str, Any]:
@@ -222,7 +253,9 @@ def _loads_json_object(url: str, raw: str) -> dict[str, Any]:
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"request to {url} returned non-JSON: {raw[:200]!r}") from exc
+        # Sanitize the server-controlled body through _printable before it reaches stderr, matching
+        # the HTTP-error path; otherwise a non-JSON response could inject terminal escape sequences.
+        raise SystemExit(f"request to {url} returned non-JSON: {_printable(raw[:200])!r}") from exc
     if not isinstance(parsed, dict):
         raise SystemExit(f"request to {url} returned unexpected JSON type: {type(parsed).__name__}")
     return parsed
@@ -262,6 +295,40 @@ def _post_json(url: str, payload: dict[str, Any], timeout: float = 15.0) -> dict
         raise _RequestError(f"could not reach {url}: {exc.reason}") from exc
 
 
+def _post_json_retrying(
+    url: str, payload: dict[str, Any], *, attempts: int = 3, backoff: float = 2.0
+) -> dict[str, Any]:
+    """POST JSON with a bounded retry on transient (non-terminal) failures.
+
+    Retries a network error or a transient HTTP status (5xx / 408 / 429) up to ``attempts`` times
+    with ``backoff`` seconds between tries, and re-raises a terminal 4xx immediately (retrying an
+    expired/invalid device code just returns the same error). Used for ``/device/submit`` so a
+    single network blip after the challenges are signed doesn't abort the run and orphan the
+    server-side session — the server's ``MarkChallengeProven`` is idempotent, so replaying the same
+    signatures is safe.
+
+    Args:
+        url: Absolute request URL.
+        payload: JSON-serializable request body.
+        attempts: Maximum number of tries (>= 1).
+        backoff: Seconds to sleep between tries.
+
+    Returns:
+        The parsed JSON object from the first successful response.
+
+    Raises:
+        _RequestError: On a terminal failure or after the final attempt.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            return _post_json(url, payload)
+        except _RequestError as exc:
+            if attempt == attempts or _is_terminal_poll_error(exc):
+                raise
+            time.sleep(backoff)
+    raise _RequestError(f"could not reach {url}")  # unreachable: the loop returns or raises
+
+
 def _printable(text: str) -> str:
     """Drop non-printable chars so server strings can't inject terminal escapes."""
     return "".join(c for c in text if c.isprintable())
@@ -297,7 +364,7 @@ def _submit_rejection(submit: dict[str, Any]) -> str | None:
     return None
 
 
-# # TODO: This module hand-rolls an HTTP transport (_post_json + _JsonPoster: proxy resolution,
+# TODO: This module hand-rolls an HTTP transport (_post_json + _JsonPoster: proxy resolution,
 # CONNECT tunneling, Proxy-Authorization, keep-alive reconnect, bounded read) that duplicates the
 # requests.Session transport allora-sdk-py's ForgeBackendClient already owns for the same Forge
 # host. Consolidate by moving the device-flow transport into allora-sdk-py (e.g. a DeviceFlowClient
@@ -401,19 +468,30 @@ class _JsonPoster:
             headers["Proxy-Authorization"] = self._proxy_auth
         # Retry once: the server may have dropped an idle keep-alive connection between polls.
         for attempt in (1, 2):
-            if self._conn is None:
-                self._conn = self._connect()
             try:
+                if self._conn is None:
+                    # Inside the try so a DNS/proxy/connect failure (OSError/HTTPException) becomes a
+                    # retryable _RequestError rather than an unhandled traceback escaping the loop.
+                    self._conn = self._connect()
                 self._conn.request("POST", request_target, body=body, headers=headers)
                 resp = self._conn.getresponse()
                 data = resp.read(_MAX_RESPONSE_BYTES)
-                if resp.status >= 400:
+                if resp.status >= 300:
+                    # >= 300 (not just >= 400): the poll endpoint always answers 200, so a 3xx is a
+                    # misconfiguration (e.g. an http->https redirect). Treating it as an error stops
+                    # it falling through to _loads_json_object and spinning the loop to the deadline.
                     detail = _printable(data.decode("utf-8", "replace"))
                     # Close before raising: _RequestError (a BaseException) escapes the except below,
                     # so an undrained connection would defeat keep-alive.
                     self.close()
                     raise _RequestError(f"request to {url} failed ({resp.status}): {detail}", status=resp.status)
-                return _loads_json_object(url, data.decode("utf-8", "replace"))
+                try:
+                    return _loads_json_object(url, data.decode("utf-8", "replace"))
+                except SystemExit:
+                    # A malformed 200 body raises SystemExit (a BaseException the except below won't
+                    # catch); close so the next poll reconnects instead of reusing a dirty socket.
+                    self.close()
+                    raise
             except (http.client.HTTPException, OSError) as exc:
                 self.close()
                 if attempt == 2:
@@ -435,7 +513,23 @@ def run_link(
     open_browser: bool = True,
     insecure: bool = False,
 ) -> int:
-    """Drive the full device flow. Returns a process exit code."""
+    """Drive the full device-flow wallet-link process.
+
+    Signs an ADR-036 challenge for each selected worker key on disk, opens the browser for the
+    logged-in Forge user to approve, and polls to completion. The mnemonic never leaves the machine.
+
+    Args:
+        forge_url: Base URL of the Allora Forge API (scheme + host, no path). Must be ``https://``
+            unless ``insecure`` is set or the host is loopback.
+        secrets_path: Path to the WorkerManager secrets file (``worker_secrets.json``).
+        addresses: Specific ``allo1...`` addresses to link. ``None`` links every local key
+            (duplicates removed); an explicit empty list is an error (links nothing), not "all".
+        open_browser: When True (default), auto-open the verification URL in the system browser.
+        insecure: Allow a plaintext ``http://`` forge URL (local dev only).
+
+    Returns:
+        Process exit code: 0 on success, 1 on any error.
+    """
     forge_url = forge_url.rstrip("/")
     parsed = urlparse(forge_url)
     if (
@@ -474,7 +568,17 @@ def run_link(
         )
         return 1
 
-    selected = list(dict.fromkeys(addresses)) if addresses else list(keys.keys())
+    if addresses is None:
+        selected = list(keys.keys())
+    elif not addresses:
+        # Distinguish None (link all) from [] (explicit empty): an empty list must fail closed
+        # rather than fall through the old `or` idiom and silently link every local wallet.
+        print("no addresses specified (--address was given with an empty selection)", file=sys.stderr)
+        return 1
+    else:
+        # Dedup while preserving order: repeated `--address X --address X` would otherwise submit
+        # duplicate signatures and consume 2x the server's per-address rate-limit budget.
+        selected = list(dict.fromkeys(addresses))
     missing = [a for a in selected if a not in keys]
     if missing:
         # A managed-custody worker has no local key file, so it legitimately won't appear
@@ -494,6 +598,19 @@ def run_link(
     if unreadable:
         print(
             f"key file missing for: {', '.join(unreadable)} (stale {secrets_path}?)",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Pre-validate the optional cosmpy dependency here, before /device/start opens a server-side
+    # session. sign_challenge imports cosmpy lazily; without this check a missing wallet-link extra
+    # would fail only after the session exists, orphaning it until the janitor reaps it (~15 min).
+    try:
+        from cosmpy.aerial.wallet import LocalWallet  # noqa: F401
+    except ImportError:
+        print(
+            "cosmpy is required to sign. Install the wallet-link extra "
+            "(pip install 'allora-forge-builder-kit[wallet-link]') or cosmpy==0.11.1.",
             file=sys.stderr,
         )
         return 1
@@ -554,16 +671,41 @@ def run_link(
             print(f"Server returned no challenge for {address}", file=sys.stderr)
             return 1
         try:
-            mnemonic = Path(keys[address]["key_file"]).read_text().strip()
+            # utf-8 (not the platform default) so a BOM/exotic-locale key file fails with a clear
+            # UnicodeDecodeError here rather than a confusing downstream error.
+            mnemonic = Path(keys[address]["key_file"]).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            # OSError messages describe the file (path/permissions), never key material.
+            print(f"failed to read key file for {address}: {exc}", file=sys.stderr)
+            return 1
+        if not mnemonic:
+            # Catch this before cosmpy, which would otherwise raise a confusing internal error.
+            print(f"key file for {address} is empty: {keys[address]['key_file']}", file=sys.stderr)
+            return 1
+        try:
             pubkey_b64, signature_b64 = sign_challenge(mnemonic, address, message)
-        except (ValueError, OSError) as exc:
+        except WalletSignError as exc:
+            # Raised by sign_challenge only with a key-material-free message (e.g. address mismatch).
             print(f"failed to sign challenge for {address}: {exc}", file=sys.stderr)
+            return 1
+        except Exception as exc:
+            # Any other signing/derivation failure (cosmpy ValueError, Bip39/secp256k1 errors, a bad
+            # UTF-8 mnemonic, ...) can embed mnemonic fragments in its message or args, so surface
+            # only the exception *type* — never str(exc) — keeping key material out of stderr/logs.
+            print(
+                f"failed to sign challenge for {address}: {type(exc).__name__} "
+                "(detail withheld to avoid leaking key material; ensure the key file holds a "
+                "valid BIP-39 mnemonic for this address)",
+                file=sys.stderr,
+            )
             return 1
         signatures.append(
             {"address": address, "pubkey": pubkey_b64, "signature": signature_b64}
         )
 
-    submit = _post_json(
+    # Retry submit on a transient failure: the challenges are already signed, so a single network
+    # blip here would otherwise abort the run and orphan the server session. Idempotent server-side.
+    submit = _post_json_retrying(
         f"{forge_url}/api/v1/wallet-link/device/submit",
         {"device_code": device_code, "signatures": signatures},
     )
@@ -597,15 +739,23 @@ def run_link(
     except (TypeError, ValueError):
         timeout = _POLL_TIMEOUT_SECONDS
     timeout = max(1, min(timeout, _POLL_TIMEOUT_SECONDS))
+    # Clamp the interval to the deadline so at least one poll fires within the window even for a
+    # pathological server response (e.g. expires_in=1 + interval=60), which would otherwise sleep
+    # clean past the deadline. interval stays >= 1, so the sleep below needs no floor.
+    interval = min(interval, max(1, timeout // 2))
     # Monotonic deadline: immune to NTP steps / manual clock changes / DST that a wall-clock
     # time.time() deadline would let silently extend or prematurely abort the session.
     deadline = time.monotonic() + timeout
     # Reuse one keep-alive connection across the (up to ~120) polls to the same Forge host
     # instead of a fresh TCP+TLS handshake per poll.
     poller = _JsonPoster(forge_url)
+    # Bound consecutive non-progress polls (transport/parse errors or an unrecognized status) so a
+    # persistently broken response can't silently poll — and flood stderr — until the deadline.
+    consecutive_unexpected = 0
     try:
         while time.monotonic() < deadline:
-            time.sleep(max(1, interval))
+            # interval is already clamped to [1, timeout//2] above, so no inner max(1, ...) floor.
+            time.sleep(interval)
             try:
                 poll = poller.post(
                     f"{forge_url}/api/v1/wallet-link/device/poll", {"device_code": device_code}
@@ -613,11 +763,19 @@ def run_link(
             except SystemExit as exc:
                 if _is_terminal_poll_error(exc):
                     # Stop now with the server's explanation instead of spamming "retrying..."
-                    # until the deadline — a terminal 4xx returns the same response every poll.
+                    # until the deadline — a terminal 3xx/4xx returns the same response every poll.
                     print(f"\nLink failed: {exc}", file=sys.stderr)
                     return 1
-                # Transient (5xx / 408 / 429 / DNS blip / malformed body): keep polling until our
-                # monotonic deadline instead of aborting the whole flow.
+                # Transient (5xx / 408 / 429 / DNS blip / malformed body): keep polling, but give up
+                # if it never recovers so a consistently broken response can't burn the full window.
+                consecutive_unexpected += 1
+                if consecutive_unexpected >= _MAX_CONSECUTIVE_POLL_FAILURES:
+                    print(
+                        f"\nLink failed: {consecutive_unexpected} consecutive poll errors "
+                        f"(last: {exc}); giving up.",
+                        file=sys.stderr,
+                    )
+                    return 1
                 print(f"  (poll error: {exc}; retrying...)", file=sys.stderr)
                 continue
             status = poll.get("status")
@@ -649,6 +807,26 @@ def run_link(
             if status == "expired":
                 print("\nLink request expired before approval.", file=sys.stderr)
                 return 1
+            if status in _POLL_PENDING_STATUSES:
+                # Explicit "keep waiting" status (forge-v2 returns authorization_pending): the flow
+                # is healthy, so reset the non-progress counter and poll again.
+                consecutive_unexpected = 0
+                continue
+            # Unrecognized status (a typo, a {"status":"error"} body, or a client/server version
+            # skew): don't poll silently. Count it toward the same bound so a server stuck on an
+            # unknown status fails fast instead of at the deadline.
+            consecutive_unexpected += 1
+            if consecutive_unexpected >= _MAX_CONSECUTIVE_POLL_FAILURES:
+                print(
+                    f"\nLink failed: server returned an unrecognized poll status "
+                    f"{_printable(str(status))!r} {consecutive_unexpected} times; giving up.",
+                    file=sys.stderr,
+                )
+                return 1
+            print(
+                f"  (unexpected poll status {_printable(str(status))!r}; retrying...)",
+                file=sys.stderr,
+            )
     finally:
         poller.close()
 
@@ -656,7 +834,53 @@ def run_link(
     return 1
 
 
+def add_link_arguments(
+    parser: argparse.ArgumentParser, *, secrets_default: Any = DEFAULT_SECRETS_PATH
+) -> None:
+    """Register the shared wallet-link CLI flags on ``parser``.
+
+    Called by both the standalone ``allora-forge-link`` entry point and the ``workerctl link``
+    subcommand so the two flag surfaces can't drift out of sync.
+
+    Args:
+        parser: The (sub)parser to add ``--forge-url``, ``--secrets-path``, ``--address``,
+            ``--no-browser`` and ``--insecure`` to.
+        secrets_default: Default for ``--secrets-path``. ``workerctl`` passes
+            ``argparse.SUPPRESS`` so a subcommand-level flag doesn't clobber a top-level
+            ``--secrets-path`` given before the subcommand; the standalone entry point uses the
+            real default path.
+    """
+    parser.add_argument(
+        "--forge-url",
+        default=os.environ.get("FORGE_BACKEND_URL") or DEFAULT_FORGE_URL,
+        help="Forge base URL (defaults to $FORGE_BACKEND_URL if set, else forge.allora.network)",
+    )
+    parser.add_argument(
+        "--secrets-path", default=secrets_default, help="WorkerManager secrets file"
+    )
+    parser.add_argument(
+        "--address",
+        action="append",
+        dest="addresses",
+        help="Limit to specific allo1... address(es); repeatable. Default: all local keys.",
+    )
+    parser.add_argument("--no-browser", action="store_true", help="Do not auto-open a browser")
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Allow a plaintext http:// forge URL (local dev only)",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
+    """Parse CLI arguments and run the device-flow wallet-link (``allora-forge-link`` entry point).
+
+    Args:
+        argv: Argument list to parse; ``None`` uses ``sys.argv`` (pass a list in tests).
+
+    Returns:
+        Process exit code from :func:`run_link` (0 on success, 1 on error).
+    """
     parser = argparse.ArgumentParser(
         prog="allora-forge-link",
         description=(
@@ -667,28 +891,7 @@ def main(argv: list[str] | None = None) -> int:
             "neither required nor handled here."
         ),
     )
-    parser.add_argument(
-        "--forge-url",
-        default=os.environ.get("FORGE_BACKEND_URL") or DEFAULT_FORGE_URL,
-        help="Forge base URL (defaults to $FORGE_BACKEND_URL if set, else forge.allora.network)",
-    )
-    parser.add_argument(
-        "--secrets-path", default=DEFAULT_SECRETS_PATH, help="WorkerManager secrets file"
-    )
-    parser.add_argument(
-        "--address",
-        action="append",
-        dest="addresses",
-        help="Limit to specific allo1... address(es); repeatable. Default: all local keys.",
-    )
-    parser.add_argument(
-        "--no-browser", action="store_true", help="Do not auto-open a browser"
-    )
-    parser.add_argument(
-        "--insecure",
-        action="store_true",
-        help="Allow a plaintext http:// forge URL (local dev only)",
-    )
+    add_link_arguments(parser)
     args = parser.parse_args(argv)
     return run_link(
         forge_url=args.forge_url,

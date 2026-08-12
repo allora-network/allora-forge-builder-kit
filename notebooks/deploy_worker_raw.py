@@ -9,16 +9,15 @@ Useful as a reference or for quick one-off deployments.
 For production use, see deploy_worker.py which uses WorkerManager for
 wallet creation, faucet funding, process management, and the web dashboard.
 
-Targets the branch allora_sdk worker API (AlloraWorker.inferer + a RunContext-based
-run fn), matching worker_runtime.py.
+Compatible with allora_sdk >= 1.1.0.
 """
 
 import os
 import asyncio
-import math
 import traceback
 import cloudpickle
 from allora_sdk.worker import AlloraWorker
+from allora_sdk.worker.context import RunContext
 
 # Configuration
 TOPIC_ID = 69
@@ -52,27 +51,15 @@ if not api_key:
     )
 
 
-def _run_fn(ctx):
-    # The branch SDK invokes the inferer callback with a RunContext; the pickled model fn
-    # takes the integer nonce, so adapt via ctx.nonce.
-    value = predict_fn(ctx.nonce)
-    # Validate before returning so a NaN/Inf/non-numeric prediction fails loudly here instead of
-    # being silently submitted to the network (mirrors worker_runtime's production validation).
-    try:
-        v = float(value)
-    except (TypeError, ValueError) as e:
-        raise RuntimeError(f"Invalid inference output type: {value!r}") from e
-    if not math.isfinite(v):
-        raise RuntimeError(f"Invalid inference output (non-finite): {v}")
-    return v
-
-
 async def main():
     """Run the Allora worker with the trained model."""
     print(f"\nStarting Allora worker for Topic {TOPIC_ID}...")
 
+    def run_fn(ctx: RunContext):
+        return predict_fn(ctx.nonce)
+
     worker = AlloraWorker.inferer(
-        run=_run_fn,
+        run=run_fn,
         topic_id=TOPIC_ID,
         api_key=api_key,
         debug=DEBUG_MODE,
@@ -88,7 +75,7 @@ async def main():
             print(tb)
             print("--- exception traceback end ---")
         else:
-            print(f"Prediction submitted: {result.prediction}")
+            print(f"Prediction submitted: {result.submission}")
 
 
 if __name__ == "__main__":
