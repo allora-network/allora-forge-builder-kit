@@ -23,6 +23,7 @@ Build, evaluate, and deploy ML inference workers on the [Allora Network](https:/
 - [What is the Allora Forge?](#what-is-the-allora-forge)
 - [What you get](#what-you-get)
 - [Zero to deploy](#zero-to-deploy)
+- [Wallet linking](#wallet-linking)
 - [Deploy to the hosting platform (export)](#deploy-to-the-hosting-platform-export)
 - [Python API (quick reference)](#python-api-quick-reference)
 - [The learning problem](#the-learning-problem)
@@ -225,6 +226,113 @@ Mainnet topics and their testnet equivalents:
 
 ---
 
+## Wallet linking
+
+When you deploy a **local-custody** worker the signing key lives in `worker_keys/` on your machine, but Forge doesn't know which `allo1...` addresses belong to your account. **Wallet linking** proves ownership: the CLI signs an ADR-036 challenge with each local worker key and a browser-authenticated Forge user approves the link.
+
+> **Managed-custody workers** (deployed with `custody="managed"`) are linked automatically by the backend — no `workerctl link` step needed.
+
+### Custody modes at a glance
+
+| Mode | Key lives | Linking |
+|------|-----------|---------|
+| **Local** (default) | `worker_keys/` on your machine | Run `workerctl link` once per address |
+| **Managed** | Forge backend (Privy wallet) | Automatic — no CLI step |
+
+### Quick start
+
+```bash
+# Requires the wallet-link extra (cosmpy for ADR-036 signing)
+pip install -e ".[wallet-link]"
+
+# Link all local worker wallets to your Forge account
+workerctl link
+```
+
+The CLI:
+1. Reads your `worker_secrets.json` to find local key files
+2. Opens a device-flow session with the Forge API
+3. Signs each ADR-036 challenge locally — the mnemonic never leaves your machine
+4. Opens your browser; you approve with your logged-in Forge account
+5. Polls until approved and prints which addresses were linked
+
+```
+$ workerctl link
+
+Linking 2 worker address(es) to Allora Forge at https://forge.allora.network
+
+  First copy your one-time code: ABCD-1234
+  Then approve the link at: https://forge.allora.network/link?code=ABCD-1234
+
+Opened your browser. Waiting for approval...
+
+Linked 2 verified worker(s):
+  + allo1abc...
+  + allo1def...
+```
+
+### Link specific addresses
+
+```bash
+# Link a single address
+workerctl link --address allo1abc...
+
+# Link two specific addresses
+workerctl link --address allo1abc... --address allo1def...
+```
+
+### Headless / CI environments
+
+```bash
+# Print the URL and code without opening a browser
+workerctl link --no-browser
+```
+
+Output the one-time code and URL to stdout so you can open them on a separate device or paste them into a CI log.
+
+### Non-default secrets file
+
+```bash
+workerctl link --secrets-path /path/to/worker_secrets.json
+```
+
+### CLI reference
+
+Both `workerctl link` and the standalone `allora-forge-link` entry point accept the same flags:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--secrets-path PATH` | `worker_secrets.json` | Path to the WorkerManager secrets file that maps addresses to local key files. |
+| `--address ADDR` | all local keys | Limit to a specific `allo1...` address. Repeatable — pass once per address. |
+| `--no-browser` | off | Print the approval URL and code without auto-opening a browser. |
+
+### Python API
+
+```python
+from allora_forge_builder_kit.wallet_link import run_link
+
+rc = run_link(
+    secrets_path="worker_secrets.json",
+    addresses=None,       # None = link all local keys; pass a list to limit
+    open_browser=True,
+)
+# rc is 0 on success, 1 on any error
+```
+
+### Troubleshooting
+
+**`cosmpy` not found** — install the wallet-link extra: `pip install -e ".[wallet-link]"` or `pip install cosmpy==0.11.1`.
+
+**`No worker keys found`** — the secrets file is missing or empty. Deploy a local-custody worker first (`WorkerManager.deploy_worker(...)` or `python deploy_worker.py`).
+
+**`No local key for: allo1...`** — the address is a managed-custody worker (linked automatically) or the secrets file is stale. Managed workers do not need manual linking.
+
+**Link request denied** — the browser approval was rejected. Re-run `workerctl link` to start a fresh session.
+
+**Link request expired** — the 30-minute approval window closed before the browser was used. Re-run to start a new session.
+
+---
+
 ## Deploy to the hosting platform (export)
 
 The [Zero to deploy](#zero-to-deploy) flow runs a worker **locally** with `WorkerManager`. The other path is to let the Allora **hosting platform** run the worker for you in a container. Instead of a running process, you produce a *package* — worker code + `pyproject.toml` + `manifest.json` (+ an optional `weights/` dir) — and upload it to forge.
@@ -421,7 +529,9 @@ All three produce a complete, runnable pipeline and satisfy the same nine method
 | `allora_forge_builder_kit/export.py` | Package a model for the hosting platform (`ModelSpec`, internal packaging logic) |
 | `allora_forge_builder_kit/evaluation.py` | Model scoring (7 primary metrics + grading) |
 | `allora_forge_builder_kit/topic_discovery.py` | Query live topics on testnet/mainnet |
-| `allora_forge_builder_kit/worker_manager.py` | Wallet creation, key management, process lifecycle |
+| `allora_forge_builder_kit/worker_manager.py` | Wallet creation, key management, process lifecycle (local + managed custody) |
+| `allora_forge_builder_kit/wallet_link.py` | Device-flow wallet linking CLI — ADR-036 signing, `workerctl link` / `allora-forge-link` |
+| `allora_forge_builder_kit/workerctl.py` | `workerctl` CLI entry point (dashboard, link, export-payload subcommands) |
 | `allora_forge_builder_kit/worker_monitor.py` | On-chain event tracking |
 | `allora_forge_builder_kit/web_dashboard.py` | Web monitoring UI |
 | `allora_research_model_skills/` | Methodology skills for building generalizable financial models (hypothesis-driven, signal-discovery, robustness-first) |
