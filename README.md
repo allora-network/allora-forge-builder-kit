@@ -298,7 +298,7 @@ workerctl link --secrets-path /path/to/worker_secrets.json
 
 ### CLI reference
 
-Both `workerctl link` and the standalone `allora-forge-link` entry point accept the same flags:
+`workerctl link` accepts the following flags:
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -530,7 +530,7 @@ All three produce a complete, runnable pipeline and satisfy the same nine method
 | `allora_forge_builder_kit/evaluation.py` | Model scoring (7 primary metrics + grading) |
 | `allora_forge_builder_kit/topic_discovery.py` | Query live topics on testnet/mainnet |
 | `allora_forge_builder_kit/worker_manager.py` | Wallet creation, key management, process lifecycle (local + managed custody) |
-| `allora_forge_builder_kit/wallet_link.py` | Device-flow wallet linking CLI — ADR-036 signing, `workerctl link` / `allora-forge-link` |
+| `allora_forge_builder_kit/wallet_link.py` | Device-flow wallet linking CLI — ADR-036 signing, invoked via `workerctl link` |
 | `allora_forge_builder_kit/workerctl.py` | `workerctl` CLI entry point (dashboard, link, export-payload subcommands) |
 | `allora_forge_builder_kit/worker_monitor.py` | On-chain event tracking |
 | `allora_forge_builder_kit/web_dashboard.py` | Web monitoring UI |

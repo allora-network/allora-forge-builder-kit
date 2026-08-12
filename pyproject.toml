@@ -45,7 +45,6 @@ wallet-link = [
 
 [project.scripts]
 workerctl = "allora_forge_builder_kit.workerctl:main"
-allora-forge-link = "allora_forge_builder_kit.wallet_link:main"
 
 [project.urls]
 Homepage = "https://github.com/allora-network/allora-forge-builder-kit"
