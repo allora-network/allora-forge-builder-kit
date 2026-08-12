@@ -16,11 +16,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      # synth-010 publish guard: never ship a release that depends on the unreleased local
-      # allora-sdk worktree. [tool.uv.sources] redirects allora-sdk to ../allora-sdk-py (editable),
-      # which is invisible to PyPI consumers, so its presence must hard-fail the publish. Also
-      # verify the declared allora-sdk requirement actually resolves from PyPI so a pin bumped
-      # ahead of the SDK's PyPI release (ENGN-8646) cannot ship a broken dependency.
+      # Guard: never ship a release that depends on a local allora-sdk worktree.
+      # [tool.uv.sources] redirects allora-sdk to ../allora-sdk-py (editable) for local dev,
+      # which is invisible to PyPI consumers — its presence must hard-fail the publish.
+      # Also verify the declared allora-sdk requirement resolves from PyPI.
       - name: Guard against unreleased local SDK source
         run: |
           set -euo pipefail
@@ -36,7 +35,7 @@ jobs:
               print(
                   "::error file=pyproject.toml::[tool.uv.sources] is still present; it pins "
                   "allora-sdk to the local ../allora-sdk-py worktree and must be removed before "
-                  "publishing (gated on the allora-sdk PyPI release, ENGN-8646)."
+                  "publishing."
               )
               sys.exit(1)
           PY
