@@ -297,7 +297,7 @@ def _submit_rejection(submit: dict[str, Any]) -> str | None:
     return None
 
 
-# @@TODO: This module hand-rolls an HTTP transport (_post_json + _JsonPoster: proxy resolution,
+# # TODO: This module hand-rolls an HTTP transport (_post_json + _JsonPoster: proxy resolution,
 # CONNECT tunneling, Proxy-Authorization, keep-alive reconnect, bounded read) that duplicates the
 # requests.Session transport allora-sdk-py's ForgeBackendClient already owns for the same Forge
 # host. Consolidate by moving the device-flow transport into allora-sdk-py (e.g. a DeviceFlowClient
@@ -474,7 +474,7 @@ def run_link(
         )
         return 1
 
-    selected = addresses or list(keys.keys())
+    selected = list(dict.fromkeys(addresses)) if addresses else list(keys.keys())
     missing = [a for a in selected if a not in keys]
     if missing:
         # A managed-custody worker has no local key file, so it legitimately won't appear
@@ -521,7 +521,7 @@ def run_link(
     interval = max(1, min(interval, 60))
     challenges = {
         c["address"]: c["message"]
-        for c in start.get("challenges", [])
+        for c in (start.get("challenges") or [])
         if isinstance(c, dict) and c.get("address") and c.get("message")
     }
 

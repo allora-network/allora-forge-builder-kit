@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # wallet provisioned by the Forge backend, keyed by signing_wallet_id). A Literal gives the
 # fixed two-value set type-checker coverage and IDE completion while staying a plain str on the
 # wire and in SQLite.
-# @@TODO: the `if custody == 'managed'` branches threaded through deploy_worker, _build_run_command,
+# # TODO: the `if custody == 'managed'` branches threaded through deploy_worker, _build_run_command,
 # remove_worker, start_worker, status_worker/status_all could collapse into a CustodyStrategy
 # Protocol (provision_address / build_subprocess_env / release / validate_deploy_inputs). Deferred
 # as YAGNI with only two modes — extract when a third custody mode lands.
@@ -84,7 +84,7 @@ class ForgeClientProtocol(Protocol):
     injected client is checked at the boundary instead of being typed as ``Any``. ``@runtime_checkable``
     lets the lazy build assert the SDK client satisfies this contract at the injection boundary.
 
-    Note: allora-sdk-py owns the canonical contract; this is a local mirror. @@TODO: move this
+    Note: allora-sdk-py owns the canonical contract; this is a local mirror. # TODO: move this
     Protocol (and ``ProvisionedWallet``) into allora-sdk-py's ``rpc_client`` package, re-export it,
     and import rather than redeclare it here, so drift is caught at the SDK boundary, not only at the
     first managed deploy (cross-repo follow-up).
@@ -162,11 +162,11 @@ class WorkerManager:
         self._auto_monitor_sync = auto_monitor_sync
         self._topic_desc_resolver = topic_desc_resolver or self._build_default_topic_desc_resolver()
         self.runtime_log_dir = Path(runtime_log_dir)
-        self.runtime_log_dir.mkdir(parents=True, exist_ok=True)
+        self.runtime_log_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.artifact_dir = Path(artifact_dir)
-        self.artifact_dir.mkdir(parents=True, exist_ok=True)
+        self.artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.key_dir = Path(key_dir)
-        self.key_dir.mkdir(parents=True, exist_ok=True)
+        self.key_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._network = network
         self._no_faucet = no_faucet
         # Strip and coerce empty/whitespace-only to None: _build_run_command's truthiness guard
@@ -344,7 +344,7 @@ class WorkerManager:
 
         The SDK call is not cancellable, so under a *sustained* degraded backend the cap can stay
         saturated for the rest of the process; recovery is a process restart (no binding leaks — the
-        idempotent get-or-create reconstitutes any skipped release on the next deploy). @@TODO: pass
+        idempotent get-or-create reconstitutes any skipped release on the next deploy). # TODO: pass
         a shorter per-request timeout into ForgeBackendClient once allora-sdk-py exposes one, so a
         stuck clear-association frees its slot promptly (cross-repo follow-up).
         """
@@ -1082,8 +1082,8 @@ class WorkerManager:
     # Internal helpers
     # ----------------------------
     def _init_db(self) -> None:
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.secrets_path.parent.mkdir(parents=True, exist_ok=True)
+        self.db_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.secrets_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
@@ -1323,7 +1323,7 @@ class WorkerManager:
     def _materialize_artifact(self, topic_id: int, address: str, source_artifact: Path) -> Path:
         self._assert_safe_address(address)
         target_dir = self.artifact_dir / f"topic_{topic_id}" / address
-        target_dir.mkdir(parents=True, exist_ok=True)
+        target_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         target_path = target_dir / f"predict_{uuid.uuid4().hex}.pkl"
         shutil.copy2(source_artifact, target_path)
         return target_path
