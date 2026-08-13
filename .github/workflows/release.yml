@@ -16,6 +16,36 @@ jobs:
         with:
           python-version: "3.11"
 
+      # Guard: never ship a release that depends on a local allora-sdk worktree.
+      # [tool.uv.sources] redirects allora-sdk to ../allora-sdk-py (editable) for local dev,
+      # which is invisible to PyPI consumers — its presence must hard-fail the publish.
+      # Also verify the declared allora-sdk requirement resolves from PyPI.
+      - name: Guard against unreleased local SDK source
+        run: |
+          set -euo pipefail
+          # Parse pyproject.toml with tomllib (stdlib, Python 3.11) instead of grepping: a real
+          # TOML parse catches every semantically-equivalent spelling of the [tool.uv.sources]
+          # table (indented, dotted, inline) that a regex would miss.
+          python - <<'PY'
+          import sys
+          import tomllib
+          with open("pyproject.toml", "rb") as f:
+              data = tomllib.load(f)
+          if data.get("tool", {}).get("uv", {}).get("sources"):
+              print(
+                  "::error file=pyproject.toml::[tool.uv.sources] is still present; it pins "
+                  "allora-sdk to the local ../allora-sdk-py worktree and must be removed before "
+                  "publishing."
+              )
+              sys.exit(1)
+          PY
+          req="$(python -c "import tomllib; deps = tomllib.load(open('pyproject.toml', 'rb'))['project']['dependencies']; print(next(r for r in deps if r.replace(' ', '').lower().startswith('allora-sdk')))")"
+          echo "Verifying '${req}' is resolvable from PyPI (wheels only)..."
+          # Resolve wheels only (--only-binary=:all:): never build an sdist, so this check cannot
+          # execute arbitrary build hooks from a source distribution in a job that holds
+          # id-token: write. allora-sdk publishes a wheel for every release.
+          python -m pip download --no-deps --only-binary=:all: --dest /tmp/allora-sdk-resolve "${req}"
+
       - name: Install build tools
         run: pip install build
 

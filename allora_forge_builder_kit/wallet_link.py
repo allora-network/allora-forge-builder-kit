@@ -181,7 +181,7 @@ def discover_keys(secrets_path: str | Path) -> dict[str, _KeyEntry]:
         return {}
     try:
         raw = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError) as exc:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
         # Present-but-unreadable/corrupt is distinct from not-found: surface it instead of
         # masking it as the "no worker keys, create one" case.
         raise SecretsLoadError(f"could not read worker secrets at {secrets_path}: {exc}") from exc
@@ -350,21 +350,19 @@ def _submit_rejection(submit: dict[str, Any]) -> str | None:
     """
     rejected = submit.get("rejected")
     if isinstance(rejected, list) and rejected:
-        lines = ["Server rejected one or more worker signatures:"]
-        for item in rejected:
-            if not isinstance(item, dict):
-                continue
-            addr = _printable(str(item.get("address", "?")))
-            reason = _printable(str(item.get("reason", "no reason given")))
-            lines.append(f"  - {addr}: {reason}")
-        return "\n".join(lines)
+        detail = "\n".join(
+            f"  - {_printable(str(item.get('address', '?')))}: {_printable(str(item.get('reason', 'no reason given')))}"
+            for item in rejected
+            if isinstance(item, dict)
+        )
+        return f"Server rejected one or more worker signatures:\n{detail}"
     error = submit.get("error")
     if error:
         return f"Server rejected the signature submission: {_printable(str(error))}"
     return None
 
 
-# @@TODO: This module hand-rolls an HTTP transport (_post_json + _JsonPoster: proxy resolution,
+# TODO: This module hand-rolls an HTTP transport (_post_json + _JsonPoster: proxy resolution,
 # CONNECT tunneling, Proxy-Authorization, keep-alive reconnect, bounded read) that duplicates the
 # requests.Session transport allora-sdk-py's ForgeBackendClient already owns for the same Forge
 # host. Consolidate by moving the device-flow transport into allora-sdk-py (e.g. a DeviceFlowClient
@@ -638,7 +636,7 @@ def run_link(
     interval = max(1, min(interval, 60))
     challenges = {
         c["address"]: c["message"]
-        for c in start.get("challenges", [])
+        for c in (start.get("challenges") or [])
         if isinstance(c, dict) and c.get("address") and c.get("message")
     }
 
@@ -850,7 +848,11 @@ def add_link_arguments(
             ``--secrets-path`` given before the subcommand; the standalone entry point uses the
             real default path.
     """
-    parser.add_argument("--forge-url", default=DEFAULT_FORGE_URL, help="Forge base URL")
+    parser.add_argument(
+        "--forge-url",
+        default=os.environ.get("FORGE_BACKEND_URL") or DEFAULT_FORGE_URL,
+        help="Forge base URL (defaults to $FORGE_BACKEND_URL if set, else forge.allora.network)",
+    )
     parser.add_argument(
         "--secrets-path", default=secrets_default, help="WorkerManager secrets file"
     )

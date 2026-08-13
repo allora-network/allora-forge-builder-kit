@@ -39,7 +39,7 @@ dev = [
     "matplotlib",
 ]
 wallet-link = [
-    "cosmpy==0.11.1",
+    "cosmpy>=0.11.1",
 ]
 
 
@@ -51,3 +51,4 @@ Homepage = "https://github.com/allora-network/allora-forge-builder-kit"
 
 [tool.setuptools.packages.find]
 include = ["allora_forge_builder_kit"]
+

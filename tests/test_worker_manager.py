@@ -1,9 +1,46 @@
 from pathlib import Path
+from types import SimpleNamespace
 import sqlite3
 
 import pytest
 
-from allora_forge_builder_kit.worker_manager import WorkerManager, WorkerSpec
+from allora_forge_builder_kit.worker_manager import ForgeClientProtocol, WorkerManager, WorkerSpec
+
+
+class _FakeForgeClient:
+    """Stand-in for allora_sdk's ForgeBackendClient. Idempotent get-or-create by topic:
+    the same topic always yields the same address/id, mirroring the backend's one-wallet-
+    per-(user, topic) contract."""
+
+    def __init__(self):
+        self.provisioned: list[tuple[int, str | None]] = []
+        self.cleared: list[str] = []
+
+    def provision_wallet(self, topic_id: int, label: str | None = None) -> SimpleNamespace:
+        self.provisioned.append((topic_id, label))
+        return SimpleNamespace(
+            id=f"wallet-{topic_id}",
+            address=f"allo1managed{topic_id:04d}",
+            pubkey="ab" * 33,
+        )
+
+    def clear_association(self, wallet_id: str) -> None:
+        self.cleared.append(wallet_id)
+
+
+def _managed_manager(tmp_path: Path, client: ForgeClientProtocol, **kwargs) -> WorkerManager:
+    return WorkerManager(
+        db_path=tmp_path / "state.db",
+        secrets_path=tmp_path / "secrets.json",
+        identity_creator=lambda: ("unused", "unused", "unused"),
+        # Suppress the default resolver which queries the live Allora API — a real network
+        # round-trip in unit tests makes label assertions non-deterministic and adds latency.
+        # Tests that need a specific resolved description pass topic_desc_resolver via **kwargs.
+        topic_desc_resolver=kwargs.pop("topic_desc_resolver", lambda _: None),
+        forge_client=client,
+        reconcile_on_start=False,
+        **kwargs,
+    )
 
 
 def _new_manager(tmp_path: Path) -> WorkerManager:
@@ -19,6 +56,36 @@ def _new_manager(tmp_path: Path) -> WorkerManager:
         secrets_path=tmp_path / "secrets.json",
         identity_creator=create_identity,
     )
+
+
+def test_validate_artifact_for_deploy_clean_artifact_ok(tmp_path: Path):
+    manager = _managed_manager(tmp_path, _FakeForgeClient())
+    artifact = tmp_path / "clean.pkl"
+    artifact.write_bytes(b"x" * 200000)  # > one 64 KiB chunk, no banned markers
+    manager._validate_artifact_for_deploy(artifact)  # no raise
+
+
+def test_validate_artifact_for_deploy_rejects_raw_data_artifact(tmp_path: Path):
+    manager = _managed_manager(tmp_path, _FakeForgeClient())
+    artifact = tmp_path / "raw.pkl"
+    artifact.write_bytes(b"load_raw ... Could not get current price from raw data ...")
+    with pytest.raises(ValueError, match="raw-data inference path"):
+        manager._validate_artifact_for_deploy(artifact)
+
+
+def test_validate_artifact_for_deploy_detects_marker_across_chunk_boundary(tmp_path: Path):
+    # A banned marker straddling the 64 KiB streaming boundary must still be detected (the chunk
+    # overlap covers it) — otherwise streaming would regress the in-memory scan it replaced.
+    manager = _managed_manager(tmp_path, _FakeForgeClient())
+    artifact = tmp_path / "boundary.pkl"
+    artifact.write_bytes(
+        b"x" * (65536 - 4)
+        + b"load_raw"  # straddles the first/second chunk boundary
+        + b"y" * 50
+        + b"Could not get current price from raw data"
+    )
+    with pytest.raises(ValueError, match="raw-data inference path"):
+        manager._validate_artifact_for_deploy(artifact)
 
 
 def test_add_worker_enforces_unique_topic_address(tmp_path: Path):
@@ -193,3 +260,767 @@ def test_status_all_with_logs_returns_tail_and_artifact_path(tmp_path: Path):
 
     assert row["artifact_path"].endswith(".pkl")
     assert row["log_tail"] == ["l3", "l4"]
+
+
+# ----------------------------
+# Managed custody (ENGN-8646)
+# ----------------------------
+def test_deploy_managed_provisions_and_registers(tmp_path: Path):
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+
+    result = manager.deploy_worker(topic_id=42, artifact_path=artifact, custody="managed")
+
+    assert result.action == "created"
+    assert result.address_assigned == "allo1managed0042"
+    # Provisioned exactly once, get-or-create by topic with a display label.
+    assert client.provisioned == [(42, "worker-topic-42")]
+
+    status = manager.status_worker(topic_id=42, address="allo1managed0042")
+    assert status["custody"] == "managed"
+    assert status["signing_wallet_id"] == "wallet-42"
+    assert status["artifact_path"].endswith(".pkl")
+    # identity_ref is a sentinel for managed workers (no identities row); the canonical wallet id
+    # lives in signing_wallet_id, not overloaded into identity_ref.
+    assert status["identity_ref"] == "managed"
+
+
+def test_deploy_managed_releases_binding_when_add_worker_fails(tmp_path: Path, monkeypatch):
+    # provision_wallet succeeds but add_worker fails (disk full / DB error): the server-side
+    # (user, topic) binding must be released, not leaked with no local row referencing it.
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+
+    def boom(spec):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(manager, "add_worker", boom)
+
+    with pytest.raises(OSError):
+        manager.deploy_worker(topic_id=42, artifact_path=artifact, custody="managed")
+
+    assert client.provisioned == [(42, "worker-topic-42")]
+    assert client.cleared == ["wallet-42"]  # binding released on the failed deploy
+
+
+def test_provision_wallet_bounded_raises_on_hang(tmp_path: Path):
+    # A backend that never responds to provision_wallet must not stall the deploy: the bounded
+    # thread raises TimeoutError rather than blocking indefinitely (deploys must not proceed
+    # without a wallet).
+    import threading
+
+    class _HangingClient(_FakeForgeClient):
+        def provision_wallet(self, topic_id: int, label: str | None = None):
+            threading.Event().wait(30)  # block well past the test timeout
+
+    client = _HangingClient()
+    manager = _managed_manager(tmp_path, client)
+    with pytest.raises(TimeoutError):
+        manager._provision_wallet_bounded(client, 7, "label", timeout=0.2)
+
+
+def test_deploy_managed_refuses_second_row_on_address_drift(tmp_path: Path):
+    # If the backend returns a different address for the same topic (e.g. a rotated Privy wallet),
+    # the create path must refuse rather than insert a second managed row, violating one-per-topic.
+    class _RotatingClient(_FakeForgeClient):
+        def __init__(self):
+            super().__init__()
+            self._n = 0
+
+        def provision_wallet(self, topic_id: int, label: str | None = None):
+            self._n += 1
+            self.provisioned.append((topic_id, label))
+            return SimpleNamespace(
+                id=f"wallet-{topic_id}-{self._n}", address=f"allo1addr{self._n}", pubkey="ab" * 33
+            )
+
+    client = _RotatingClient()
+    manager = _managed_manager(tmp_path, client)
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+
+    first = manager.deploy_worker(topic_id=5, artifact_path=artifact, custody="managed")
+    assert first.address_assigned == "allo1addr1"
+    with pytest.raises(RuntimeError, match="one wallet per topic"):
+        manager.deploy_worker(topic_id=5, artifact_path=artifact, custody="managed")
+    assert len([w for w in manager.status_all() if w["topic_id"] == 5]) == 1
+
+
+def test_provision_wallet_bounded_returns_wallet(tmp_path: Path):
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    info = manager._provision_wallet_bounded(client, 7, "label", timeout=5.0)
+    assert info.id == "wallet-7"
+    assert info.address == "allo1managed0007"
+
+
+def test_provision_wallet_bounded_propagates_backend_error(tmp_path: Path):
+    class _FailClient(_FakeForgeClient):
+        def provision_wallet(self, topic_id: int, label: str | None = None):
+            raise RuntimeError("backend 500")
+
+    client = _FailClient()
+    manager = _managed_manager(tmp_path, client)
+    with pytest.raises(RuntimeError, match="backend 500"):
+        manager._provision_wallet_bounded(client, 7, "label", timeout=5.0)
+
+
+def test_provision_wallet_bounded_releases_slot_on_success(tmp_path: Path):
+    # A successful provision releases its slot, so many sequential deploys never exhaust the cap.
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    for _ in range(20):  # > the BoundedSemaphore(8) cap
+        manager._provision_wallet_bounded(client, 7, "label", timeout=5.0)
+
+
+def test_provision_wallet_bounded_caps_in_flight_threads(tmp_path: Path):
+    # Once all slots are held by hung provisions, a further call is refused immediately rather than
+    # accumulating another uncancellable stuck thread.
+    import threading
+
+    release = threading.Event()
+
+    class _HangingClient(_FakeForgeClient):
+        def provision_wallet(self, topic_id: int, label: str | None = None):
+            release.wait(30)
+
+    client = _HangingClient()
+    manager = _managed_manager(tmp_path, client)
+    try:
+        for _ in range(8):  # saturate the cap with timed-out-but-still-running threads
+            with pytest.raises(TimeoutError):
+                manager._provision_wallet_bounded(client, 7, "label", timeout=0.05)
+        with pytest.raises(TimeoutError, match="too many in-flight"):
+            manager._provision_wallet_bounded(client, 7, "label", timeout=5.0)
+    finally:
+        release.set()  # let the hung daemon threads exit
+
+
+def test_artifact_sha256_streams_correctly(tmp_path: Path):
+    # The streamed (chunked) digest must equal a one-shot hash over the full bytes, including a file
+    # that spans multiple 64 KiB chunks.
+    import hashlib
+
+    data = b"x" * (65536 * 2 + 123)
+    p = tmp_path / "big.pkl"
+    p.write_bytes(data)
+    assert WorkerManager._artifact_sha256(p) == hashlib.sha256(data).hexdigest()
+
+
+def test_managed_replace_records_correct_artifact_hash(tmp_path: Path):
+    # The replace path threads the already-computed source hash into the deployment record (instead
+    # of re-reading the materialized copy); it must still record the artifact's true digest.
+    import hashlib
+
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    v1 = tmp_path / "v1.pkl"
+    v1.write_bytes(b"one")
+    v2 = tmp_path / "v2.pkl"
+    v2.write_bytes(b"two")
+
+    manager.deploy_worker(topic_id=3, artifact_path=v1, custody="managed")
+    manager.deploy_worker(topic_id=3, artifact_path=v2, custody="managed", replace=True)
+    assert manager._get_active_deployment_hash(3, "allo1managed0003") == hashlib.sha256(b"two").hexdigest()
+
+
+def test_deploy_managed_redeploy_different_artifact_with_replace_rotates(tmp_path: Path):
+    """synth-009: a genuinely different artifact with replace=True rotates the deployment on the
+    one-per-topic wallet (no second worker row) and reports 'replaced'."""
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    v1 = tmp_path / "v1.pkl"
+    v2 = tmp_path / "v2.pkl"
+    v1.write_text("v1")
+    v2.write_text("v2")
+
+    manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed")
+    dep1 = manager._get_active_deployment_id(8, "allo1managed0008")
+    result = manager.deploy_worker(topic_id=8, artifact_path=v2, custody="managed", replace=True)
+
+    assert result.action == "replaced"
+    assert result.address_assigned == "allo1managed0008"
+    # One worker per topic — no second worker row was created.
+    assert len([w for w in manager.status_all() if w["topic_id"] == 8]) == 1
+    # The artifact was rotated: a new active deployment supersedes the first.
+    dep2 = manager._get_active_deployment_id(8, "allo1managed0008")
+    assert dep1 and dep2 and dep1 != dep2
+
+
+def test_deploy_managed_redeploy_identical_artifact_is_reused(tmp_path: Path):
+    """synth-009: re-deploying byte-identical artifact (e.g. an idempotent CI re-run) is a no-op
+    'reused' — the running deployment is left untouched rather than churned."""
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    v1 = tmp_path / "v1.pkl"
+    v1.write_text("same-bytes")
+
+    first = manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed")
+    assert first.action == "created"
+    dep1 = manager._get_active_deployment_id(8, "allo1managed0008")
+    artifact_before = manager.status_worker(8, "allo1managed0008")["artifact_path"]
+
+    # Identical bytes (a fresh file with the same content) re-deployed without replace.
+    v1_again = tmp_path / "v1_again.pkl"
+    v1_again.write_text("same-bytes")
+    result = manager.deploy_worker(topic_id=8, artifact_path=v1_again, custody="managed")
+
+    assert result.action == "reused"
+    assert result.address_assigned == "allo1managed0008"
+    assert len([w for w in manager.status_all() if w["topic_id"] == 8]) == 1
+    # No rotation: the active deployment and the on-disk managed artifact are unchanged.
+    assert manager._get_active_deployment_id(8, "allo1managed0008") == dep1
+    assert manager.status_worker(8, "allo1managed0008")["artifact_path"] == artifact_before
+
+
+def test_deploy_managed_redeploy_identical_artifact_resyncs_metadata(tmp_path: Path):
+    """The hash-identical 'reused' path must still re-sync the worker-row metadata (reject_zero +
+    the freshly-provisioned signing_wallet_id) so an idempotent re-run cannot leave the row
+    pointing at a stale flag or wallet binding — while leaving the artifact unrotated."""
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    v1 = tmp_path / "v1.pkl"
+    v1.write_text("same-bytes")
+
+    manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed", reject_zero=False)
+    dep1 = manager._get_active_deployment_id(8, "allo1managed0008")
+    artifact_before = manager.status_worker(8, "allo1managed0008")["artifact_path"]
+
+    # Drift the row: simulate a signing wallet id that has fallen behind the backend.
+    with sqlite3.connect(tmp_path / "state.db") as conn:
+        conn.execute(
+            "UPDATE workers SET signing_wallet_id='stale-wallet' WHERE topic_id=? AND address=?",
+            (8, "allo1managed0008"),
+        )
+        conn.commit()
+
+    # Identical artifact, no replace, but flip reject_zero.
+    v1_again = tmp_path / "v1_again.pkl"
+    v1_again.write_text("same-bytes")
+    result = manager.deploy_worker(topic_id=8, artifact_path=v1_again, custody="managed", reject_zero=True)
+
+    assert result.action == "reused"
+    row = manager.status_worker(8, "allo1managed0008")
+    # Metadata re-synced from the fresh provision...
+    assert row["reject_zero"] is True
+    assert row["signing_wallet_id"] == "wallet-8"
+    # ...but the artifact was NOT rotated.
+    assert manager._get_active_deployment_id(8, "allo1managed0008") == dep1
+    assert row["artifact_path"] == artifact_before
+
+
+def test_deploy_managed_redeploy_identical_artifact_with_replace_rotates(tmp_path: Path):
+    """An explicit replace=True is honored even when the artifact is byte-identical: the caller
+    asked to rotate, so the deployment is rotated and reported 'replaced' rather than
+    short-circuited to 'reused'."""
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    v1 = tmp_path / "v1.pkl"
+    v1.write_text("same-bytes")
+
+    manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed")
+    dep1 = manager._get_active_deployment_id(8, "allo1managed0008")
+
+    v1_again = tmp_path / "v1_again.pkl"
+    v1_again.write_text("same-bytes")
+    result = manager.deploy_worker(topic_id=8, artifact_path=v1_again, custody="managed", replace=True)
+
+    assert result.action == "replaced"
+    assert len([w for w in manager.status_all() if w["topic_id"] == 8]) == 1
+    # Explicit replace rotated the deployment even though the bytes were identical.
+    dep2 = manager._get_active_deployment_id(8, "allo1managed0008")
+    assert dep1 and dep2 and dep1 != dep2
+
+
+def test_deploy_managed_redeploy_legacy_null_hash_without_replace_raises(tmp_path: Path):
+    """A legacy active deployment with no recorded hash is treated conservatively as 'unknown':
+    a redeploy without replace=True refuses rather than risk overwriting a different deployment,
+    even when the bytes happen to match."""
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    v1 = tmp_path / "v1.pkl"
+    v1.write_text("legacy")
+    manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed")
+
+    # Simulate a pre-hash-tracking deployment row.
+    with sqlite3.connect(tmp_path / "state.db") as conn:
+        conn.execute(
+            "UPDATE worker_deployments SET artifact_hash=NULL WHERE topic_id=? AND address=? AND is_active=1",
+            (8, "allo1managed0008"),
+        )
+        conn.commit()
+
+    with pytest.raises(ValueError, match="replace=True"):
+        manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed")
+
+    # With replace=True the unknown-hash row is rotated normally.
+    result = manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed", replace=True)
+    assert result.action == "replaced"
+
+
+def test_managed_redeploy_syncs_reject_zero_into_db_and_command(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ALLORA_API_KEY", "test-allora-key")
+    client = _FakeForgeClient()
+    manager = _managed_manager(
+        tmp_path,
+        client,
+        forge_api_key="forge_sk_test",
+        forge_backend_url="http://localhost:8080",
+    )
+    v1 = tmp_path / "v1.pkl"
+    v2 = tmp_path / "v2.pkl"
+    v1.write_text("v1")
+    v2.write_text("v2")
+
+    manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed", reject_zero=False)
+    manager.deploy_worker(topic_id=8, artifact_path=v2, custody="managed", replace=True, reject_zero=True)
+
+    row = [w for w in manager.status_all() if w["topic_id"] == 8][0]
+    assert row["reject_zero"] is True
+
+    status = manager.status_worker(topic_id=8, address="allo1managed0008")
+    cmd, _ = manager._build_run_command(8, "allo1managed0008", status)
+    assert "--reject-zero" in cmd
+
+
+def test_managed_redeploy_different_artifact_without_replace_raises(tmp_path: Path):
+    """synth-009 core fix: a different artifact for an existing managed worker is NOT silently
+    overwritten in auto mode — it raises unless replace=True is passed, leaving the running
+    deployment intact."""
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    v1 = tmp_path / "v1.pkl"
+    v2 = tmp_path / "v2.pkl"
+    v1.write_text("v1")
+    v2.write_text("v2")
+
+    manager.deploy_worker(topic_id=8, artifact_path=v1, custody="managed")
+    dep1 = manager._get_active_deployment_id(8, "allo1managed0008")
+
+    # Auto mode (no replace=True) with a different artifact must refuse rather than overwrite.
+    with pytest.raises(ValueError, match="replace=True"):
+        manager.deploy_worker(topic_id=8, artifact_path=v2, custody="managed")
+
+    # The original deployment is untouched: same active deployment, still one worker row.
+    assert manager._get_active_deployment_id(8, "allo1managed0008") == dep1
+    assert len([w for w in manager.status_all() if w["topic_id"] == 8]) == 1
+
+
+def test_build_run_command_managed_injects_forge_env_and_no_keyfile(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ALLORA_API_KEY", "test-allora-key")
+    client = _FakeForgeClient()
+    manager = _managed_manager(
+        tmp_path,
+        client,
+        forge_api_key="forge_sk_test",
+        forge_backend_url="http://localhost:8080",
+    )
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+    manager.deploy_worker(topic_id=7, artifact_path=artifact, custody="managed")
+
+    status = manager.status_worker(topic_id=7, address="allo1managed0007")
+    cmd, env = manager._build_run_command(7, "allo1managed0007", status)
+
+    assert "--custody" in cmd
+    assert cmd[cmd.index("--custody") + 1] == "managed"
+    assert "--mnemonic-file" not in cmd
+    assert env is not None
+    assert env["FORGE_API_KEY"] == "forge_sk_test"
+    assert env["FORGE_BACKEND_URL"] == "http://localhost:8080"
+    # The DB-stored signing wallet id is pinned into the env so the worker signs with the exact
+    # provisioned wallet (deterministic) rather than re-deriving via topic get-or-create.
+    assert env["FORGE_SIGNING_WALLET_ID"] == "wallet-7"
+
+
+def test_build_run_command_managed_without_signing_wallet_id_raises(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ALLORA_API_KEY", "test-allora-key")
+    client = _FakeForgeClient()
+    manager = _managed_manager(
+        tmp_path,
+        client,
+        forge_api_key="forge_sk_test",
+        forge_backend_url="http://localhost:8080",
+    )
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+    manager.deploy_worker(topic_id=7, artifact_path=artifact, custody="managed")
+    status = manager.status_worker(topic_id=7, address="allo1managed0007")
+    status["signing_wallet_id"] = None
+
+    # Fails loudly before spawning rather than letting the subprocess exit post-'running'.
+    with pytest.raises(ValueError, match="signing_wallet_id"):
+        manager._build_run_command(7, "allo1managed0007", status)
+
+
+def test_allora_api_key_present_treats_empty_file_as_absent(tmp_path: Path, monkeypatch):
+    """An existing-but-empty .allora_api_key must not satisfy the precheck: the subprocess would
+    resolve it to an empty key and fail at runtime, defeating the fail-before-running guarantee."""
+    monkeypatch.delenv("ALLORA_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+    key_file = tmp_path / ".allora_api_key"
+
+    key_file.write_text("   \n")
+    assert WorkerManager._allora_api_key_present() is False
+
+    key_file.write_text("real-key")
+    assert WorkerManager._allora_api_key_present() is True
+
+
+def test_allora_api_key_present_treats_whitespace_env_as_absent(tmp_path: Path, monkeypatch):
+    """A whitespace-only ALLORA_API_KEY env value must not satisfy the precheck: the truthy check
+    let it through, the worker was marked running, and the subprocess forwarded an empty key that
+    failed at runtime — defeating the fail-before-running guarantee for env-based provisioning."""
+    monkeypatch.chdir(tmp_path)  # no .allora_api_key file fallbacks here
+    monkeypatch.setenv("ALLORA_API_KEY", "   ")
+    assert WorkerManager._allora_api_key_present() is False
+
+    monkeypatch.setenv("ALLORA_API_KEY", "real-key")
+    assert WorkerManager._allora_api_key_present() is True
+
+
+def test_start_worker_validation_failure_leaves_no_log_file(tmp_path: Path, monkeypatch):
+    """A managed worker that fails the _build_run_command precheck must not create an empty log:
+    the file open is deferred until after validation so a persistently-misconfigured worker does
+    not re-touch a silent empty log on every reconcile."""
+    monkeypatch.setenv("ALLORA_API_KEY", "test-allora-key")  # clear the api-key precheck
+    monkeypatch.delenv("FORGE_API_KEY", raising=False)
+    monkeypatch.delenv("FORGE_BACKEND_URL", raising=False)
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)  # no Forge creds on the manager -> precheck fails
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+    manager.deploy_worker(topic_id=4, artifact_path=artifact, custody="managed")
+
+    log_path = manager.runtime_log_dir / "worker_4_allo1managed0004.log"
+    with pytest.raises(ValueError):
+        manager.start_worker(topic_id=4, address="allo1managed0004")
+    assert not log_path.exists()
+
+
+def test_remove_managed_worker_clears_association(tmp_path: Path):
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+    manager.deploy_worker(topic_id=9, artifact_path=artifact, custody="managed")
+
+    manager.remove_worker(topic_id=9, address="allo1managed0009")
+
+    assert client.cleared == ["wallet-9"]
+    with pytest.raises(KeyError):
+        manager.status_worker(topic_id=9, address="allo1managed0009")
+
+
+def test_remove_managed_worker_tolerates_clear_failure(tmp_path: Path):
+    class _FailingClient(_FakeForgeClient):
+        def clear_association(self, wallet_id: str) -> None:
+            raise RuntimeError("backend down")
+
+    client = _FailingClient()
+    manager = _managed_manager(tmp_path, client)
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+    manager.deploy_worker(topic_id=5, artifact_path=artifact, custody="managed")
+
+    # Decommission cleanup must never raise — the worker is still removed locally.
+    manager.remove_worker(topic_id=5, address="allo1managed0005")
+    with pytest.raises(KeyError):
+        manager.status_worker(topic_id=5, address="allo1managed0005")
+
+
+def test_remove_local_worker_does_not_clear(tmp_path: Path):
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    ident = manager.ensure_identity(alias="alpha")
+    artifact = tmp_path / "l.pkl"
+    artifact.write_text("l")
+    manager.deploy_worker(topic_id=3, artifact_path=artifact, address=ident.address)
+
+    manager.remove_worker(topic_id=3, address=ident.address)
+
+    assert client.cleared == []
+
+
+def test_release_managed_binding_bounds_slow_backend(tmp_path: Path):
+    """A degraded backend must not stall teardown: _release_managed_binding returns within its
+    timeout even when clear_association blocks, and never raises."""
+    import threading
+    import time
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    class _HangingClient(_FakeForgeClient):
+        def clear_association(self, wallet_id: str) -> None:
+            entered.set()
+            release.wait(30)  # would block the caller for the full SDK timeout without the bound
+
+    manager = _managed_manager(tmp_path, _HangingClient())
+
+    start = time.monotonic()
+    manager._release_managed_binding("wallet-x", topic_id=1, timeout=0.5)
+    elapsed = time.monotonic() - start
+    release.set()  # let the daemon thread unwind
+
+    assert entered.wait(1.0)  # the clear actually started on the background thread
+    assert elapsed < 5.0  # returned at ~0.5s, not blocked on the 30s backend call
+
+
+def test_release_managed_binding_caps_concurrent_threads(tmp_path: Path):
+    """When the cleanup semaphore is saturated (8 in-flight clears against a degraded backend),
+    the next release is skipped rather than spawning yet another stuck daemon thread."""
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    # Saturate the cap so the next release cannot acquire.
+    for _ in range(8):
+        assert manager._cleanup_sem.acquire(blocking=False)
+
+    manager._release_managed_binding("wallet-x", topic_id=1, timeout=0.1)
+    assert client.cleared == []  # skipped (cap reached), not cleared, and no thread spawned
+
+
+def test_release_managed_binding_releases_slot_when_thread_start_fails(tmp_path: Path, monkeypatch):
+    """If Thread.start() raises before _clear runs, the acquired cleanup slot must be released
+    rather than leaked (otherwise the cap silently shrinks until all releases are disabled)."""
+    import threading
+
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+
+    def _boom(self):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(threading.Thread, "start", _boom)
+    manager._release_managed_binding("wallet-x", topic_id=1, timeout=0.1)
+    # All 8 slots are free again: the acquire was rolled back on the start() failure.
+    for _ in range(8):
+        assert manager._cleanup_sem.acquire(blocking=False)
+
+
+def test_deploy_managed_rejects_malformed_backend_wallet(tmp_path: Path):
+    class _BadClient(_FakeForgeClient):
+        def provision_wallet(self, topic_id: int, label: str | None = None):
+            return SimpleNamespace(id="", address="", pubkey="")
+
+    client = _BadClient()
+    manager = _managed_manager(tmp_path, client)
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+
+    with pytest.raises(RuntimeError, match="malformed wallet"):
+        manager.deploy_worker(topic_id=1, artifact_path=artifact, custody="managed")
+
+
+def test_deploy_managed_rejects_local_only_inputs(tmp_path: Path):
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+
+    for kwargs in ({"address": "allo1xxx"}, {"mnemonic": "abandon abandon"}, {"identity_alias": "alias"}):
+        with pytest.raises(ValueError, match="local-custody inputs"):
+            manager.deploy_worker(topic_id=1, artifact_path=artifact, custody="managed", **kwargs)
+
+
+def test_deploy_managed_requires_forge_credentials(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("FORGE_API_KEY", raising=False)
+    monkeypatch.delenv("FORGE_BACKEND_URL", raising=False)
+    manager = WorkerManager(
+        db_path=tmp_path / "state.db",
+        secrets_path=tmp_path / "secrets.json",
+        identity_creator=lambda: ("unused", "unused", "unused"),
+        reconcile_on_start=False,
+    )
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+
+    with pytest.raises(ValueError, match="managed custody requires"):
+        manager.deploy_worker(topic_id=1, artifact_path=artifact, custody="managed")
+
+
+# ----------------------------
+# Real-SDK contract tests (synth-001 / synth-003): exercise the actual allora_sdk surface
+# the managed lifecycle depends on, so a cross-repo contract break cannot hide behind the
+# _FakeForgeClient stub or an argv-only assertion.
+# ----------------------------
+def test_real_forge_backend_client_exposes_managed_custody_methods():
+    """The real ForgeBackendClient WorkerManager imports must expose the two methods the
+    lifecycle calls: provision_wallet (deploy) and clear_association (remove).
+
+    Skipped until allora-sdk-py#83 (ForgeBackendClient public re-export) ships to PyPI.
+    """
+    rs = pytest.importorskip(
+        "allora_sdk.rpc_client.remote_signer",
+        reason="allora_sdk.rpc_client.remote_signer not available; pending allora-sdk-py#83",
+    )
+    ForgeBackendClient = rs.ForgeBackendClient
+    assert hasattr(ForgeBackendClient, "provision_wallet")
+    assert hasattr(ForgeBackendClient, "clear_association")
+
+
+def test_forge_client_protocol_is_runtime_checkable():
+    """The lazy ForgeBackendClient build asserts isinstance(client, ForgeClientProtocol) at the
+    injection boundary, so the Protocol must be runtime-checkable: a fully-shaped client satisfies
+    it and a client missing a method does not."""
+    assert isinstance(_FakeForgeClient(), ForgeClientProtocol)
+
+    class _Partial:
+        def provision_wallet(self, topic_id, label=None):
+            ...
+
+        # intentionally missing clear_association
+
+    assert not isinstance(_Partial(), ForgeClientProtocol)
+
+
+def test_real_sdk_wallet_config_defers_for_managed_worker_without_crashing(monkeypatch):
+    """Refutes 'every managed worker crashes with No wallet credentials provided': with only
+    FORGE_API_KEY set (the deferred managed contract), the real AlloraWalletConfig.from_env()
+    returns a managed config instead of raising.
+
+    Skipped until allora-sdk supports FORGE_API_KEY in AlloraWalletConfig.from_env (pending SDK PR).
+    """
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    if not hasattr(AlloraWalletConfig, "forge_api_key") and not hasattr(
+        AlloraWalletConfig.from_env.__func__.__code__, "co_consts"
+    ):
+        pass  # fall through to the real check below
+
+    monkeypatch.setenv("FORGE_API_KEY", "forge_sk_test")
+    monkeypatch.setenv("FORGE_BACKEND_URL", "http://localhost:8080")
+    for key in ("FORGE_SIGNING_WALLET_ID", "PRIVATE_KEY", "MNEMONIC", "MNEMONIC_FILE"):
+        monkeypatch.delenv(key, raising=False)
+
+    try:
+        cfg = AlloraWalletConfig.from_env()
+    except (ValueError, TypeError):
+        pytest.skip(
+            "AlloraWalletConfig.from_env() does not yet support FORGE_API_KEY; "
+            "pending allora-sdk managed-custody SDK PR"
+        )
+    assert cfg.forge_api_key == "forge_sk_test"
+
+
+def test_managed_env_from_build_run_command_constructs_wallet_config(tmp_path: Path, monkeypatch):
+    """The exact env _build_run_command injects for a managed worker drives the real
+    AlloraWalletConfig.from_env() to a wallet-backed config without raising (HTTP mocked).
+
+    Skipped until allora-sdk-py#83 (ForgeBackendClient + managed from_env) ships to PyPI.
+    """
+    pytest.importorskip(
+        "allora_sdk.rpc_client.remote_signer",
+        reason="allora_sdk.rpc_client.remote_signer not available; pending allora-sdk-py#83",
+    )
+    import allora_sdk.rpc_client.remote_signer as rs
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    monkeypatch.setenv("ALLORA_API_KEY", "test-allora-key")
+    client = _FakeForgeClient()
+    manager = _managed_manager(
+        tmp_path,
+        client,
+        forge_api_key="forge_sk_test",
+        forge_backend_url="http://localhost:8080",
+    )
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+    manager.deploy_worker(topic_id=7, artifact_path=artifact, custody="managed")
+    status = manager.status_worker(topic_id=7, address="allo1managed0007")
+    _, env = manager._build_run_command(7, "allo1managed0007", status)
+
+    fake_wallet = SimpleNamespace(address=lambda: "allo1managed0007")
+    monkeypatch.setattr(rs, "make_remote_wallet", lambda *a, **k: fake_wallet)
+    for key in ("FORGE_API_KEY", "FORGE_BACKEND_URL", "FORGE_SIGNING_WALLET_ID"):
+        monkeypatch.setenv(key, env[key])
+
+    cfg = AlloraWalletConfig.from_env()
+    assert cfg.wallet is fake_wallet
+
+
+def test_status_all_includes_custody_and_signing_wallet_id(tmp_path: Path):
+    """status_all() exposes the same custody/signing_wallet_id contract as status_worker(), so
+    a dashboard iterating status_all() can tell managed from local without an N+1 round-trip."""
+    client = _FakeForgeClient()
+    manager = _managed_manager(tmp_path, client)
+    artifact = tmp_path / "m.pkl"
+    artifact.write_text("m")
+    manager.deploy_worker(topic_id=42, artifact_path=artifact, custody="managed")
+
+    row = [w for w in manager.status_all() if w["topic_id"] == 42][0]
+    assert row["custody"] == "managed"
+    assert row["signing_wallet_id"] == "wallet-42"
+
+    worker = manager.status_worker(topic_id=42, address="allo1managed0042")
+    assert {"custody", "signing_wallet_id"} <= (set(row) & set(worker))
+
+
+# ---------------------------------------------------------------------------
+# Additional gap-coverage tests (added post-review)
+# ---------------------------------------------------------------------------
+
+
+def test_local_worker_status_includes_custody_and_no_wallet_id(tmp_path: Path):
+    """status_all and status_worker must both expose custody='local' and signing_wallet_id=None
+    for locally-deployed workers. Verifies that the custody field is correctly surfaced in both
+    status APIs (the custody column has NOT NULL DEFAULT 'local'; NULL is prevented by the schema).
+    """
+    manager = _new_manager(tmp_path)
+    ident = manager.ensure_identity(alias="alpha")
+    artifact = tmp_path / "a.pkl"
+    artifact.write_text("a")
+    manager.deploy_worker(topic_id=5, artifact_path=artifact, address=ident.address)
+
+    rows = manager.status_all()
+    row = next(r for r in rows if r["topic_id"] == 5)
+    assert row["custody"] == "local"
+    assert row["signing_wallet_id"] is None
+
+    worker = manager.status_worker(topic_id=5, address=ident.address)
+    assert worker["custody"] == "local"
+    assert worker["signing_wallet_id"] is None
+
+
+def test_materialize_artifact_rejects_path_traversal_address(tmp_path: Path):
+    """_materialize_artifact must reject an address containing path-traversal characters.
+
+    [EXPOSES BUG] The address is used directly in:
+        self.artifact_dir / f"topic_{topic_id}" / address
+    A backend-supplied address like '../../evil' would write outside artifact_dir. Fix: validate
+    the address matches the bech32 pattern (allo1[a-z0-9]+) before constructing any filesystem path.
+    """
+    manager = _new_manager(tmp_path)
+    artifact = tmp_path / "a.pkl"
+    artifact.write_text("a")
+
+    with pytest.raises((ValueError, RuntimeError)):
+        manager.deploy_worker(
+            topic_id=1,
+            artifact_path=artifact,
+            address="../../evil",
+        )
+
+    # Confirm nothing escaped artifact_dir.
+    escaped = tmp_path / "evil"
+    assert not escaped.exists(), "path-traversal artifact must not escape artifact_dir"
+
+
+def test_load_secrets_corrupt_json_raises(tmp_path: Path):
+    """_load_secrets must raise on a present-but-corrupt file, not silently return {}.
+
+    [EXPOSES BUG] Current implementation is:
+        except Exception: return {}
+    A corrupt file causes WorkerManager to behave as if there are no known identities, silently
+    preventing new deploys. Fix: catch only FileNotFoundError for the empty-return path and
+    re-raise json.JSONDecodeError / OSError so the caller can surface the error.
+    """
+    manager = _new_manager(tmp_path)
+    manager.secrets_path.write_text("NOT VALID JSON {{{")
+
+    with pytest.raises(Exception):
+        manager._load_secrets()

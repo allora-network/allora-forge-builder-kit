@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -14,11 +15,26 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional, Any
+from typing import Any, Callable, Literal, Protocol, runtime_checkable
 
 from .worker_monitor import MONITOR_TARGETS_DDL
 
 logger = logging.getLogger(__name__)
+
+# Wallet custody discriminant: 'local' (self-custodial key file on disk) or 'managed' (Privy
+# wallet provisioned by the Forge backend, keyed by signing_wallet_id). A Literal gives the
+# fixed two-value set type-checker coverage and IDE completion while staying a plain str on the
+# wire and in SQLite.
+# # TODO: the `if custody == 'managed'` branches threaded through deploy_worker, _build_run_command,
+# remove_worker, start_worker, status_worker/status_all could collapse into a CustodyStrategy
+# Protocol (provision_address / build_subprocess_env / release / validate_deploy_inputs). Deferred
+# as YAGNI with only two modes — extract when a third custody mode lands.
+CustodyMode = Literal["local", "managed"]
+
+# Outcome of a deploy_worker call. The domain is fixed and small, so a Literal (like CustodyMode)
+# gives the type-checker coverage that catches a typo such as "replace" and documents the contract
+# callers branch on (e.g. firing downstream jobs only on "created"/"replaced").
+DeployAction = Literal["created", "reused", "replaced"]
 
 
 @dataclass(frozen=True)
@@ -30,12 +46,16 @@ class Identity:
 @dataclass
 class WorkerSpec:
     topic_id: int
-    topic_desc: Optional[str]
+    topic_desc: str | None
     address: str
     artifact_path: Path
     identity_ref: str
     enabled: bool = True
     reject_zero: bool = False
+    # custody: "local" (self-custodial key file on disk) or "managed" (Privy-managed
+    # wallet provisioned by the Forge backend; signing_wallet_id is the backend wallet id).
+    custody: CustodyMode = "local"
+    signing_wallet_id: str | None = None
 
 
 @dataclass
@@ -43,8 +63,40 @@ class DeployResult:
     topic_id: int
     address_assigned: str
     artifact_path: str
-    action: str  # created|reused|replaced
+    action: DeployAction
     message: str
+
+
+class ProvisionedWallet(Protocol):
+    """Structural view of a Forge-provisioned wallet (the SDK's ``SigningWalletInfo``): the
+    non-secret id + address the managed lifecycle reads back after provisioning."""
+
+    id: str
+    address: str
+
+
+@runtime_checkable
+class ForgeClientProtocol(Protocol):
+    """Contract for the Forge backend client used by managed custody.
+
+    Implemented by ``allora_sdk``'s ``ForgeBackendClient`` and stubbed in tests. Captures only the
+    two calls :class:`WorkerManager` makes so local-custody installs need not import the SDK and the
+    injected client is checked at the boundary instead of being typed as ``Any``. ``@runtime_checkable``
+    lets the lazy build assert the SDK client satisfies this contract at the injection boundary.
+
+    Note: allora-sdk-py owns the canonical contract; this is a local mirror. # TODO: move this
+    Protocol (and ``ProvisionedWallet``) into allora-sdk-py's ``rpc_client`` package, re-export it,
+    and import rather than redeclare it here, so drift is caught at the SDK boundary, not only at the
+    first managed deploy (cross-repo follow-up).
+    """
+
+    def provision_wallet(self, topic_id: int, label: str | None = None) -> ProvisionedWallet:
+        """Idempotently get-or-create the managed wallet bound to ``topic_id``."""
+        ...
+
+    def clear_association(self, wallet_id: str) -> None:
+        """Release the wallet's (user, topic) binding on the backend."""
+        ...
 
 
 class WorkerManager:
@@ -57,16 +109,19 @@ class WorkerManager:
         self,
         db_path: str | Path = "worker_state.db",
         secrets_path: str | Path = "worker_secrets.json",
-        identity_creator: Optional[Callable[[], tuple[str, str, str]]] = None,
-        monitor: Optional[Any] = None,
+        identity_creator: Callable[[], tuple[str, str, str]] | None = None,
+        monitor: Any | None = None,
         auto_monitor_sync: bool = True,
-        topic_desc_resolver: Optional[Callable[[int], Optional[str]]] = None,
+        topic_desc_resolver: Callable[[int], str | None] | None = None,
         runtime_log_dir: str | Path = "worker_logs",
         artifact_dir: str | Path = "managed_artifacts",
         key_dir: str | Path = "worker_keys",
         network: str = "testnet",
         no_faucet: bool = False,
         reconcile_on_start: bool = True,
+        forge_api_key: str | None = None,
+        forge_backend_url: str | None = None,
+        forge_client: ForgeClientProtocol | None = None,
     ):
         """Initialise the worker manager.
 
@@ -92,6 +147,13 @@ class WorkerManager:
                 :meth:`reconcile` during construction, which spawns
                 subprocesses for every enabled worker.  Set to *False* for
                 unit tests or when deferred startup is desired.
+            forge_api_key: Forge API key (``forge_sk_…``) used to provision /
+                release managed (Privy) wallets. Defaults to ``$FORGE_API_KEY``.
+            forge_backend_url: Forge backend base URL for managed custody.
+                Defaults to ``$FORGE_BACKEND_URL``.
+            forge_client: Pre-built Forge backend client (must expose
+                ``provision_wallet`` and ``clear_association``). Injected in tests;
+                in production it is built lazily from the api key + url.
         """
         self.db_path = Path(db_path)
         self.secrets_path = Path(secrets_path)
@@ -100,18 +162,79 @@ class WorkerManager:
         self._auto_monitor_sync = auto_monitor_sync
         self._topic_desc_resolver = topic_desc_resolver or self._build_default_topic_desc_resolver()
         self.runtime_log_dir = Path(runtime_log_dir)
-        self.runtime_log_dir.mkdir(parents=True, exist_ok=True)
+        self.runtime_log_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.artifact_dir = Path(artifact_dir)
-        self.artifact_dir.mkdir(parents=True, exist_ok=True)
+        self.artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.key_dir = Path(key_dir)
-        self.key_dir.mkdir(parents=True, exist_ok=True)
+        self.key_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._network = network
         self._no_faucet = no_faucet
+        # Strip and coerce empty/whitespace-only to None: _build_run_command's truthiness guard
+        # otherwise passes a whitespace-only value, spawning a subprocess whose worker_runtime
+        # strict .strip() check fails immediately — after the DB row was already marked 'running'.
+        self._forge_api_key = (forge_api_key or os.environ.get("FORGE_API_KEY") or "").strip() or None
+        self._forge_backend_url = (forge_backend_url or os.environ.get("FORGE_BACKEND_URL") or "").strip() or None
+        self._forge_client_cache = forge_client
         self._lock = threading.RLock()
+        # Bounds concurrent in-flight clear-association daemon threads (see _release_managed_binding):
+        # a degraded backend makes each timed-out teardown leave a thread blocked on the SDK call, so
+        # without a cap a batch teardown would accumulate unbounded stuck threads.
+        self._cleanup_sem = threading.BoundedSemaphore(8)
+        # Same cap for in-flight provision daemon threads (see _provision_wallet_bounded). Kept
+        # separate from _cleanup_sem so teardown pressure can't fail deploys and vice-versa.
+        self._provision_sem = threading.BoundedSemaphore(8)
         self._runners: dict[tuple[int, str], dict] = {}
         self._init_db()
         if reconcile_on_start:
             self.reconcile()
+
+    # ----------------------------
+    # Managed custody (Privy via Forge backend)
+    # ----------------------------
+    def _forge_client(self) -> ForgeClientProtocol:
+        """Return the Forge backend client for managed custody, building it lazily.
+
+        Raises ``ValueError`` if the api key / backend url are missing, so a misconfigured
+        managed deploy fails loudly instead of silently falling back to local custody.
+        """
+        # Fast path: an already-built (or test-injected) client needs no lock.
+        if self._forge_client_cache is not None:
+            return self._forge_client_cache
+        if not self._forge_api_key or not self._forge_backend_url:
+            raise ValueError(
+                "managed custody requires a Forge API key and backend URL; set "
+                "$FORGE_API_KEY and $FORGE_BACKEND_URL or pass forge_api_key/forge_backend_url"
+            )
+        # Imported lazily: local-custody installs need not import the SDK signing client. Use the
+        # public re-export (allora_sdk.ForgeBackendClient, added in allora-sdk-py#83) rather than the
+        # internal allora_sdk.rpc_client.remote_signer path, so an SDK refactor moving the class
+        # can't silently break this import.
+        try:
+            from allora_sdk import ForgeBackendClient
+        except ImportError as e:
+            raise ValueError(
+                "managed custody requires the 'allora-sdk' package "
+                "(allora_sdk.ForgeBackendClient); install it to deploy "
+                "managed workers"
+            ) from e
+
+        # Build the client (SDK import + requests.Session/TLS setup) outside the lock so it does
+        # not serialize unrelated manager operations that share this RLock. Two threads may race
+        # to build; the double-checked assignment under the lock keeps the first and drops the
+        # loser (its Session is released on GC).
+        client = ForgeBackendClient(self._forge_backend_url, self._forge_api_key)
+        # Enforce the structural contract at the injection boundary, not only in tests: if the SDK
+        # renames or drops provision_wallet / clear_association, fail loudly here instead of at the
+        # first managed deploy/teardown call.
+        if not isinstance(client, ForgeClientProtocol):
+            raise TypeError(
+                "allora_sdk ForgeBackendClient does not satisfy ForgeClientProtocol "
+                "(expected provision_wallet + clear_association); SDK contract drift"
+            )
+        with self._lock:
+            if self._forge_client_cache is None:
+                self._forge_client_cache = client
+            return self._forge_client_cache
 
     # ----------------------------
     # Identity handling
@@ -152,8 +275,8 @@ class WorkerManager:
             try:
                 conn.execute(
                     """
-                    INSERT INTO workers(topic_id, topic_desc, address, artifact_path, identity_ref, enabled, status, reject_zero, deployed_at, updated_at)
-                    VALUES(?, ?, ?, ?, ?, ?, 'stopped', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    INSERT INTO workers(topic_id, topic_desc, address, artifact_path, identity_ref, enabled, status, reject_zero, custody, signing_wallet_id, deployed_at, updated_at)
+                    VALUES(?, ?, ?, ?, ?, ?, 'stopped', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     """,
                     (
                         spec.topic_id,
@@ -163,6 +286,8 @@ class WorkerManager:
                         spec.identity_ref,
                         1 if spec.enabled else 0,
                         1 if spec.reject_zero else 0,
+                        spec.custody,
+                        spec.signing_wallet_id,
                     ),
                 )
                 conn.commit()
@@ -173,20 +298,168 @@ class WorkerManager:
         self._monitor_register(spec.topic_id, spec.address, deployment_id=deployment_id)
 
     def remove_worker(self, topic_id: int, address: str, force: bool = False) -> None:
-        if force:
-            self.stop_worker(topic_id, address)
+        custody, signing_wallet_id = self._get_custody(topic_id, address)
+        # Stop the running process before tearing down local state and the backend binding.
+        # Managed custody always stops first (best-effort): a still-running subprocess would
+        # otherwise keep submitting with a wallet we are about to unbind server-side, and a later
+        # redeploy could provision a second wallet for the same topic — two active workers. Local
+        # custody keeps its force-gated stop. The stop is best-effort so a dead/unknown process
+        # never blocks decommission.
+        if force or custody == "managed":
+            try:
+                self.stop_worker(topic_id, address)
+            except Exception as e:  # noqa: BLE001 - a dead/unknown process must not block removal
+                logger.warning(
+                    "stop before remove failed for topic=%s address=%s: %s; removing anyway",
+                    topic_id,
+                    address,
+                    e,
+                )
         self._archive_active_deployment(topic_id, address)
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("DELETE FROM workers WHERE topic_id=? AND address=?", (topic_id, address))
             conn.commit()
         self._monitor_disable(topic_id, address)
+        # Managed custody: release the (user, topic) binding on the backend so the topic slot is
+        # freed. Best-effort — the worker is already gone locally, and the backend get-or-create is
+        # idempotent, so a stale binding is simply reused on the next deploy rather than leaking.
+        if custody == "managed" and signing_wallet_id:
+            self._release_managed_binding(signing_wallet_id, topic_id)
 
-    def status_worker(self, topic_id: int, address: str) -> dict:
+    def _release_managed_binding(self, signing_wallet_id: str, topic_id: int, timeout: float = 5.0) -> None:
+        """Best-effort release of a managed wallet's (user, topic) binding on the Forge backend.
+
+        Runs ``clear_association`` on a bounded daemon thread and waits at most ``timeout`` seconds.
+        The SDK call takes no per-request timeout, so without this bound a degraded backend would
+        stall the caller for the full SDK timeout and serialize batch teardowns one RTT at a time —
+        even though the local state is already gone. The backend get-or-create is idempotent, so a
+        binding left unreleased here is reused on the next deploy rather than leaking. Never raises:
+        decommission cleanup must neither block on nor be aborted by the backend.
+
+        When ``join`` below times out the daemon thread keeps running on the degraded backend, so a
+        ``BoundedSemaphore`` caps how many such threads can be in flight at once. If the cap is
+        reached the backend release is skipped (still safe — the idempotent get-or-create reuses the
+        binding on the next deploy) rather than spawning yet another stuck thread. Daemon threads
+        keep process exit non-blocking.
+
+        The SDK call is not cancellable, so under a *sustained* degraded backend the cap can stay
+        saturated for the rest of the process; recovery is a process restart (no binding leaks — the
+        idempotent get-or-create reconstitutes any skipped release on the next deploy). # TODO: pass
+        a shorter per-request timeout into ForgeBackendClient once allora-sdk-py exposes one, so a
+        stuck clear-association frees its slot promptly (cross-repo follow-up).
+        """
+        result: dict[str, BaseException] = {}
+
+        if not self._cleanup_sem.acquire(blocking=False):
+            logger.warning(
+                "too many in-flight clear-association threads; skipping backend release for managed "
+                "wallet %s (topic %s) — the stale binding is reused on the next deploy",
+                signing_wallet_id, topic_id,
+            )
+            return
+
+        def _clear() -> None:
+            try:
+                self._forge_client().clear_association(signing_wallet_id)
+            except BaseException as e:  # noqa: BLE001 - surfaced via result; must not escape the thread
+                result["error"] = e
+            finally:
+                self._cleanup_sem.release()
+
+        worker = threading.Thread(
+            target=_clear, name=f"clear-association-{signing_wallet_id}", daemon=True
+        )
+        try:
+            worker.start()
+        except BaseException:
+            # Thread.start() can raise (e.g. "can't start new thread" under resource exhaustion)
+            # before _clear runs, so the finally that releases the slot never fires; release here
+            # or the cap silently shrinks until all backend releases are disabled for the process.
+            self._cleanup_sem.release()
+            logger.warning(
+                "failed to start clear-association thread for managed wallet %s (topic %s); "
+                "released the cleanup slot, stale binding is reused on the next deploy",
+                signing_wallet_id, topic_id,
+            )
+            return
+        worker.join(timeout)
+        if worker.is_alive():
+            logger.warning(
+                "clear-association for managed wallet %s (topic %s) did not finish within %.0fs; "
+                "removed locally anyway (stale binding is reused on the next deploy)",
+                signing_wallet_id, topic_id, timeout,
+            )
+            return
+        error = result.get("error")
+        if error is not None:
+            logger.warning(
+                "clear-association failed for managed wallet %s (topic %s): %s; removed locally anyway",
+                signing_wallet_id, topic_id, error,
+            )
+            return
+        logger.info("released managed wallet %s topic binding (topic %s)", signing_wallet_id, topic_id)
+
+    def _provision_wallet_bounded(
+        self, client: ForgeClientProtocol, topic_id: int, label: str, timeout: float = 30.0
+    ) -> ProvisionedWallet:
+        """Run the backend get-or-create on a bounded daemon thread; raise on timeout.
+
+        The SDK's ``provision_wallet`` exposes no per-request timeout, so without this bound a
+        degraded backend that accepts the connection but never responds would stall ``deploy_worker``
+        indefinitely — and in a batch/fleet bring-up hang the whole batch at the first managed
+        deploy. Unlike the teardown path (:meth:`_release_managed_binding`, which swallows), a deploy
+        must not proceed without a wallet, so a timeout raises ``TimeoutError``. A background thread
+        that completes after the timeout only leaves an idempotent get-or-create binding the next
+        deploy reuses.
+
+        A ``BoundedSemaphore`` caps how many such timed-out-but-still-running threads can accumulate
+        against a degraded backend; once the cap is reached a further deploy raises ``TimeoutError``
+        rather than spawning yet another stuck thread.
+        """
+        result: dict[str, Any] = {}
+
+        if not self._provision_sem.acquire(blocking=False):
+            raise TimeoutError(
+                f"too many in-flight managed-wallet provisions; refusing to provision topic "
+                f"{topic_id} (the Forge backend may be degraded)"
+            )
+
+        def _provision() -> None:
+            try:
+                result["wallet"] = client.provision_wallet(topic_id, label=label)
+            except BaseException as e:  # noqa: BLE001 - surfaced via result; must not escape the thread
+                result["error"] = e
+            finally:
+                self._provision_sem.release()
+
+        worker = threading.Thread(
+            target=_provision, name=f"provision-wallet-topic-{topic_id}", daemon=True
+        )
+        try:
+            worker.start()
+        except BaseException:
+            # Thread.start() can raise (e.g. "can't start new thread" under resource exhaustion)
+            # before _provision runs, so release the slot here or it would leak permanently.
+            self._provision_sem.release()
+            raise
+        worker.join(timeout)
+        if worker.is_alive():
+            raise TimeoutError(
+                f"provisioning a managed wallet for topic {topic_id} did not complete within "
+                f"{timeout:.0f}s; the Forge backend may be degraded"
+            )
+        error = result.get("error")
+        if error is not None:
+            raise error
+        return result["wallet"]
+
+    def status_worker(self, topic_id: int, address: str) -> dict[str, Any]:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
                 """
                 SELECT topic_id, COALESCE(topic_desc, ''), address, artifact_path, identity_ref, enabled, status,
-                       COALESCE(last_error, ''), deployed_at, updated_at, last_pid, last_started_at, last_stopped_at, last_exit_code
+                       COALESCE(last_error, ''), deployed_at, updated_at, last_pid, last_started_at, last_stopped_at, last_exit_code,
+                       COALESCE(custody, 'local'), signing_wallet_id, reject_zero
                 FROM workers WHERE topic_id=? AND address=?
                 """,
                 (topic_id, address),
@@ -208,15 +481,18 @@ class WorkerManager:
             "last_started_at": row[11],
             "last_stopped_at": row[12],
             "last_exit_code": row[13],
+            "custody": row[14],
+            "signing_wallet_id": row[15],
+            "reject_zero": bool(row[16]) if row[16] is not None else False,
         }
 
-    def status_all(self, include_desc: bool = True) -> list[dict]:
+    def status_all(self, include_desc: bool = True) -> list[dict[str, Any]]:
         with sqlite3.connect(self.db_path) as conn:
             rows = conn.execute(
                 """
                 SELECT topic_id, COALESCE(topic_desc, ''), address, artifact_path, identity_ref, enabled, status,
                        COALESCE(last_error, ''), deployed_at, updated_at, last_pid, last_started_at, last_stopped_at, last_exit_code,
-                       reject_zero
+                       reject_zero, COALESCE(custody, 'local'), signing_wallet_id
                 FROM workers ORDER BY topic_id, address
                 """
             ).fetchall()
@@ -237,6 +513,8 @@ class WorkerManager:
                 "last_stopped_at": row[12],
                 "last_exit_code": row[13],
                 "reject_zero": bool(row[14]) if row[14] is not None else False,
+                "custody": row[15],
+                "signing_wallet_id": row[16],
             }
             if include_desc:
                 item["topic_desc"] = row[1]
@@ -256,7 +534,7 @@ class WorkerManager:
         except Exception:
             return []
 
-    def status_all_with_logs(self, include_desc: bool = True, tail_lines: int = 20) -> list[dict]:
+    def status_all_with_logs(self, include_desc: bool = True, tail_lines: int = 20) -> list[dict[str, Any]]:
         rows = self.status_all(include_desc=include_desc)
         for r in rows:
             r["log_tail"] = self.get_worker_log_tail(r["topic_id"], r["address"], lines=tail_lines)
@@ -275,8 +553,40 @@ class WorkerManager:
         topic_desc: str | None = None,
         replace: bool = False,
         mode: str = "auto",
-        reject_zero: bool = False,
+        reject_zero: bool | None = None,
+        custody: CustodyMode = "local",
     ) -> DeployResult:
+        """Deploy (or redeploy) a worker for ``topic_id`` from ``artifact_path``.
+
+        Args:
+            topic_id: Allora topic the worker submits to.
+            artifact_path: Pickled inference artifact to deploy.
+            address: Explicit local-custody address to bind; rejected under ``custody='managed'``.
+            mnemonic: Mnemonic to import a new local identity (local custody only).
+            identity_alias: Alias for a newly-imported local identity (local custody only).
+            topic_desc: Optional human-readable topic description override.
+            replace: When *True*, rotate the artifact on an existing worker instead of
+                conflicting / auto-assigning.
+            mode: ``'auto'`` (allocate an alternate address on conflict) or ``'strict'``
+                (raise if a worker already exists).
+            reject_zero: ``None`` preserves the row's existing flag on redeploy; ``False`` / ``True``
+                sets it explicitly. New workers default to ``False`` (coerced at the WorkerSpec
+                create sites below).
+            custody: ``'local'`` (self-custodial key file) or ``'managed'`` (Forge-provisioned
+                Privy wallet bound to the topic).
+
+        Returns:
+            A :class:`DeployResult` describing the assigned address and the action taken.
+
+        Note:
+            Idempotent artifact reuse (``action='reused'`` on a byte-identical redeploy without
+            ``replace``) is a **managed-custody** guarantee, resting on the one-wallet-per-topic
+            invariant. **Local** custody is intentionally asymmetric: a redeploy without ``replace``
+            either allocates a new address (``mode='auto'``) or raises (``mode='strict'``), and
+            ``replace=True`` always rotates — it never short-circuits to ``reused`` on a matching
+            hash. The hash infra (``_artifact_sha256`` / ``artifact_hash``) is general-purpose, but
+            the reuse logic is deliberately managed-only.
+        """
         artifact = Path(artifact_path)
         if not artifact.exists():
             raise FileNotFoundError(f"Artifact not found: {artifact}")
@@ -284,13 +594,32 @@ class WorkerManager:
 
         if mode not in {"auto", "strict"}:
             raise ValueError("mode must be 'auto' or 'strict'")
+        if custody not in {"local", "managed"}:
+            raise ValueError("custody must be 'local' or 'managed'")
+
+        # Managed custody: the address is not chosen locally — the backend get-or-creates a
+        # Privy wallet bound to (user, topic) and returns its address (ENGN-8646 / one-worker =
+        # one-topic). address/mnemonic/identity_alias are local-custody inputs; reject them
+        # loudly rather than silently dropping them — a silently-orphaned address or a leaked
+        # mnemonic is an operator footgun.
+        if custody == "managed":
+            local_only = [
+                name
+                for name, value in (("address", address), ("mnemonic", mnemonic), ("identity_alias", identity_alias))
+                if value is not None
+            ]
+            if local_only:
+                raise ValueError(
+                    f"custody='managed' does not accept local-custody inputs {local_only}; the "
+                    "backend provisions a topic-bound wallet and assigns the address"
+                )
+            return self._deploy_managed_worker(topic_id, artifact, topic_desc, replace, reject_zero)
 
         # Explicit address path
         if address:
             existing = self._worker_exists(topic_id, address)
             if existing and replace:
-                self._update_worker(topic_id, address, artifact, topic_desc)
-                current_artifact = Path(self.status_worker(topic_id, address)["artifact_path"])
+                current_artifact = self._update_worker(topic_id, address, artifact, topic_desc, reject_zero=reject_zero)
                 deployment_id = self._rotate_deployment(topic_id, address, current_artifact)
                 self._monitor_register(topic_id, address, deployment_id=deployment_id)
                 return DeployResult(
@@ -305,7 +634,7 @@ class WorkerManager:
                     raise ValueError(f"Worker already exists for topic={topic_id} address={address}")
                 # auto mode: allocate alternate identity/address
                 ident, _ = self._pick_or_create_identity_for_topic(topic_id)
-                spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias, reject_zero=reject_zero)
+                spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias, reject_zero=bool(reject_zero))
                 self.add_worker(spec)
                 return DeployResult(
                     topic_id=topic_id,
@@ -319,8 +648,8 @@ class WorkerManager:
                 )
 
             ident = self.ensure_identity(alias=identity_alias, address=address, mnemonic=mnemonic)
-            action = "reused" if self._address_has_other_topics(ident.address) else "created"
-            spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias, reject_zero=reject_zero)
+            action: DeployAction = "reused" if self._address_has_other_topics(ident.address) else "created"
+            spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias, reject_zero=bool(reject_zero))
             self.add_worker(spec)
             return DeployResult(
                 topic_id=topic_id,
@@ -332,8 +661,8 @@ class WorkerManager:
 
         # Auto address path: reuse free identity first, else create new
         ident, created = self._pick_or_create_identity_for_topic(topic_id)
-        action = "created" if created else "reused"
-        spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias, reject_zero=reject_zero)
+        action: DeployAction = "created" if created else "reused"
+        spec = WorkerSpec(topic_id, topic_desc, ident.address, artifact, ident.alias, reject_zero=bool(reject_zero))
         self.add_worker(spec)
         return DeployResult(
             topic_id=topic_id,
@@ -341,6 +670,136 @@ class WorkerManager:
             artifact_path=str(artifact),
             action=action,
             message=f"Deployed worker for topic {topic_id} with address {ident.address}",
+        )
+
+    def _deploy_managed_worker(
+        self,
+        topic_id: int,
+        artifact: Path,
+        topic_desc: str | None,
+        replace: bool,
+        reject_zero: bool | None,
+    ) -> DeployResult:
+        """Provision (idempotent get-or-create) a managed Privy wallet bound to ``topic_id`` and
+        register a managed worker against its backend-assigned address. One wallet per topic, so a
+        re-deploy targets the same wallet rather than allocating a new one.
+
+        Redeploys are hash-aware (synth-009): the new artifact's SHA-256 is compared against the
+        active deployment's recorded hash.
+
+        * identical hash, ``replace=False`` -> ``reused``: the running deployment already serves
+          byte-identical artifact, so the artifact is left in place (no rotation). The worker-row
+          metadata (reject_zero + the freshly-provisioned signing_wallet_id, and topic_desc) is
+          still re-synced so an idempotent re-run cannot leave the row pointing at a stale flag or
+          wallet binding.
+        * ``replace=True`` -> ``replaced``: the caller explicitly asked to rotate, so rotate the
+          artifact on the one-per-topic wallet even when it is byte-identical.
+        * different (or unknown) hash with ``replace=False`` -> ``ValueError``: a different
+          artifact is never silently swapped onto a running deployment, even in auto mode.
+
+        A legacy active deployment with no recorded hash is treated conservatively as "unknown":
+        without ``replace=True`` we cannot prove the artifact is unchanged, so we refuse rather
+        than risk overwriting a different running deployment.
+        """
+        client = self._forge_client()
+        # Prefer a resolved topic name (same source the rest of the registry uses) over the bare
+        # topic_id fallback so the backend wallet label is human-meaningful.
+        label = self._resolve_topic_desc(topic_id, topic_desc) or f"worker-topic-{topic_id}"
+        info = self._provision_wallet_bounded(client, topic_id, label)
+        if not getattr(info, "address", None) or not getattr(info, "id", None):
+            raise RuntimeError(
+                f"Forge backend returned a malformed wallet for topic {topic_id}: {info!r}"
+            )
+        address = info.address
+
+        if self._worker_exists(topic_id, address):
+            new_hash = self._artifact_sha256(artifact)
+            active_hash = self._get_active_deployment_hash(topic_id, address)
+            identical = active_hash is not None and active_hash == new_hash
+
+            # Idempotent re-run: identical hash, no replace -> keep the artifact, re-sync row metadata.
+            if identical and not replace:
+                self._sync_worker_metadata(
+                    topic_id, address, topic_desc, reject_zero=reject_zero, signing_wallet_id=info.id
+                )
+                return DeployResult(
+                    topic_id=topic_id,
+                    address_assigned=address,
+                    artifact_path=str(artifact),
+                    action="reused",
+                    message=f"Reused managed worker for topic {topic_id} (wallet {address}); artifact unchanged, metadata re-synced",
+                )
+
+            # synth-009: a different/unknown-hash artifact must not silently overwrite a running
+            # deployment; require explicit replace=True even in auto mode.
+            if not replace:
+                raise ValueError(
+                    f"Managed worker for topic {topic_id} (wallet {address}) already has an active "
+                    "deployment with a different (or unknown) artifact; pass replace=True to rotate it"
+                )
+
+            # Explicit replace (or different artifact): rotate, re-syncing reject_zero + wallet id.
+            current_artifact = self._update_worker(
+                topic_id, address, artifact, topic_desc, reject_zero=reject_zero, signing_wallet_id=info.id
+            )
+            # Reuse the hash already computed above: the materialized copy is byte-identical to the
+            # source, so this avoids a second full read of a large artifact on the replace path.
+            deployment_id = self._rotate_deployment(topic_id, address, current_artifact, artifact_hash=new_hash)
+            self._monitor_register(topic_id, address, deployment_id=deployment_id)
+            return DeployResult(
+                topic_id=topic_id,
+                address_assigned=address,
+                artifact_path=str(artifact),
+                action="replaced",
+                message=f"Replaced managed worker artifact for topic {topic_id} (wallet {address})",
+            )
+
+        # One wallet per topic (ENGN-8646): if a managed worker already exists for this topic at a
+        # DIFFERENT address — e.g. the backend rotated the Privy wallet via clear_association +
+        # re-provision — refuse rather than insert a second row that would silently violate the
+        # invariant (both rows could start and both monitor bindings go active). Remove the existing
+        # worker first if a rotation is intended.
+        existing_managed = self._get_managed_address_for_topic(topic_id)
+        if existing_managed is not None and existing_managed != address:
+            raise RuntimeError(
+                f"topic {topic_id} already has a managed worker at {existing_managed}, but the "
+                f"backend returned a different address {address}; refusing to create a second "
+                "managed worker for the same topic (one wallet per topic) — remove the existing "
+                "worker first if a wallet rotation is intended"
+            )
+
+        spec = WorkerSpec(
+            topic_id,
+            topic_desc,
+            address,
+            artifact,
+            # identity_ref is a local-identity alias keying the identities table for local custody;
+            # managed workers have no identities row, so use a sentinel rather than overloading it
+            # with the Privy wallet UUID. signing_wallet_id stays the canonical wallet identifier.
+            "managed",
+            reject_zero=bool(reject_zero),
+            custody="managed",
+            signing_wallet_id=info.id,
+        )
+        try:
+            self.add_worker(spec)
+        except BaseException:
+            # provision_wallet bound a Privy wallet to (user, topic) on the backend; if registering
+            # the local row failed (disk-full materialize, DB integrity, OSError) we'd leak that
+            # binding with no local row referencing it — remove_worker can't help because
+            # _get_custody returns ('local', None) for a missing row. Best-effort release it before
+            # re-raising, but only when no row was actually created so a partially-committed row is
+            # never orphaned. The backend get-or-create is idempotent, so a later deploy
+            # reconstitutes the binding cleanly.
+            if not self._worker_exists(topic_id, address):
+                self._release_managed_binding(info.id, topic_id)
+            raise
+        return DeployResult(
+            topic_id=topic_id,
+            address_assigned=address,
+            artifact_path=str(artifact),
+            action="created",
+            message=f"Provisioned managed wallet {address} for topic {topic_id}",
         )
 
     def export_payload_for_hosting(
@@ -388,15 +847,39 @@ class WorkerManager:
     # ----------------------------
     # Lifecycle (persistent managed process runner)
     # ----------------------------
-    def start_worker(self, topic_id: int, address: str) -> None:
-        status = self.status_worker(topic_id, address)
-        pid = status.get("last_pid")
-        if pid and self._is_pid_alive(pid):
-            self._set_worker_status(topic_id, address, status="running", last_error=None)
-            return
+    @staticmethod
+    def _allora_api_key_present() -> bool:
+        """True when a non-empty ALLORA_API_KEY is resolvable, mirroring worker_runtime._load_api_key.
 
-        log_path = self.runtime_log_dir / f"worker_{topic_id}_{address}.log"
-        log_f = open(log_path, "ab")
+        Checks the environment first, then the ``.allora_api_key`` file fallbacks the runtime reads.
+        A file that exists but is empty or whitespace-only is treated as absent: the subprocess
+        would resolve it to an empty key and fail at runtime, so accepting it here would defeat the
+        fail-before-running guarantee this precheck exists to provide.
+        """
+        if os.environ.get("ALLORA_API_KEY", "").strip():
+            return True
+        for p in ("notebooks/.allora_api_key", ".allora_api_key"):
+            try:
+                if Path(p).read_text().strip():
+                    return True
+            except OSError:
+                continue
+        return False
+
+
+    def _build_run_command(
+        self,
+        topic_id: int,
+        address: str,
+        status: dict[str, Any],
+    ) -> tuple[list[str], dict[str, str] | None]:
+        """Build the ``worker_runtime`` argv (and subprocess env) for a worker slot.
+
+        Local custody passes the on-disk key file via ``--mnemonic-file``. Managed custody passes
+        ``--custody managed`` and injects the Forge credentials into the env so the SDK provisions
+        and signs against the backend with no local key. Returns ``(argv, env)``; ``env`` is None
+        for local custody (inherit the parent environment unchanged).
+        """
         cmd = [
             sys.executable,
             "-m",
@@ -406,22 +889,90 @@ class WorkerManager:
             "--artifact",
             str(status["artifact_path"]),
         ]
-
-        key_file = self._get_key_file_for_address(address)
-        if not key_file:
-            log_f.close()
-            raise FileNotFoundError(
-                f"No key file found for address {address}. "
-                f"Check worker_secrets.json and worker_keys/ directory."
+        env: dict[str, str] | None = None
+        # ALLORA_API_KEY is required by the worker_runtime subprocess (faucet drips + topic
+        # queries). Pre-check it for both custody modes so a missing key fails loudly here —
+        # surfaced by start_worker/reconcile — instead of the subprocess raising
+        # "ALLORA_API_KEY not found" right after the DB row is marked 'running', defeating the
+        # same fail-before-running guarantee the Forge-credential prechecks provide.
+        if not self._allora_api_key_present():
+            raise ValueError(
+                f"worker topic={topic_id} address={address} requires ALLORA_API_KEY; set it in the "
+                "environment or create a .allora_api_key file before starting the worker"
             )
-        cmd.extend(["--mnemonic-file", str(key_file)])
+        if status.get("custody") == "managed":
+            # Precheck the managed credentials before spawning so a misconfigured worker fails
+            # loudly here (start_worker/reconcile surface this) instead of the subprocess exiting
+            # right after the DB row is marked 'running'.
+            if not self._forge_api_key or not self._forge_backend_url:
+                raise ValueError(
+                    f"managed worker topic={topic_id} address={address} requires a Forge API key "
+                    "and backend URL; set $FORGE_API_KEY and $FORGE_BACKEND_URL"
+                )
+            signing_wallet_id = status.get("signing_wallet_id")
+            if not signing_wallet_id:
+                raise ValueError(
+                    f"managed worker topic={topic_id} address={address} is missing signing_wallet_id; "
+                    "re-deploy with custody='managed' to provision the backend wallet"
+                )
+            cmd.extend(["--custody", "managed"])
+            env = os.environ.copy()
+            # Strip inherited local-key env vars before injecting the Forge credentials: the
+            # sibling SDK's AlloraWalletConfig.from_env() hard-raises when FORGE_API_KEY +
+            # FORGE_SIGNING_WALLET_ID coexist with any of these, so a parent shell / systemd unit
+            # that still exports a local key would otherwise crash every managed worker at startup.
+            for _local_key_var in ("PRIVATE_KEY", "MNEMONIC", "MNEMONIC_FILE"):
+                env.pop(_local_key_var, None)
+            env["FORGE_API_KEY"] = self._forge_api_key
+            env["FORGE_BACKEND_URL"] = self._forge_backend_url
+            # Pin the exact provisioned wallet (the DB row already stores it) so the worker signs
+            # with that wallet deterministically instead of re-deriving one via topic get-or-create.
+            env["FORGE_SIGNING_WALLET_ID"] = signing_wallet_id
+        else:
+            key_file = self._get_key_file_for_address(address)
+            if not key_file:
+                raise FileNotFoundError(
+                    f"No key file found for address {address}. "
+                    f"Check worker_secrets.json and worker_keys/ directory."
+                )
+            cmd.extend(["--mnemonic-file", str(key_file)])
         cmd.extend(["--network", self._network])
-
         if self._no_faucet:
             cmd.append("--no-faucet")
         if status.get("reject_zero"):
             cmd.append("--reject-zero")
-        proc = subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT, cwd=str(Path.cwd()))
+        return cmd, env
+
+    def start_worker(self, topic_id: int, address: str) -> None:
+        status = self.status_worker(topic_id, address)
+        pid = status.get("last_pid")
+        if pid and self._is_pid_alive(pid):
+            self._set_worker_status(topic_id, address, status="running", last_error=None)
+            return
+
+        # Build (and validate) the launch command before opening the log file. A managed worker
+        # that fails the credential/wallet precheck must not leave an empty
+        # worker_<topic>_<addr>.log behind — otherwise every reconcile over a persistent
+        # misconfiguration re-touches a silent empty file with no forensic value.
+        cmd, env = self._build_run_command(topic_id, address, status)
+
+        log_path = self.runtime_log_dir / f"worker_{topic_id}_{address}.log"
+        # Managed-custody workers carry FORGE_API_KEY in their env, so if the worker (or a
+        # transitive dependency) ever echoes it the secret lands in this log file. Create the
+        # log owner-only (0600) so it is not world-readable on a shared host, matching the
+        # secrets-file permissions. os.open's mode only applies on creation, so also chmod an
+        # already-existing log (best-effort) to tighten logs written before this change.
+        log_fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        log_f = os.fdopen(log_fd, "ab")
+        try:
+            os.chmod(log_path, 0o600)
+        except OSError as _chmod_err:
+            logger.warning("could not tighten permissions on %s: %s", log_path, _chmod_err)
+        try:
+            proc = subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT, cwd=str(Path.cwd()), env=env)
+        except Exception:
+            log_f.close()
+            raise
         key = (topic_id, address)
         self._runners[key] = {"proc": proc, "log": log_f}
 
@@ -544,7 +1095,7 @@ class WorkerManager:
             conn.commit()
         return {"updated": updated}
 
-    def attach_monitor(self, monitor: Any, backfill_since: Optional[str] = None, sync_now: bool = True) -> dict:
+    def attach_monitor(self, monitor: Any, backfill_since: str | None = None, sync_now: bool = True) -> dict:
         """Attach monitor and optionally bootstrap existing workers into monitoring.
 
         Args:
@@ -573,8 +1124,8 @@ class WorkerManager:
     # Internal helpers
     # ----------------------------
     def _init_db(self) -> None:
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.secrets_path.parent.mkdir(parents=True, exist_ok=True)
+        self.db_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.secrets_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
@@ -605,6 +1156,8 @@ class WorkerManager:
                     last_stopped_at TEXT,
                     last_exit_code INTEGER,
                     reject_zero INTEGER NOT NULL DEFAULT 0,
+                    custody TEXT NOT NULL DEFAULT 'local',
+                    signing_wallet_id TEXT,
                     UNIQUE(topic_id, address)
                 )
                 """
@@ -638,6 +1191,10 @@ class WorkerManager:
                 conn.execute("ALTER TABLE workers ADD COLUMN last_exit_code INTEGER")
             if "reject_zero" not in cols:
                 conn.execute("ALTER TABLE workers ADD COLUMN reject_zero INTEGER NOT NULL DEFAULT 0")
+            if "custody" not in cols:
+                conn.execute("ALTER TABLE workers ADD COLUMN custody TEXT NOT NULL DEFAULT 'local'")
+            if "signing_wallet_id" not in cols:
+                conn.execute("ALTER TABLE workers ADD COLUMN signing_wallet_id TEXT")
             conn.commit()
         if not self.secrets_path.exists():
             self.secrets_path.write_text("{}")
@@ -684,7 +1241,7 @@ class WorkerManager:
             raise ValueError("Either mnemonic or source_file must be provided")
         return dest
 
-    def _get_key_file_for_address(self, address: str) -> Optional[Path]:
+    def _get_key_file_for_address(self, address: str) -> Path | None:
         secrets = self._load_secrets()
         for entry in secrets.values():
             if isinstance(entry, dict) and entry.get("address") == address:
@@ -716,8 +1273,11 @@ class WorkerManager:
     def _load_secrets(self) -> dict:
         try:
             return json.loads(self.secrets_path.read_text())
-        except Exception:
+        except FileNotFoundError:
             return {}
+        # json.JSONDecodeError / OSError / UnicodeDecodeError: present-but-corrupt is distinct
+        # from absent — re-raise so callers see a real error instead of silently treating all
+        # known identities as gone (which would block new deploys and lose key associations).
 
     def _save_secrets(self, data: dict) -> None:
         content = json.dumps(data, indent=2).encode()
@@ -738,7 +1298,7 @@ class WorkerManager:
         alias = f"identity_{uuid.uuid4().hex[:12]}"
         return (alias, address, mnemonic)
 
-    def _get_identity_by_address(self, address: str) -> Optional[dict]:
+    def _get_identity_by_address(self, address: str) -> dict | None:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute("SELECT alias, address FROM identities WHERE address=?", (address,)).fetchone()
         if not row:
@@ -755,6 +1315,26 @@ class WorkerManager:
             row = conn.execute("SELECT 1 FROM workers WHERE topic_id=? AND address=?", (topic_id, address)).fetchone()
         return row is not None
 
+    def _get_managed_address_for_topic(self, topic_id: int) -> str | None:
+        """Return the address of an existing managed worker for ``topic_id``, else None."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT address FROM workers WHERE topic_id=? AND custody='managed' LIMIT 1",
+                (topic_id,),
+            ).fetchone()
+        return row[0] if row else None
+
+    def _get_custody(self, topic_id: int, address: str) -> tuple[CustodyMode, str | None]:
+        """Return ``(custody, signing_wallet_id)`` for a worker; ``("local", None)`` if absent."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT custody, signing_wallet_id FROM workers WHERE topic_id=? AND address=?",
+                (topic_id, address),
+            ).fetchone()
+        if not row:
+            return ("local", None)
+        return (row[0] or "local", row[1])
+
     def _address_has_other_topics(self, address: str) -> bool:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute("SELECT COUNT(1) FROM workers WHERE address=?", (address,)).fetchone()
@@ -767,14 +1347,45 @@ class WorkerManager:
                 return ident, False
         return self.ensure_identity(), True
 
+    @staticmethod
+    def _assert_safe_address(address: str) -> None:
+        """Raise ValueError if address contains characters unsafe for use in filesystem paths.
+
+        Allows alphanumerics, underscores, and hyphens — all safe as path components. Rejects
+        slashes, dots, spaces, and control characters that would allow a backend-supplied or
+        user-supplied address to traverse out of artifact_dir / runtime_log_dir.
+        """
+        import re
+        if not address or not re.fullmatch(r"[a-zA-Z0-9_-]+", address):
+            raise ValueError(
+                f"address {address!r} contains characters unsafe for filesystem paths "
+                "(only alphanumerics, underscores, and hyphens are allowed)"
+            )
+
     def _materialize_artifact(self, topic_id: int, address: str, source_artifact: Path) -> Path:
+        self._assert_safe_address(address)
         target_dir = self.artifact_dir / f"topic_{topic_id}" / address
-        target_dir.mkdir(parents=True, exist_ok=True)
+        target_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         target_path = target_dir / f"predict_{uuid.uuid4().hex}.pkl"
         shutil.copy2(source_artifact, target_path)
         return target_path
 
-    def _update_worker(self, topic_id: int, address: str, artifact_path: Path, topic_desc: str | None) -> None:
+    def _update_worker(
+        self,
+        topic_id: int,
+        address: str,
+        artifact_path: Path,
+        topic_desc: str | None,
+        reject_zero: bool | None = None,
+        signing_wallet_id: str | None = None,
+    ) -> Path:
+        """Re-materialize the artifact, update the worker row, and return the new artifact path.
+
+        ``reject_zero`` and ``signing_wallet_id`` are written only when provided (non-None), so a
+        redeploy can re-sync flags that would otherwise drift while leaving them untouched when the
+        caller does not supply them. Returning the materialized path lets callers skip a redundant
+        status round-trip before rotating the deployment.
+        """
         resolved_desc = self._resolve_topic_desc(topic_id, topic_desc)
         managed_artifact = self._materialize_artifact(topic_id, address, artifact_path)
         with sqlite3.connect(self.db_path) as conn:
@@ -783,31 +1394,114 @@ class WorkerManager:
                 UPDATE workers
                    SET artifact_path=?,
                        topic_desc=COALESCE(?, topic_desc),
+                       reject_zero=COALESCE(?, reject_zero),
+                       signing_wallet_id=COALESCE(?, signing_wallet_id),
                        updated_at=CURRENT_TIMESTAMP
                  WHERE topic_id=? AND address=?
                 """,
-                (str(managed_artifact), resolved_desc, topic_id, address),
+                (
+                    str(managed_artifact),
+                    resolved_desc,
+                    None if reject_zero is None else (1 if reject_zero else 0),
+                    signing_wallet_id,
+                    topic_id,
+                    address,
+                ),
+            )
+            conn.commit()
+        return managed_artifact
+
+    def _sync_worker_metadata(
+        self,
+        topic_id: int,
+        address: str,
+        topic_desc: str | None = None,
+        reject_zero: bool | None = None,
+        signing_wallet_id: str | None = None,
+    ) -> None:
+        """Re-sync a worker row's mutable metadata in place, without rotating its artifact.
+
+        The hash-identical managed redeploy path uses this: the running artifact is byte-identical
+        so it is left untouched, but reject_zero / signing_wallet_id (and topic_desc) are still
+        refreshed from the fresh provision so an idempotent re-run cannot leave the row pointing at
+        a stale flag or wallet binding. Each field is written only when provided (non-None), via
+        COALESCE — mirroring the metadata half of :meth:`_update_worker` minus the artifact swap.
+        """
+        resolved_desc = self._resolve_topic_desc(topic_id, topic_desc)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE workers
+                   SET topic_desc=COALESCE(?, topic_desc),
+                       reject_zero=COALESCE(?, reject_zero),
+                       signing_wallet_id=COALESCE(?, signing_wallet_id),
+                       updated_at=CURRENT_TIMESTAMP
+                 WHERE topic_id=? AND address=?
+                """,
+                (
+                    resolved_desc,
+                    None if reject_zero is None else (1 if reject_zero else 0),
+                    signing_wallet_id,
+                    topic_id,
+                    address,
+                ),
             )
             conn.commit()
 
     def _validate_artifact_for_deploy(self, artifact_path: Path) -> None:
         """Block known-bad artifact variants from deployment.
 
-        Guardrail: old pickles that embed `load_raw` for live price lookup are
-        not deploy-safe in managed worker runtime.
+        Guardrail: old pickles that embed `load_raw` for live price lookup are not deploy-safe in
+        the managed worker runtime. Streamed in 64 KiB chunks (carrying a needle-sized overlap
+        between chunks) so a large pickled model (100MB+) is never read into memory in full —
+        mirroring `_artifact_sha256`. This runs before the custody branch, so managed deploys
+        benefit from the bounded memory too.
         """
+        needles = (b"load_raw", b"Could not get current price from raw data")
+        overlap = max(len(n) for n in needles) - 1
+        found = [False] * len(needles)
         try:
-            blob = artifact_path.read_bytes()
+            with artifact_path.open("rb") as f:
+                tail = b""
+                for chunk in iter(lambda: f.read(65536), b""):
+                    window = tail + chunk
+                    for i, needle in enumerate(needles):
+                        found[i] = found[i] or needle in window
+                    if all(found):
+                        break
+                    tail = window[-overlap:]
+        except OSError:
+            # Unreadable artifact is itself a deployment error; re-raise so the caller surfaces it
+            # rather than silently accepting a file we could not actually inspect.
+            raise
         except Exception:
+            # Unexpected non-IO failure (e.g. MemoryError on a corrupt chunk): log and allow so a
+            # validator bug doesn't permanently block all deploys.
+            logger.warning("artifact validation failed unexpectedly for %s; allowing deploy", artifact_path, exc_info=True)
             return
 
-        if b"load_raw" in blob and b"Could not get current price from raw data" in blob:
+        if all(found):
             raise ValueError(
                 f"Refusing to deploy artifact with raw-data inference path: {artifact_path}. "
                 "Use export_predict_self_contained.py."
             )
 
-    def _build_default_topic_desc_resolver(self) -> Optional[Callable[[int], Optional[str]]]:
+    @staticmethod
+    def _artifact_sha256(artifact_path: Path) -> str:
+        """Return the SHA-256 hex digest of an artifact's bytes.
+
+        Recorded on every deployment so a managed redeploy can tell an idempotent re-run (identical
+        bytes) from a genuinely different model, and so that comparison survives a process restart.
+        Streamed in 64 KiB chunks so a large pickled model (100MB+) is never loaded into memory in
+        full.
+        """
+        h = hashlib.sha256()
+        with artifact_path.open("rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    def _build_default_topic_desc_resolver(self) -> Callable[[int], str | None] | None:
         api_key = os.environ.get("ALLORA_API_KEY")
         if not api_key:
             for candidate in (Path("notebooks/.allora_api_key"), Path(".allora_api_key")):
@@ -823,7 +1517,7 @@ class WorkerManager:
         except Exception:
             return None
 
-    def _resolve_topic_desc(self, topic_id: int, fallback: Optional[str]) -> Optional[str]:
+    def _resolve_topic_desc(self, topic_id: int, fallback: str | None) -> str | None:
         if self._topic_desc_resolver:
             try:
                 resolved = self._topic_desc_resolver(topic_id)
@@ -852,7 +1546,7 @@ class WorkerManager:
         except Exception:
             return False
 
-    def _get_worker_deployed_at(self, topic_id: int, address: str) -> Optional[str]:
+    def _get_worker_deployed_at(self, topic_id: int, address: str) -> str | None:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
                 "SELECT deployed_at FROM workers WHERE topic_id=? AND address=?",
@@ -862,8 +1556,14 @@ class WorkerManager:
             return None
         return row[0]
 
-    def _create_deployment_record(self, topic_id: int, address: str, artifact_path: Path) -> str:
+    def _create_deployment_record(
+        self, topic_id: int, address: str, artifact_path: Path, artifact_hash: str | None = None
+    ) -> str:
         deployment_id = str(uuid.uuid4())
+        # Reuse a precomputed digest when the caller already hashed the source (the managed redeploy
+        # does, and shutil.copy2 preserves content byte-for-byte) so a large artifact isn't re-read.
+        if artifact_hash is None:
+            artifact_hash = self._artifact_sha256(artifact_path)
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 "UPDATE worker_deployments SET is_active=0, ended_at=CURRENT_TIMESTAMP WHERE topic_id=? AND address=? AND is_active=1",
@@ -872,9 +1572,9 @@ class WorkerManager:
             conn.execute(
                 """
                 INSERT INTO worker_deployments(deployment_id, topic_id, address, artifact_path, artifact_hash, deployed_at, is_active)
-                VALUES(?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, 1)
+                VALUES(?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 1)
                 """,
-                (deployment_id, topic_id, address, str(artifact_path)),
+                (deployment_id, topic_id, address, str(artifact_path), artifact_hash),
             )
             conn.commit()
 
@@ -883,13 +1583,23 @@ class WorkerManager:
         self._set_monitor_target_deployment_db(topic_id=topic_id, address=address, deployment_id=deployment_id)
         return deployment_id
 
-    def _get_active_deployment_id(self, topic_id: int, address: str) -> Optional[str]:
+    def _get_active_deployment_id(self, topic_id: int, address: str) -> str | None:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
                 "SELECT deployment_id FROM worker_deployments WHERE topic_id=? AND address=? AND is_active=1 ORDER BY deployed_at DESC LIMIT 1",
                 (topic_id, address),
             ).fetchone()
         return row[0] if row else None
+
+    def _get_active_deployment_hash(self, topic_id: int, address: str) -> str | None:
+        """Return the active deployment's recorded artifact SHA-256, or None when there is no
+        active deployment or it predates hash tracking (legacy NULL row)."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT artifact_hash FROM worker_deployments WHERE topic_id=? AND address=? AND is_active=1 ORDER BY deployed_at DESC LIMIT 1",
+                (topic_id, address),
+            ).fetchone()
+        return row[0] if row and row[0] else None
 
     def _archive_active_deployment(self, topic_id: int, address: str) -> None:
         with sqlite3.connect(self.db_path) as conn:
@@ -899,11 +1609,13 @@ class WorkerManager:
             )
             conn.commit()
 
-    def _rotate_deployment(self, topic_id: int, address: str, artifact_path: Path) -> str:
+    def _rotate_deployment(
+        self, topic_id: int, address: str, artifact_path: Path, artifact_hash: str | None = None
+    ) -> str:
         self._archive_active_deployment(topic_id, address)
-        return self._create_deployment_record(topic_id, address, artifact_path)
+        return self._create_deployment_record(topic_id, address, artifact_path, artifact_hash=artifact_hash)
 
-    def _monitor_register(self, topic_id: int, address: str, deployment_id: Optional[str] = None) -> None:
+    def _monitor_register(self, topic_id: int, address: str, deployment_id: str | None = None) -> None:
         if not self._monitor:
             return
         deployed_at = self._get_worker_deployed_at(topic_id, address)
@@ -953,7 +1665,7 @@ class WorkerManager:
             conn.commit()
 
 
-def build_topic_desc_resolver(api_key: Optional[str] = None, network: str = "testnet") -> Callable[[int], Optional[str]]:
+def build_topic_desc_resolver(api_key: str | None = None, network: str = "testnet") -> Callable[[int], str | None]:
     """Build a topic description resolver backed by Allora topic discovery."""
     from .topic_discovery import AlloraTopicDiscovery
 
@@ -963,7 +1675,7 @@ def build_topic_desc_resolver(api_key: Optional[str] = None, network: str = "tes
         for t in discovery.get_all_topics()
     }
 
-    def _resolve(topic_id: int) -> Optional[str]:
+    def _resolve(topic_id: int) -> str | None:
         return cache.get(topic_id)
 
     return _resolve
