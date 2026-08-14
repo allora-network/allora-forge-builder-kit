@@ -23,6 +23,7 @@ Build, evaluate, and deploy ML inference workers on the [Allora Network](https:/
 - [What is the Allora Forge?](#what-is-the-allora-forge)
 - [What you get](#what-you-get)
 - [Zero to deploy](#zero-to-deploy)
+- [Topic reference](#topic-reference)
 - [Wallet linking](#wallet-linking)
 - [Deploy to the hosting platform (export)](#deploy-to-the-hosting-platform-export)
 - [Python API (quick reference)](#python-api-quick-reference)
@@ -199,16 +200,32 @@ for t in d.get_all_topics():
     print(t.topic_id, t.raw.get("topic_name"), t.epoch_length, t.loss_method)
 ```
 
-### Topic reference
+See [Topic reference](#topic-reference) for all available topics and their prediction types.
 
-Playground topics (testnet only) are the recommended starting point — no whitelist required.
+---
+
+## Topic reference
+
+Every Allora topic defines a prediction task with a specific **target type** — what the model must output and what the reputer scores against.
+
+**Log-return topics** — predict `log(price[t+H] / price[t])` over a fixed horizon `H`. The output is a dimensionless ratio; positive means "price goes up." Most mainnet topics are log-return.
+
+**Price topics** — predict the absolute price `price[t+H]`. The playground topics (69, 77) use this format and are the recommended starting point.
+
+**Volatility topics** — predict the realized volatility of 1-minute log returns over the horizon: `std(r₁, …, r_H)` where `rᵢ = log(p[t+i] / p[t+i-1])`. The output is a non-negative float. Use `target_type="volatility"` in `AlloraMLWorkflow`.
+
+### Playground topics
+
+No whitelist required — the recommended starting point.
 
 | Testnet ID | Name | Target type | Notes |
 |-----------|------|-------------|-------|
-| **69** | BTC/USD - 1 Day Price Prediction | Price | Playground — example walkthroughs use this |
+| **69** | BTC/USD - 1 Day Price Prediction | Price | Example walkthroughs use this |
 | **77** | BTC/USD - 5 Min Price Prediction | Price | Playground Fast |
 
-Volatility topics (testnet, may require whitelist):
+### Volatility topics
+
+Testnet only; may require whitelist.
 
 | Testnet ID | Name | Target type | Notes |
 |-----------|------|-------------|-------|
@@ -218,7 +235,7 @@ Volatility topics (testnet, may require whitelist):
 | **82** | SOL/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, SOL pair |
 | **85** | ETH/USD - 4h Volatility Prediction | Volatility | Std of 1-min log returns over 4-hour horizon |
 
-Mainnet topics and their testnet equivalents:
+### Mainnet topics and testnet equivalents
 
 | Mainnet ID | Mainnet Name | Testnet ID | Testnet Name |
 |-----------|-------------|-----------|-------------|
