@@ -160,7 +160,7 @@ print("\n[1/6] Initializing workflow...")
 # Get a free key at https://developer.allora.network
 # Alternatively, set data_source="binance" below to skip the API key entirely.
 from allora_forge_builder_kit.utils import get_api_key
-api_key = get_api_key(api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", ".allora_api_key"))
+api_key = get_api_key(api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", "..", ".allora_api_key"))
 
 workflow = AlloraMLWorkflow(
     tickers=TICKERS,
@@ -364,48 +364,42 @@ final_model = LGBMRegressor(
 final_model.fit(df_all[feature_cols], df_all['target'])
 print(f"✅ Final model trained on {len(df_all):,} samples")
 
-def predict(nonce: int = None) -> float:
-    """
-    Predict BTC/USD price 24 hours into the future.
-    
-    Args:
-        nonce: Block nonce from Allora SDK (unused)
-    
-    Returns:
-        float: Predicted BTC price in USD
-    """
-    # Get live features from workflow
-    live_row = workflow.get_live_features(ticker=TICKERS[0])
-    
-    if live_row is None or len(live_row) == 0:
-        raise ValueError("Could not get live features")
-    
-    # Engineer return features from live data (same as training)
-    live_returns = engineer_returns(live_row.iloc[0])
-    
-    # Combine base features + engineered returns
-    live_features = pd.concat([live_row[base_feature_cols].iloc[0], live_returns])
-    
-    # Get current price from live feature context (remote-only path)
-    current_price = float(live_row.attrs.get("current_price", np.nan))
-    if not np.isfinite(current_price) or current_price <= 0:
-        # Fallback to live snapshot (still remote API; no local parquet)
-        snap = workflow._dm.get_live_snapshot(TICKERS)
-        if snap is not None and len(snap) > 0 and "close" in snap.columns:
-            current_price = float(snap["close"].iloc[-1])
+def _make_predict(m, _feature_cols=feature_cols, _base_cols=base_feature_cols,
+                  _tickers=TICKERS, _n_input=NUMBER_OF_INPUT_BARS, _target_bars=TARGET_BARS,
+                  _interval=INTERVAL, _eng_fn=engineer_returns):
+    _model_str = m.booster_.model_to_string()
+    _cols = _feature_cols[:]
+    _base = _base_cols[:]
+    def predict(nonce=None):
+        import os
+        import numpy as np
+        import pandas as pd
+        import lightgbm as lgb
+        from allora_forge_builder_kit import AlloraMLWorkflow
+        _wf = AlloraMLWorkflow(
+            tickers=_tickers, number_of_input_bars=_n_input,
+            target_bars=_target_bars, interval=_interval,
+            data_source="allora", api_key=os.environ["ALLORA_API_KEY"],
+        )
+        booster = lgb.Booster(model_str=_model_str)
+        live_row = _wf.get_live_features(ticker=_tickers[0])
+        if live_row is None or len(live_row) == 0:
+            raise ValueError("Could not get live features")
+        live_returns = _eng_fn(live_row.iloc[0])
+        live_features = pd.concat([live_row[_base].iloc[0], live_returns])
+        current_price = float(live_row.attrs.get("current_price", np.nan))
+        if not np.isfinite(current_price) or current_price <= 0:
+            snap = _wf._dm.get_live_snapshot(_tickers)
+            if snap is not None and len(snap) > 0 and "close" in snap.columns:
+                current_price = float(snap["close"].iloc[-1])
+        if not np.isfinite(current_price) or current_price <= 0:
+            raise ValueError(f"Invalid current price for inference: {current_price}")
+        predicted_log_return = booster.predict(live_features[_cols].values.reshape(1, -1))[0]
+        print(f"\nLive Prediction: {predicted_log_return:+.6f} ({predicted_log_return:+.4f} log return)")
+        return float(predicted_log_return)
+    return predict
 
-    if not np.isfinite(current_price) or current_price <= 0:
-        raise ValueError(f"Invalid current price for inference: {current_price}")
-    
-    # Predict log return
-    predicted_log_return = final_model.predict(live_features[feature_cols].values.reshape(1, -1))[0]
-    
-    # Convert log return to price
-    # Log-return topic: return the log return directly
-    
-    print(f"\nLive Prediction: {predicted_log_return:+.6f} ({predicted_log_return:+.4f} log return)")
-    
-    return float(predicted_log_return)
+predict = _make_predict(final_model)
 
 # Test and save
 print("\n🧪 Testing prediction...")
@@ -423,5 +417,5 @@ print(f"Run artifacts: {artifacts['run_dir']}")
 print(f"- Predictions: {artifacts['predictions_csv']}")
 print(f"- Scatter plot: {artifacts['scatter_png']}")
 print("="*80)
-print("\nDeploy: python deploy_worker.py")
+print("\nDeploy (from notebooks/): TOPIC_ID=61 PREDICT_PKL=predict_61.pkl python deploy_worker.py")
 

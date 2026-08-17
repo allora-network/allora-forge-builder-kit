@@ -58,6 +58,7 @@ def czar_loss(y_true, y_pred, std, mean=0, alpha=1, epsilon=1, tau=0.05):
     if alpha < 0 or alpha > 1:
         raise ValueError(f"alpha must be between 0 and 1, got {alpha}")
 
+    std = np.where(np.isfinite(std) & (std > 0), std, 1e-8)
     z_true = (y_true - mean) / std
     z_pred = (y_pred - mean) / std
 
@@ -93,6 +94,7 @@ def czar_loss(y_true, y_pred, std, mean=0, alpha=1, epsilon=1, tau=0.05):
 
 
 def czar_gradient(y_true, y_pred, std, mean=0, alpha=1):
+    std = np.where(np.isfinite(std) & (std > 0), std, 1e-8)
     z_true = (y_true - mean) / std
     z_pred = (y_pred - mean) / std
 
@@ -118,6 +120,7 @@ def czar_gradient(y_true, y_pred, std, mean=0, alpha=1):
 
 
 def czar_hessian(y_true, y_pred, std, mean=0, alpha=1):
+    std = np.where(np.isfinite(std) & (std > 0), std, 1e-8)
     z_true = (y_true - mean) / std
     z_pred = (y_pred - mean) / std
 

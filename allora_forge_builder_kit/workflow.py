@@ -81,26 +81,25 @@ class AlloraMLWorkflow:
         number_of_input_bars,
         target_bars,
         interval="5m",
-        target_type="log_return",
         data_source="binance",  # Simple string API
         data_manager=None,  # Advanced: explicit instance
+        target_type="log_return",
         **data_manager_kwargs  # Pass through to data manager (market, api_key, etc.)
     ):
         """
         High-level ML workflow built on top of DataManager.
-        
+
         Args:
             tickers: List of ticker symbols
             number_of_input_bars: Number of resampled bars to use as features (at the specified interval)
             target_bars: Number of bars ahead to predict (at the specified interval)
             interval: Bar interval (e.g. "5m", "1h")
+            data_source: Data source string ("binance" or "allora") - simple API
+            data_manager: Optional pre-configured data manager instance - advanced API
             target_type: Type of prediction target. One of:
                 - "log_return" (default): log(close[t+H] / close[t])
                 - "volatility": std of 1-minute log returns over the target horizon.
-                  For volatility targets, interval should be "1m" and target_bars
-                  defines the horizon window in minutes.
-            data_source: Data source string ("binance" or "allora") - simple API
-            data_manager: Optional pre-configured data manager instance - advanced API
+                  Requires interval="1m"; target_bars defines the horizon in minutes.
             **data_manager_kwargs: Arguments passed to DataManager factory:
                 - Binance: market="futures", batch_timeout=20, base_dir="..."
                 - Allora: api_key="...", base_dir="...", max_pages=1000
@@ -145,6 +144,12 @@ class AlloraMLWorkflow:
         if target_type not in _valid_target_types:
             raise ValueError(
                 f"target_type must be one of {_valid_target_types}, got {target_type!r}"
+            )
+
+        if target_type == "volatility" and interval != "1m":
+            raise ValueError(
+                f"target_type='volatility' requires interval='1m' (got {interval!r}). "
+                "Volatility targets are defined as std of 1-minute log returns."
             )
 
         self.tickers = tickers

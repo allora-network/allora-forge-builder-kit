@@ -49,7 +49,7 @@ print("=" * 70)
 # =============================================================================
 print("\n[1/5] Loading data...")
 api_key = get_api_key(
-    api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", ".allora_api_key")
+    api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", "..", ".allora_api_key")
 )
 
 workflow = AlloraMLWorkflow(

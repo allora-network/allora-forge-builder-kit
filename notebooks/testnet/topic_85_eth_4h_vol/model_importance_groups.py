@@ -72,7 +72,7 @@ def composite_score(m):
 # =============================================================================
 print("\n[1/5] Loading data...")
 api_key = get_api_key(
-    api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", ".allora_api_key")
+    api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", "..", ".allora_api_key")
 )
 
 wf = AlloraMLWorkflow(
@@ -332,13 +332,23 @@ for rank, cfg in enumerate(deploy_configs):
     )
     model.fit(df[selected], df["target"])
 
-    def _make_predict(m, _wf=wf, _tickers=TICKERS, _sel=selected,
+    def _make_predict(m, _tickers=TICKERS, _sel=selected,
+                      _n_input=NUMBER_OF_INPUT_BARS, _target_bars=TARGET_BARS,
+                      _interval=INTERVAL, _target_type=TARGET_TYPE,
                       _base_cols=base_feature_cols, _eng_fn=engineer_features):
         _model_str = m.booster_.model_to_string()
         _feature_list = _sel[:]
         def predict(nonce=None):
+            import os
             import lightgbm as lgb
             import numpy as np
+            from allora_forge_builder_kit import AlloraMLWorkflow
+            _wf = AlloraMLWorkflow(
+                tickers=_tickers, number_of_input_bars=_n_input,
+                target_bars=_target_bars, interval=_interval,
+                target_type=_target_type, data_source="allora",
+                api_key=os.environ["ALLORA_API_KEY"],
+            )
             booster = lgb.Booster(model_str=_model_str)
             live_row = _wf.get_live_features(ticker=_tickers[0])
             if live_row is None or len(live_row) == 0:

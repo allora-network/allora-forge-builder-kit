@@ -160,7 +160,7 @@ print("\n[1/6] Initializing workflow...")
 # Get a free key at https://developer.allora.network
 # Alternatively, set data_source="binance" below to skip the API key entirely.
 from allora_forge_builder_kit.utils import get_api_key
-api_key = get_api_key(api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", ".allora_api_key"))
+api_key = get_api_key(api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", "..", ".allora_api_key"))
 
 workflow = AlloraMLWorkflow(
     tickers=TICKERS,
@@ -393,6 +393,11 @@ final_model = LGBMRegressor(
     learning_rate=best_params['learning_rate'],
     max_depth=best_params['max_depth'],
     num_leaves=best_params['num_leaves'],
+    subsample=0.8,
+    colsample_bytree=0.7,
+    min_child_samples=50,
+    reg_alpha=0.1,
+    reg_lambda=1.0,
     random_state=42,
     verbose=-1
 )
@@ -458,5 +463,5 @@ print(f"Run artifacts: {artifacts['run_dir']}")
 print(f"- Predictions: {artifacts['predictions_csv']}")
 print(f"- Scatter plot: {artifacts['scatter_png']}")
 print("="*80)
-print("\nDeploy: python deploy_worker.py")
+print("\nDeploy (from notebooks/): TOPIC_ID=38 PREDICT_PKL=predict_38.pkl python deploy_worker.py")
 

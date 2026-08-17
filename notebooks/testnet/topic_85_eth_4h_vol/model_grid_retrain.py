@@ -72,7 +72,7 @@ def composite_score(m):
 # =============================================================================
 print("\n[1/4] Loading data...")
 api_key = get_api_key(
-    api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", ".allora_api_key")
+    api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", "..", ".allora_api_key")
 )
 
 wf = AlloraMLWorkflow(
@@ -92,7 +92,7 @@ target_mean = df["target"].mean()
 print(f"  Target mean: {target_mean:.6f} (should be ~0.01-0.04 for ETH 4h vol with √240 scaling)")
 
 split = int(len(df) * 0.8)
-df_train = df.iloc[:split].copy()
+df_train = df.iloc[:split - TARGET_BARS].copy()
 df_test = df.iloc[split:].copy()
 y_test = df_test["target"].values
 print(f"  {len(df):,} samples | Train: {len(df_train):,} | Test: {len(df_test):,}")
@@ -240,7 +240,7 @@ df = df.dropna(subset=all_feature_cols)
 
 # Re-split after feature engineering
 split = int(len(df) * 0.8)
-df_train = df.iloc[:split].copy()
+df_train = df.iloc[:split - TARGET_BARS].copy()
 df_test = df.iloc[split:].copy()
 y_test = df_test["target"].values
 print(f"   {len(all_feature_cols)} features ready | Train: {len(df_train):,} | Test: {len(df_test):,}")
@@ -336,14 +336,24 @@ for rank, (_, row) in enumerate(top_k.iterrows()):
         model.set_params(alpha=0.5)
     model.fit(df[all_feature_cols], y_all)
 
-    def _make_predict(m, _log=log_space, _wf=wf, _tickers=TICKERS,
+    def _make_predict(m, _log=log_space, _tickers=TICKERS,
+                      _n_input=NUMBER_OF_INPUT_BARS, _target_bars=TARGET_BARS,
+                      _interval=INTERVAL, _target_type=TARGET_TYPE,
                       _base_cols=base_feature_cols, _all_cols=all_feature_cols,
                       _eng_fn=engineer_features):
         _model_str = m.booster_.model_to_string()
         _is_log = _log
         def predict(nonce=None):
+            import os
             import lightgbm as lgb
             import numpy as np
+            from allora_forge_builder_kit import AlloraMLWorkflow
+            _wf = AlloraMLWorkflow(
+                tickers=_tickers, number_of_input_bars=_n_input,
+                target_bars=_target_bars, interval=_interval,
+                target_type=_target_type, data_source="allora",
+                api_key=os.environ["ALLORA_API_KEY"],
+            )
             booster = lgb.Booster(model_str=_model_str)
             live_row = _wf.get_live_features(ticker=_tickers[0])
             if live_row is None or len(live_row) == 0:

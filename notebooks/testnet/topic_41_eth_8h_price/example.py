@@ -161,7 +161,7 @@ print("\n[1/6] Initializing workflow...")
 # Get a free key at https://developer.allora.network
 # Alternatively, set data_source="binance" below to skip the API key entirely.
 from allora_forge_builder_kit.utils import get_api_key
-api_key = get_api_key(api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", ".allora_api_key"))
+api_key = get_api_key(api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", "..", ".allora_api_key"))
 
 workflow = AlloraMLWorkflow(
     tickers=TICKERS,
@@ -364,37 +364,37 @@ for lr in LEARNING_RATES:
                         preds = lgb.predict(X_test, num_iteration=n_est)
                         df_all.iloc[test_idx, df_all.columns.get_loc('pred')] = preds
                 
-                # Evaluate
-                valid_mask = ~df_all['pred'].isna()
-                metrics = evaluator.evaluate(
-                    y_true=df_all.loc[valid_mask, 'target'],
-                    y_pred=df_all.loc[valid_mask, 'pred']
-                )
-                
-                # Store results
-                results.append({
-                    'config_num': config_num,
-                    'n_estimators': n_est,
-                    'learning_rate': lr,
-                    'max_depth': depth,
-                    'num_leaves': leaves,
-                    'top_k': top_k,
-                    'predictions': df_all['pred'].copy(),
-                    **metrics
-                })
-                
-                # Track calibration: std(pred) / std(target) — want ~1.0
-                y_t = df_all.loc[valid_mask, 'target'].values
-                y_p = df_all.loc[valid_mask, 'pred'].values
-                cal_ratio = np.std(y_p) / (np.std(y_t) + 1e-12)
-                from scipy.stats import pearsonr as _pr
-                r_val, _ = _pr(y_t, y_p)
-                results[-1]['cal_ratio'] = cal_ratio
-                results[-1]['pearson_r_raw'] = r_val
-                
-                if config_num % 10 == 0 or config_num <= 3:
-                    print(f"   [{config_num:3d}/{total_configs}] n={n_est:3d} lr={lr:.2f} d={depth} l={leaves:2d} k={top_k:2d} "
-                          f"→ {metrics['num_passed']}/7 r={r_val:+.4f} cal={cal_ratio:.3f}")
+                    # Evaluate
+                    valid_mask = ~df_all['pred'].isna()
+                    metrics = evaluator.evaluate(
+                        y_true=df_all.loc[valid_mask, 'target'],
+                        y_pred=df_all.loc[valid_mask, 'pred']
+                    )
+
+                    # Store results
+                    results.append({
+                        'config_num': config_num,
+                        'n_estimators': n_est,
+                        'learning_rate': lr,
+                        'max_depth': depth,
+                        'num_leaves': leaves,
+                        'top_k': top_k,
+                        'predictions': df_all['pred'].copy(),
+                        **metrics
+                    })
+
+                    # Track calibration: std(pred) / std(target) — want ~1.0
+                    y_t = df_all.loc[valid_mask, 'target'].values
+                    y_p = df_all.loc[valid_mask, 'pred'].values
+                    cal_ratio = np.std(y_p) / (np.std(y_t) + 1e-12)
+                    from scipy.stats import pearsonr as _pr
+                    r_val, _ = _pr(y_t, y_p)
+                    results[-1]['cal_ratio'] = cal_ratio
+                    results[-1]['pearson_r_raw'] = r_val
+
+                    if config_num % 10 == 0 or config_num <= 3:
+                        print(f"   [{config_num:3d}/{total_configs}] n={n_est:3d} lr={lr:.2f} d={depth} l={leaves:2d} k={top_k:2d} "
+                              f"→ {metrics['num_passed']}/7 r={r_val:+.4f} cal={cal_ratio:.3f}")
 
 # Analyze results — rank by AVERAGE RANK across ALL 7 core metrics + calibration
 results_df = pd.DataFrame([{k: v for k, v in r.items() if k != 'predictions'} for r in results])

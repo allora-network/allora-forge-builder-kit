@@ -160,7 +160,7 @@ print("\n[1/6] Initializing workflow...")
 # Get a free key at https://developer.allora.network
 # Alternatively, set data_source="binance" below to skip the API key entirely.
 from allora_forge_builder_kit.utils import get_api_key
-api_key = get_api_key(api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", ".allora_api_key"))
+api_key = get_api_key(api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", "..", ".allora_api_key"))
 
 workflow = AlloraMLWorkflow(
     tickers=TICKERS,
@@ -423,5 +423,5 @@ print(f"Run artifacts: {artifacts['run_dir']}")
 print(f"- Predictions: {artifacts['predictions_csv']}")
 print(f"- Scatter plot: {artifacts['scatter_png']}")
 print("="*80)
-print("\nDeploy: python deploy_worker.py")
+print("\nDeploy (from notebooks/): TOPIC_ID=71 PREDICT_PKL=predict_71.pkl python deploy_worker.py")
 

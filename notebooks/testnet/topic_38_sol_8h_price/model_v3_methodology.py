@@ -59,7 +59,7 @@ print("\n[1/5] Loading data...")
 from allora_forge_builder_kit.utils import get_api_key
 
 api_key = get_api_key(
-    api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", ".allora_api_key")
+    api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", "..", ".allora_api_key")
 )
 
 workflow = AlloraMLWorkflow(
@@ -300,6 +300,8 @@ def predict(nonce=None):
         if snap is not None and len(snap) > 0 and "close" in snap.columns:
             current_price = float(snap["close"].iloc[-1])
 
+    if not np.isfinite(current_price) or current_price <= 0:
+        raise ValueError(f"Invalid current price for inference: {current_price}")
     predicted_price = current_price * np.exp(predicted_log_return)
     print(f"\nPrediction: ${predicted_price:,.2f} ({predicted_log_return:+.6f} log return)")
     return float(predicted_price)
