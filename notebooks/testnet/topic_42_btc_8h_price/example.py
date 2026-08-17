@@ -162,6 +162,7 @@ print("\n[1/6] Initializing workflow...")
 # Alternatively, set data_source="binance" below to skip the API key entirely.
 from allora_forge_builder_kit.utils import get_api_key
 api_key = get_api_key(api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", "..", ".allora_api_key"))
+os.environ.setdefault("ALLORA_API_KEY", api_key)
 
 workflow = AlloraMLWorkflow(
     tickers=TICKERS,

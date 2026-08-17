@@ -54,6 +54,7 @@ print("\n[1/6] Loading data...")
 api_key = get_api_key(
     api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", "..", ".allora_api_key")
 )
+os.environ.setdefault("ALLORA_API_KEY", api_key)
 
 workflow = AlloraMLWorkflow(
     tickers=TICKERS, number_of_input_bars=NUMBER_OF_INPUT_BARS,

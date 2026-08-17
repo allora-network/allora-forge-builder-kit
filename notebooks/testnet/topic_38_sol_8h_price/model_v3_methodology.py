@@ -61,6 +61,7 @@ from allora_forge_builder_kit.utils import get_api_key
 api_key = get_api_key(
     api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", "..", ".allora_api_key")
 )
+os.environ.setdefault("ALLORA_API_KEY", api_key)
 
 workflow = AlloraMLWorkflow(
     tickers=TICKERS,
