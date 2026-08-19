@@ -241,7 +241,7 @@ def main() -> None:
     parser.add_argument("--artifact", required=True)
     parser.add_argument("--api-key", default=None)
     parser.add_argument("--mnemonic-file", default=None, help="Path to wallet key file (managed by WorkerManager)")
-    parser.add_argument("--network", default="testnet", choices=["testnet", "mainnet"])
+    parser.add_argument("--network", default=os.environ.get("ALLORA_NETWORK", "testnet"), choices=["testnet", "mainnet"])
     parser.add_argument("--no-faucet", action="store_true", help="Skip SDK faucet checks (use when already funded)")
     parser.add_argument(
         "--custody",

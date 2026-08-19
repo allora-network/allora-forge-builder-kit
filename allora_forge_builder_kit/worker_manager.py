@@ -116,7 +116,7 @@ class WorkerManager:
         runtime_log_dir: str | Path = "worker_logs",
         artifact_dir: str | Path = "managed_artifacts",
         key_dir: str | Path = "worker_keys",
-        network: str = "testnet",
+        network: str = os.environ.get("ALLORA_NETWORK", "testnet"),
         no_faucet: bool = False,
         reconcile_on_start: bool = True,
         forge_api_key: str | None = None,
@@ -1513,7 +1513,7 @@ class WorkerManager:
                 except Exception:
                     pass
         try:
-            return build_topic_desc_resolver(api_key=api_key, network="testnet")
+            return build_topic_desc_resolver(api_key=api_key, network=self.network)
         except Exception:
             return None
 

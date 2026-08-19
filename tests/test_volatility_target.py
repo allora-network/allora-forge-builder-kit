@@ -117,11 +117,12 @@ class TestTargetTypeParameter:
         assert wf.target_type == "log_return"
 
     def test_volatility_accepted(self):
-        """target_type='volatility' should be accepted."""
+        """target_type='volatility' requires interval='1m'."""
         wf = AlloraMLWorkflow(
             tickers=["btcusd"],
             number_of_input_bars=15,
             target_bars=15,
+            interval="1m",
             target_type="volatility",
             data_source="binance",
         )

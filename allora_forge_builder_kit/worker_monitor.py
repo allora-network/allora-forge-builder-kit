@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import logging
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -583,7 +584,7 @@ class AlloraSDKEventFetcher:
     - whitelist/can-submit checks
     """
 
-    def __init__(self, network: str = "testnet", max_pages: int = 5, page_limit: int = 50):
+    def __init__(self, network: str = os.environ.get("ALLORA_NETWORK", "testnet"), max_pages: int = 5, page_limit: int = 50):
         from allora_sdk.rpc_client.client import AlloraNetworkConfig
 
         self._cfg = AlloraNetworkConfig.mainnet() if network.lower() == "mainnet" else AlloraNetworkConfig.testnet()

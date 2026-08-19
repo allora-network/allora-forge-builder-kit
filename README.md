@@ -5,16 +5,10 @@
 Build, evaluate, and deploy ML inference workers on the [Allora Network](https://allora.network).
 
 > [!IMPORTANT]
-> **SDK v10 — Testnet only.** This version of the builder kit targets the Allora testnet after its emissions v9 → v10 chain upgrade. It requires `allora-sdk>=1.3.0`, now available on PyPI.
+> **SDK v10 — testnet and mainnet.** Both networks have completed the emissions v9 → v10 chain upgrade. Requires `allora-sdk>=1.3.0`.
 >
-> **Testnet / v10 install:**
 > ```bash
 > pip install "allora-forge-builder-kit @ git+https://github.com/allora-network/allora-forge-builder-kit.git@main"
-> ```
->
-> **Mainnet users** — the network is still on emissions v9. Use the last stable builder kit release:
-> ```bash
-> pip install "allora-forge-builder-kit @ git+https://github.com/allora-network/allora-forge-builder-kit.git@8ef3200"
 > ```
 
 ## Contents
@@ -125,7 +119,7 @@ Each script backfills historical data, engineers features, trains and evaluates 
 python deploy_worker.py
 ```
 
-On first run, `WorkerManager` creates a wallet, writes the key file to `worker_keys/`, and requests testnet ALLO from the faucet automatically. The worker process starts and begins polling the chain for open submission windows.
+On first run, `WorkerManager` creates a wallet, writes the key file to `worker_keys/`, and requests ALLO from the faucet automatically. The worker process starts and begins polling the chain for open submission windows.
 
 > **Faucet activity is logged, not printed.** If a worker fails to start, check `worker_logs/` for the subprocess output — faucet requests, balance checks, and on-chain errors all appear there.
 

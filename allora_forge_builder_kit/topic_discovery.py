@@ -15,6 +15,7 @@ Requires:
 """
 
 import asyncio
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -62,7 +63,7 @@ class AlloraTopicDiscovery:
         print(topic.epoch_length)
     """
 
-    def __init__(self, api_key: Optional[str] = None, network: str = "testnet"):
+    def __init__(self, api_key: Optional[str] = None, network: str = os.environ.get("ALLORA_NETWORK", "testnet")):
         try:
             from allora_sdk.api_client import AlloraAPIClient, ChainID
         except ImportError:
