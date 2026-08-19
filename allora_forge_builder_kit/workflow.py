@@ -146,12 +146,6 @@ class AlloraMLWorkflow:
                 f"target_type must be one of {_valid_target_types}, got {target_type!r}"
             )
 
-        if target_type == "volatility" and interval != "1m":
-            raise ValueError(
-                f"target_type='volatility' requires interval='1m' (got {interval!r}). "
-                "Volatility targets are defined as std of 1-minute log returns."
-            )
-
         self.tickers = tickers
         self.number_of_input_bars = number_of_input_bars
         self.target_bars = target_bars
@@ -178,6 +172,16 @@ class AlloraMLWorkflow:
                 interval=interval,
                 symbols=tickers,
                 **data_manager_kwargs
+            )
+
+        # Validate effective interval AFTER data_manager may have overridden self.interval.
+        # Checking the raw `interval` arg before this branch would raise a false ValueError
+        # when a 1m data_manager is passed without explicit interval="1m", and would miss
+        # the case where interval="1m" is overridden to a non-1m interval by the manager.
+        if target_type == "volatility" and self.interval != "1m":
+            raise ValueError(
+                f"target_type='volatility' requires interval='1m' (got {self.interval!r}). "
+                "Volatility targets are defined as std of 1-minute log returns."
             )
     
     def _parse_interval_to_bars_per_hour(self, interval: str) -> float:

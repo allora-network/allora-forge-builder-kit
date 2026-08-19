@@ -128,6 +128,18 @@ class TestTargetTypeParameter:
         )
         assert wf.target_type == "volatility"
 
+    def test_volatility_wrong_interval_raises(self):
+        """volatility + non-1m interval should raise ValueError."""
+        with pytest.raises(ValueError, match="interval='1m'"):
+            AlloraMLWorkflow(
+                tickers=["btcusd"],
+                number_of_input_bars=15,
+                target_bars=15,
+                interval="5m",
+                target_type="volatility",
+                data_source="binance",
+            )
+
     def test_invalid_target_type_raises(self):
         """Invalid target_type should raise ValueError."""
         with pytest.raises(ValueError, match="target_type must be one of"):
