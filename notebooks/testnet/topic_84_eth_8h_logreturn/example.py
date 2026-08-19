@@ -412,17 +412,18 @@ def predict(nonce: int = None) -> float:
 print("\n🧪 Testing prediction...")
 test_prediction = predict()
 
-with open("predict_84.pkl", "wb") as f:
+pkl_path = os.path.join(os.path.dirname(__file__), "predict_84.pkl")
+with open(pkl_path, "wb") as f:
     cloudpickle.dump(predict, f)
 
 print("\n" + "="*80)
 print("COMPLETE!")
 print("="*80)
 print(f"{len(feature_cols)} features | {best_result['num_passed']}/7 points ({best_result['score']:.1%})")
-print("Saved to predict_84.pkl")
+print(f"Saved to {pkl_path}")
 print(f"Run artifacts: {artifacts['run_dir']}")
 print(f"- Predictions: {artifacts['predictions_csv']}")
 print(f"- Scatter plot: {artifacts['scatter_png']}")
 print("="*80)
-print("\nDeploy (from notebooks/): TOPIC_ID=84 PREDICT_PKL=predict_84.pkl python deploy_worker.py")
+print("\nDeploy (from notebooks/): TOPIC_ID=84 PREDICT_PKL=testnet/topic_84_eth_8h_logreturn/predict_84.pkl python deploy_worker.py")
 

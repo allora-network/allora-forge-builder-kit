@@ -598,8 +598,8 @@ for rank_idx, (cfg_num, params, model, selected, row) in enumerate(trained_model
         return predict
     
     predict_fn = _make_predict(model, selected)
-    pkl_name = f"predict_42_rank{rank_idx+1}.pkl"
-    
+    pkl_name = os.path.join(os.path.dirname(__file__), f"predict_42_rank{rank_idx+1}.pkl")
+
     try:
         price = predict_fn()
         r_val = row.get('pearson_r_raw', row.get('pearson', 0))
@@ -609,12 +609,12 @@ for rank_idx, (cfg_num, params, model, selected, row) in enumerate(trained_model
               f"(r={r_val:+.4f} cal={cal:.3f} pts={pts}) → {pkl_name}")
     except Exception as e:
         print(f"   Model {rank_idx+1} (#{cfg_num}): FAILED ({e}) → {pkl_name}")
-    
+
     with open(pkl_name, "wb") as f:
         cloudpickle.dump(predict_fn, f)
 
 # Also save rank1 as the default predict_42.pkl
-with open("predict_42.pkl", "wb") as f:
+with open(os.path.join(os.path.dirname(__file__), "predict_42.pkl"), "wb") as f:
     cloudpickle.dump(_make_predict(trained_models[0][2], trained_models[0][3]), f)
 
 print("\n" + "="*80)
