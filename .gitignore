@@ -37,7 +37,7 @@ uv.lock
 
 # Generated script outputs
 notebooks/testnet/**/scatter_*.png
-notebooks/worker_secrets.json.lock
+worker_secrets.json.lock
 
 # One-off runner scripts
 run_from_57.sh

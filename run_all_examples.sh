@@ -1,9 +1,11 @@
 #!/bin/bash
-set -e
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 PYTHON="$REPO_DIR/.venv/bin/python"
 NOTEBOOKS="$REPO_DIR/notebooks/testnet"
+
+FAILED=()
+PASSED=()
 
 run_script() {
     local dir="$1"
@@ -14,9 +16,15 @@ run_script() {
     echo "════════════════════════════════════════════════════════════════════════"
     echo ""
     cd "$NOTEBOOKS/$dir"
-    "$PYTHON" "$script"
-    echo ""
-    echo "  ✓ Done: $dir/$script"
+    if "$PYTHON" "$script"; then
+        echo ""
+        echo "  ✓ Done: $dir/$script"
+        PASSED+=("$dir/$script")
+    else
+        echo ""
+        echo "  ✗ FAILED (exit $?): $dir/$script"
+        FAILED+=("$dir/$script")
+    fi
 }
 
 # ── topic_38 ─────────────────────────────────────────────────────────────────
@@ -72,5 +80,15 @@ run_script topic_85_eth_4h_vol model_importance_groups.py
 
 echo ""
 echo "════════════════════════════════════════════════════════════════════════"
-echo "  ALL SCRIPTS COMPLETE"
+echo "  SUMMARY: ${#PASSED[@]} passed, ${#FAILED[@]} failed"
 echo "════════════════════════════════════════════════════════════════════════"
+
+if [ ${#FAILED[@]} -gt 0 ]; then
+    echo ""
+    echo "  Failed scripts:"
+    for s in "${FAILED[@]}"; do
+        echo "    ✗ $s"
+    done
+    echo ""
+    exit 1
+fi

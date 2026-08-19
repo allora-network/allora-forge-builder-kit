@@ -116,7 +116,7 @@ class WorkerManager:
         runtime_log_dir: str | Path = "worker_logs",
         artifact_dir: str | Path = "managed_artifacts",
         key_dir: str | Path = "worker_keys",
-        network: str = os.environ.get("ALLORA_NETWORK", "testnet"),
+        network: str | None = None,
         no_faucet: bool = False,
         reconcile_on_start: bool = True,
         forge_api_key: str | None = None,
@@ -167,7 +167,7 @@ class WorkerManager:
         self.artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.key_dir = Path(key_dir)
         self.key_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self._network = network
+        self._network = network if network is not None else os.environ.get("ALLORA_NETWORK", "testnet")
         self._no_faucet = no_faucet
         # Strip and coerce empty/whitespace-only to None: _build_run_command's truthiness guard
         # otherwise passes a whitespace-only value, spawning a subprocess whose worker_runtime
@@ -1513,7 +1513,7 @@ class WorkerManager:
                 except Exception:
                     pass
         try:
-            return build_topic_desc_resolver(api_key=api_key, network=self.network)
+            return build_topic_desc_resolver(api_key=api_key, network=self._network)
         except Exception:
             return None
 
