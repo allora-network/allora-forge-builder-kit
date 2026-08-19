@@ -347,8 +347,10 @@ for rank_idx, (cfg, model, selected, row) in enumerate(trained):
             current_price = float(live_row.attrs.get("current_price", np.nan))
             if not np.isfinite(current_price) or current_price <= 0:
                 snap = workflow._dm.get_live_snapshot(TICKERS)
-                if snap is not None and len(snap) > 0:
+                if snap is not None and len(snap) > 0 and "close" in snap.columns:
                     current_price = float(snap["close"].iloc[-1])
+            if not np.isfinite(current_price) or current_price <= 0:
+                raise ValueError(f"Invalid current price for inference: {current_price}")
             log_ret = m.predict(live_eng[sel].values.reshape(1, -1))[0]
             return float(current_price * np.exp(log_ret))
         return predict
