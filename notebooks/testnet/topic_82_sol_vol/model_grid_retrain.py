@@ -25,7 +25,7 @@ from allora_forge_builder_kit.utils import get_api_key
 # =============================================================================
 TICKERS = ["solusd"]
 TOPIC_ID = 82
-DAYS_OF_HISTORY = 800
+DAYS_OF_HISTORY = 365
 INTERVAL = "1m"
 NUMBER_OF_INPUT_BARS = 60
 TARGET_BARS = 15

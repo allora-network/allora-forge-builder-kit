@@ -25,9 +25,9 @@ from allora_forge_builder_kit.utils import get_api_key
 # =============================================================================
 TICKERS = ["ethusd"]
 TOPIC_ID = 85
-DAYS_OF_HISTORY = 800
+DAYS_OF_HISTORY = 365
 INTERVAL = "1m"
-NUMBER_OF_INPUT_BARS = 960
+NUMBER_OF_INPUT_BARS = 240  # 4 hours at 1-min resolution (= TARGET_BARS)
 TARGET_BARS = 240
 TARGET_TYPE = "volatility"
 
