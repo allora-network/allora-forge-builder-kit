@@ -114,6 +114,10 @@ def czar_gradient(y_true, y_pred, std, mean=0, alpha=1):
 
     G1 = h1 * z_pred - np.sign(z_true)
     G2 = -s * d2p1 * derivative(d_pred)
+    # Pseudo-gradient (canonical reference, chosen for numerical stability).
+    # The analytical gradient of L3 includes an additional linear term
+    # s * d2p1 * derivative(d_true), but omitting it is intentional — see
+    # https://research.allora.network/t/czar-loss-function-for-returns-prediction-topics/155/5
     G3 = np.minimum(h3, h1) * (z_pred - z_true)
 
     return np.where(u <= 0, G1, np.where(u <= a, G2, G3)) / std
@@ -137,6 +141,9 @@ def czar_hessian(y_true, y_pred, std, mean=0, alpha=1):
 
     h1 = d2p1 * double_derivative(delta)
     H1 = np.full_like(d_pred, h1)
+    # Pseudo-hessians (canonical reference, chosen for numerical stability).
+    # The analytical hessians use d2p1 as the multiplier; (1+x²) is the
+    # pseudo form — intentional, matches the reference implementation.
     H2 = (1.0 + d_pred**2) * double_derivative(d_pred)
     h3 = (1.0 + d_true**2) * double_derivative(d_true)
     H3 = np.full_like(d_pred, np.minimum(h1, h3))

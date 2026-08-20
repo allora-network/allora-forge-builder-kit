@@ -338,20 +338,34 @@ for rank_idx, (_, row) in enumerate(top3.iterrows()):
 # =============================================================================
 print(f"\n[5/6] Testing & saving...")
 for rank_idx, (cfg, model, selected, row) in enumerate(trained):
-    def _make_predict(m, sel):
+    def _make_predict(m, sel, _tickers=TICKERS[:], _n_input=NUMBER_OF_INPUT_BARS,
+                      _target_bars=TARGET_BARS, _interval=INTERVAL,
+                      _eng_fn=engineer_directional_features):
+        _model_str = m.booster_.model_to_string()
+        _sel = list(sel)
         def predict(nonce=None):
-            live_row = workflow.get_live_features(ticker=TICKERS[0])
+            import os
+            import lightgbm as lgb
+            import numpy as np
+            from allora_forge_builder_kit import AlloraMLWorkflow
+            _wf = AlloraMLWorkflow(
+                tickers=_tickers, number_of_input_bars=_n_input,
+                target_bars=_target_bars, interval=_interval,
+                data_source="allora", api_key=os.environ["ALLORA_API_KEY"],
+            )
+            booster = lgb.Booster(model_str=_model_str)
+            live_row = _wf.get_live_features(ticker=_tickers[0])
             if live_row is None or len(live_row) == 0:
                 raise ValueError("No live features")
-            live_eng = engineer_directional_features(live_row.iloc[0])
+            live_eng = _eng_fn(live_row.iloc[0])
             current_price = float(live_row.attrs.get("current_price", np.nan))
             if not np.isfinite(current_price) or current_price <= 0:
-                snap = workflow._dm.get_live_snapshot(TICKERS)
+                snap = _wf._dm.get_live_snapshot(_tickers)
                 if snap is not None and len(snap) > 0 and "close" in snap.columns:
                     current_price = float(snap["close"].iloc[-1])
             if not np.isfinite(current_price) or current_price <= 0:
                 raise ValueError(f"Invalid current price for inference: {current_price}")
-            log_ret = m.predict(live_eng[sel].values.reshape(1, -1))[0]
+            log_ret = booster.predict(live_eng[_sel].values.reshape(1, -1))[0]
             return float(current_price * np.exp(log_ret))
         return predict
 

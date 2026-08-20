@@ -305,11 +305,20 @@ for rank_idx, (cfg, model, row) in enumerate(trained):
         _model_str = m.booster_.model_to_string()
         _feature_cols = feature_cols[:]
         _tickers = TICKERS[:]
+        _n_input = NUMBER_OF_INPUT_BARS
+        _target_bars = TARGET_BARS
+        _interval = INTERVAL
         _eng_fn = engineer_directional_features
-        _wf = workflow
         def predict(nonce=None):
+            import os
             import lightgbm as lgb
             import numpy as np
+            from allora_forge_builder_kit import AlloraMLWorkflow
+            _wf = AlloraMLWorkflow(
+                tickers=_tickers, number_of_input_bars=_n_input,
+                target_bars=_target_bars, interval=_interval,
+                data_source="allora", api_key=os.environ["ALLORA_API_KEY"],
+            )
             booster = lgb.Booster(model_str=_model_str)
             live_row = _wf.get_live_features(ticker=_tickers[0])
             if live_row is None or len(live_row) == 0:

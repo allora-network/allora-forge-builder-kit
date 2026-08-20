@@ -285,28 +285,40 @@ final_model.fit(df_all[feature_cols], df_all["target"])
 print(f"✅ Trained on {len(df_all):,} samples, {len(feature_cols)} features")
 
 
-def predict(nonce=None):
-    """Predict SOL/USD price 8 hours ahead."""
-    live_row = workflow.get_live_features(ticker=TICKERS[0])
-    if live_row is None or len(live_row) == 0:
-        raise ValueError("Could not get live features")
+def _make_predict(m, _feature_cols=feature_cols[:],
+                  _tickers=TICKERS[:], _n_input=NUMBER_OF_INPUT_BARS,
+                  _target_bars=TARGET_BARS, _interval=INTERVAL,
+                  _eng_fn=engineer_methodology_features):
+    _model_str = m.booster_.model_to_string()
+    def predict(nonce=None):
+        import os
+        import lightgbm as lgb
+        import numpy as np
+        from allora_forge_builder_kit import AlloraMLWorkflow
+        _wf = AlloraMLWorkflow(
+            tickers=_tickers, number_of_input_bars=_n_input,
+            target_bars=_target_bars, interval=_interval,
+            data_source="allora", api_key=os.environ["ALLORA_API_KEY"],
+        )
+        booster = lgb.Booster(model_str=_model_str)
+        live_row = _wf.get_live_features(ticker=_tickers[0])
+        if live_row is None or len(live_row) == 0:
+            raise ValueError("Could not get live features")
+        live_eng = _eng_fn(live_row.iloc[0])
+        predicted_log_return = booster.predict(live_eng[_feature_cols].values.reshape(1, -1))[0]
+        current_price = float(live_row.attrs.get("current_price", np.nan))
+        if not np.isfinite(current_price) or current_price <= 0:
+            snap = _wf._dm.get_live_snapshot(_tickers)
+            if snap is not None and len(snap) > 0 and "close" in snap.columns:
+                current_price = float(snap["close"].iloc[-1])
+        if not np.isfinite(current_price) or current_price <= 0:
+            raise ValueError(f"Invalid current price for inference: {current_price}")
+        predicted_price = current_price * np.exp(predicted_log_return)
+        print(f"\nPrediction: ${predicted_price:,.2f} ({predicted_log_return:+.6f} log return)")
+        return float(predicted_price)
+    return predict
 
-    live_eng = engineer_methodology_features(live_row.iloc[0])
-    x = live_eng[feature_cols].values.reshape(1, -1)
-    predicted_log_return = final_model.predict(x)[0]
-
-    current_price = float(live_row.attrs.get("current_price", np.nan))
-    if not np.isfinite(current_price) or current_price <= 0:
-        snap = workflow._dm.get_live_snapshot(TICKERS)
-        if snap is not None and len(snap) > 0 and "close" in snap.columns:
-            current_price = float(snap["close"].iloc[-1])
-
-    if not np.isfinite(current_price) or current_price <= 0:
-        raise ValueError(f"Invalid current price for inference: {current_price}")
-    predicted_price = current_price * np.exp(predicted_log_return)
-    print(f"\nPrediction: ${predicted_price:,.2f} ({predicted_log_return:+.6f} log return)")
-    return float(predicted_price)
-
+predict = _make_predict(final_model)
 
 print("\n🧪 Testing prediction...")
 test_pred = predict()
