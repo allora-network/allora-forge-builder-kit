@@ -14,6 +14,7 @@ Deploy top model from each feature group for genuine ensemble diversity.
 import numpy as np
 import pandas as pd
 import os
+import sys
 import time as _time
 from datetime import datetime, timedelta, timezone
 from scipy.stats import pearsonr, spearmanr
@@ -305,7 +306,7 @@ for fg_label in [f"top-{k}" if k else "all" for k in FEATURE_GROUP_SIZES]:
 # TRAIN & SAVE (one per feature group)
 # =============================================================================
 print(f"\n[5/5] Training & saving {len(deploy_configs)} diverse models...")
-
+n_smoke_failures = 0
 for rank, cfg in enumerate(deploy_configs):
     fg_size = cfg["fg_size"]
     fg_label = cfg["fg"]
@@ -367,6 +368,7 @@ for rank, cfg in enumerate(deploy_configs):
         print(f"   {fg_label}: score={cfg['score']:+.4f} → {val:.6f} → {pkl}")
     except Exception as e:
         print(f"   {fg_label}: FAILED ({e}) → {pkl}")
+        n_smoke_failures += 1
     with open(pkl, "wb") as f:
         cloudpickle.dump(fn, f)
 
@@ -421,5 +423,9 @@ plt.close()
 print(f"   Saved scatter_{TOPIC_ID}_imp_groups.png")
 
 print("\n" + "=" * 70)
+if n_smoke_failures:
+    print(f"DONE — {n_smoke_failures} smoke test(s) FAILED (artifacts still saved)")
+    print("=" * 70)
+    sys.exit(n_smoke_failures)
 print("COMPLETE!")
 print("=" * 70)

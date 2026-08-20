@@ -12,6 +12,7 @@ Now with corrected √T scaling in the target (matching the reputer).
 import numpy as np
 import pandas as pd
 import os
+import sys
 import math
 from datetime import datetime, timedelta, timezone
 from scipy.stats import pearsonr, spearmanr
@@ -323,6 +324,7 @@ print(f"\n[4/4] Training & saving top {TOP_K_DEPLOY}...")
 
 # Retrain top 5 on all data and save
 top_k = results_df.drop_duplicates(subset=["model_num"]).head(TOP_K_DEPLOY)
+n_smoke_failures = 0
 for rank, (_, row) in enumerate(top_k.iterrows()):
     y_all = df["target"].values
     log_space = row["log_space"]
@@ -387,6 +389,7 @@ for rank, (_, row) in enumerate(top_k.iterrows()):
               f"score={row['score']:+.4f} → {val:.6f} → {pkl}")
     except Exception as e:
         print(f"   Rank {rank+1}: FAILED ({e}) → {pkl}")
+        n_smoke_failures += 1
     with open(pkl, "wb") as f:
         cloudpickle.dump(fn, f)
 
@@ -443,5 +446,9 @@ plt.close()
 print(f"   Saved {scatter_path}")
 
 print("\n" + "=" * 70)
+if n_smoke_failures:
+    print(f"DONE — {n_smoke_failures} smoke test(s) FAILED (artifacts still saved)")
+    print("=" * 70)
+    sys.exit(n_smoke_failures)
 print("COMPLETE!")
 print("=" * 70)
