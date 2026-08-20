@@ -244,7 +244,7 @@ df = df.dropna(subset=all_feature_cols)
 val_split = int(len(df) * 0.70)
 test_split = int(len(df) * 0.80)
 df_train = df.iloc[:val_split - TARGET_BARS].copy()
-df_val   = df.iloc[val_split:test_split].copy()
+df_val   = df.iloc[val_split:test_split - TARGET_BARS].copy()
 df_test  = df.iloc[test_split:].copy()
 y_val  = df_val["target"].values
 y_test = df_test["target"].values
@@ -285,10 +285,16 @@ for obj in OBJECTIVES:
                         model.set_params(alpha=0.5)
                     model.fit(df_train[all_feature_cols], y_train)
 
+                    if log_space:
+                        train_resid = y_train - model.predict(df_train[all_feature_cols])
+                        grid_bias_correction = float(np.exp(0.5 * np.var(train_resid)))
+                    else:
+                        grid_bias_correction = 1.0
+
                     for n_est in N_ESTIMATORS_CHECKPOINTS:
                         raw_preds = model.predict(df_val[all_feature_cols], num_iteration=n_est)
                         if log_space:
-                            preds = np.exp(raw_preds)
+                            preds = np.exp(raw_preds) * grid_bias_correction
                         else:
                             preds = raw_preds
                         preds = np.maximum(preds, 0)
@@ -420,7 +426,8 @@ best_model.fit(df_train[all_feature_cols], y_train_final)
 
 raw_preds = best_model.predict(df_test[all_feature_cols])
 if log_space:
-    scatter_preds = np.exp(raw_preds)
+    scatter_bias = float(np.exp(0.5 * np.var(y_train_final - best_model.predict(df_train[all_feature_cols]))))
+    scatter_preds = np.exp(raw_preds) * scatter_bias
 else:
     scatter_preds = raw_preds
 scatter_preds = np.maximum(scatter_preds, 0)
