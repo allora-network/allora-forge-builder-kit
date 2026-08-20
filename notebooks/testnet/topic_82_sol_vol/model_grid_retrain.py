@@ -322,7 +322,7 @@ for _, row in results_df.head(10).iterrows():
 print(f"\n[4/4] Training & saving top {TOP_K_DEPLOY}...")
 
 # Retrain top 5 on all data and save
-top_k = results_df.head(TOP_K_DEPLOY)
+top_k = results_df.drop_duplicates(subset=["model_num"]).head(TOP_K_DEPLOY)
 for rank, (_, row) in enumerate(top_k.iterrows()):
     y_all = df["target"].values
     log_space = row["log_space"]
