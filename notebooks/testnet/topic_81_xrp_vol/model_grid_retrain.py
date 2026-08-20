@@ -239,12 +239,15 @@ df = pd.concat([df.reset_index(drop=True), eng.reset_index(drop=True)], axis=1)
 all_feature_cols = base_feature_cols + eng_cols
 df = df.dropna(subset=all_feature_cols)
 
-# Re-split after feature engineering
-split = int(len(df) * 0.8)
-df_train = df.iloc[:split - TARGET_BARS].copy()
-df_test = df.iloc[split:].copy()
+# Re-split: train / val (model selection) / test (held out for final evaluation)
+val_split = int(len(df) * 0.70)
+test_split = int(len(df) * 0.80)
+df_train = df.iloc[:val_split - TARGET_BARS].copy()
+df_val   = df.iloc[val_split:test_split].copy()
+df_test  = df.iloc[test_split:].copy()
+y_val  = df_val["target"].values
 y_test = df_test["target"].values
-print(f"   {len(all_feature_cols)} features ready | Train: {len(df_train):,} | Test: {len(df_test):,}")
+print(f"   {len(all_feature_cols)} features ready | Train: {len(df_train):,} | Val: {len(df_val):,} | Test: {len(df_test):,}")
 
 # =============================================================================
 # GRID SEARCH
@@ -282,14 +285,14 @@ for obj in OBJECTIVES:
                     model.fit(df_train[all_feature_cols], y_train)
 
                     for n_est in N_ESTIMATORS_CHECKPOINTS:
-                        raw_preds = model.predict(df_test[all_feature_cols], num_iteration=n_est)
+                        raw_preds = model.predict(df_val[all_feature_cols], num_iteration=n_est)
                         if log_space:
                             preds = np.exp(raw_preds)
                         else:
                             preds = raw_preds
                         preds = np.maximum(preds, 0)
 
-                        m = vol_metrics(y_test, preds)
+                        m = vol_metrics(y_val, preds)
                         score = composite_score(m)
                         results.append({
                             "model_num": model_num, "obj": obj, "log_space": log_space,
