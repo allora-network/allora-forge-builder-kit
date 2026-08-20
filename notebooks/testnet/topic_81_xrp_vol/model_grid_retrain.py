@@ -337,11 +337,17 @@ for rank, (_, row) in enumerate(top_k.iterrows()):
         model.set_params(alpha=0.5)
     model.fit(df[all_feature_cols], y_all)
 
+    if log_space:
+        residuals = y_all - model.predict(df[all_feature_cols])
+        _bias_corr = float(np.exp(0.5 * np.var(residuals)))
+    else:
+        _bias_corr = 1.0
+
     def _make_predict(m, _log=log_space, _tickers=TICKERS,
                       _n_input=NUMBER_OF_INPUT_BARS, _target_bars=TARGET_BARS,
                       _interval=INTERVAL, _target_type=TARGET_TYPE,
                       _base_cols=base_feature_cols, _all_cols=all_feature_cols,
-                      _eng_fn=engineer_features):
+                      _eng_fn=engineer_features, _bias_correction=_bias_corr):
         _model_str = m.booster_.model_to_string()
         _is_log = _log
         def predict(nonce=None):
@@ -364,7 +370,7 @@ for rank, (_, row) in enumerate(top_k.iterrows()):
             x = live_features[_all_cols].values.reshape(1, -1)
             raw = booster.predict(x)[0]
             if _is_log:
-                vol = float(np.exp(raw))
+                vol = float(np.exp(raw) * _bias_correction)
             else:
                 vol = float(raw)
             return max(0.0, vol)
