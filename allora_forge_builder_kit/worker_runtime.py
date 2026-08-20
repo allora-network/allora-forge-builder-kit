@@ -277,6 +277,7 @@ def main() -> None:
         )
 
     api_key = _load_api_key(args.api_key)
+    os.environ["ALLORA_API_KEY"] = api_key  # artifacts read environ at predict time
     # _resolve_wallet_cfg validates the managed-custody env (FORGE_BACKEND_URL default-to-prod and
     # fee-granter warnings) on the seam, so those diagnostics fire for any caller, not just the CLI.
     wallet_cfg = _resolve_wallet_cfg(args.custody, args.mnemonic_file)
