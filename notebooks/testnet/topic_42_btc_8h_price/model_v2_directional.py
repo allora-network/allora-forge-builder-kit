@@ -362,7 +362,12 @@ for rank_idx, (cfg, model, selected, row) in enumerate(trained):
             if not np.isfinite(current_price) or current_price <= 0:
                 snap = _wf._dm.get_live_snapshot(_tickers)
                 if snap is not None and len(snap) > 0 and "close" in snap.columns:
-                    current_price = float(snap["close"].iloc[-1])
+                    try:
+                        snap_price = float(snap["close"].iloc[-1])
+                        if np.isfinite(snap_price) and snap_price > 0:
+                            current_price = snap_price
+                    except (TypeError, ValueError):
+                        pass
             if not np.isfinite(current_price) or current_price <= 0:
                 raise ValueError(f"Invalid current price for inference: {current_price}")
             log_ret = booster.predict(live_eng[_sel].values.reshape(1, -1))[0]
