@@ -285,14 +285,11 @@ for obj in OBJECTIVES:
                         model.set_params(alpha=0.5)
                     model.fit(df_train[all_feature_cols], y_train)
 
-                    if log_space:
-                        y_val_log = np.log(y_val + 1e-10)
-
                     for n_est in N_ESTIMATORS_CHECKPOINTS:
                         raw_preds = model.predict(df_val[all_feature_cols], num_iteration=n_est)
                         if log_space:
-                            val_resid = y_val_log - raw_preds
-                            grid_bias_correction = float(np.exp(0.5 * np.var(val_resid)))
+                            train_resid = y_train - model.predict(df_train[all_feature_cols], num_iteration=n_est)
+                            grid_bias_correction = float(np.exp(0.5 * np.var(train_resid)))
                             preds = np.exp(raw_preds) * grid_bias_correction
                         else:
                             preds = raw_preds
