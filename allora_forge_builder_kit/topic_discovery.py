@@ -63,7 +63,7 @@ class AlloraTopicDiscovery:
         print(topic.epoch_length)
     """
 
-    def __init__(self, api_key: Optional[str] = None, network: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, network: str | None = None):
         try:
             from allora_sdk.api_client import AlloraAPIClient, ChainID
         except ImportError:
