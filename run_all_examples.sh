@@ -1,8 +1,20 @@
 #!/bin/bash
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-PYTHON="$REPO_DIR/.venv/bin/python"
+PYTHON="${PYTHON:-python3}"
 NOTEBOOKS="$REPO_DIR/notebooks/testnet"
+
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
+    echo "Python interpreter not found: $PYTHON" >&2
+    echo "Activate the project virtualenv or set PYTHON=/path/to/python." >&2
+    exit 2
+fi
+
+if [[ -z "${ALLORA_API_KEY:-}" && ! -s "$REPO_DIR/.allora_api_key" ]]; then
+    echo "Allora API key not found." >&2
+    echo "Set ALLORA_API_KEY or create $REPO_DIR/.allora_api_key before running the example suite." >&2
+    exit 2
+fi
 
 FAILED=()
 PASSED=()
@@ -16,7 +28,7 @@ run_script() {
     echo "════════════════════════════════════════════════════════════════════════"
     echo ""
     cd "$NOTEBOOKS/$dir"
-    if "$PYTHON" "$script"; then
+    if "$PYTHON" "$script" </dev/null; then
         echo ""
         echo "  ✓ Done: $dir/$script"
         PASSED+=("$dir/$script")
