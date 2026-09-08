@@ -140,14 +140,14 @@ def czar_hessian(y_true, y_pred, std, mean=0, alpha=1):
     d_pred = s_pred * (np.abs(z_pred) + delta)
 
     h1 = d2p1 * double_derivative(delta)
-    H1 = np.full_like(d_pred, h1)
+    H1 = h1
     # Pseudo-hessians (canonical reference, chosen for numerical stability).
     # Analytical forms use d2p1 as the multiplier; (1+x²) is the intentional
     # pseudo form — bounds H2/h3 and prevents overshooting for large |x|.
     # See https://research.allora.network/t/czar-loss-function-for-returns-prediction-topics/155/5
     H2 = (1.0 + d_pred**2) * double_derivative(d_pred)
     h3 = (1.0 + d_true**2) * double_derivative(d_true)
-    H3 = np.full_like(d_pred, np.minimum(h1, h3))
+    H3 = np.minimum(h1, h3)
 
     return np.where(u <= 0, H1, np.where(u <= a, H2, H3)) / std**2
 
