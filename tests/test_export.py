@@ -158,7 +158,23 @@ def test_config_baked_but_not_pair_timeframe(tmp_path):
     cfg = json.loads((tmp_path / "forge_model" / "config.json").read_text())
     assert cfg["engineered_specs"] == [{"kind": "log_return", "window_bars": 6}]
     assert cfg["hyperparameters"] == {"n_estimators": 500}
+    assert cfg["target_type"] == "log_return"
     assert "pair" not in cfg and "timeframe" not in cfg
+
+
+def test_volatility_target_type_is_baked_and_forwarded(tmp_path):
+    export_package(_spec(target_type="volatility"), tmp_path)
+    cfg = json.loads((tmp_path / "forge_model" / "config.json").read_text())
+    src = (tmp_path / "forge_model" / "model.py").read_text()
+
+    assert cfg["target_type"] == "volatility"
+    assert 'TARGET_TYPE = _CONFIG.get("target_type", "log_return")' in src
+    assert "target_type=TARGET_TYPE" in src
+
+
+def test_invalid_target_type_rejected(tmp_path):
+    with pytest.raises(ValueError, match="target_type.*log_return\\|volatility"):
+        export_package(_spec(target_type="price"), tmp_path)
 
 
 def test_supports_training_flag(tmp_path):
