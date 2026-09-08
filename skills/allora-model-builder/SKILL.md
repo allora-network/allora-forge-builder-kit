@@ -125,7 +125,8 @@ wm.deploy_worker(topic_id=69, artifact_path=Path("predict.pkl"))
   Pearson p-value, WRMSE improvement, CZAR improvement) scored out of 7.
 - For **price topics**, return an absolute price.
   For **log-return topics**, return the log return.
-- For **volatility topics**, return the predicted std of 1-minute log returns
+- For **volatility topics**, return `sample_std(r_1, ..., r_H) × √H` for
+  1-minute log returns, using `ddof=1`
   over the horizon (a non-negative float). Use `target_type="volatility"`.
 
 ## Volatility target workflow
@@ -147,7 +148,7 @@ workflow = AlloraMLWorkflow(
 The target is defined as:
 ```
 r_i = log(close[t+i] / close[t+i-1])  for i in 1..target_bars
-target[t] = std(r_1, ..., r_{target_bars})
+target[t] = sample_std(r_1, ..., r_{target_bars}) * sqrt(target_bars)  # ddof=1
 ```
 
 The predict function returns the volatility directly (no price conversion):

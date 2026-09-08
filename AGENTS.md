@@ -42,7 +42,7 @@ Run one of the whitelist-free examples to train + evaluate + save `predict.pkl`:
 python notebooks/example_topic_69_bitcoin_walkthrough.py   # price prediction (1h bars)
 python notebooks/example_topic_77_bitcoin_5min_walkthrough.py  # price prediction (5m bars)
 
-# Volatility topics (1m bars, std of log returns over 15-min horizon)
+# Volatility topics (1m bars, sample std of log returns × √horizon)
 python notebooks/testnet/topic_79_btc_vol/model_grid_retrain.py  # BTC — grid search over objectives × hyperparams
 python notebooks/testnet/topic_80_eth_vol/model_grid_retrain.py  # ETH
 python notebooks/testnet/topic_81_xrp_vol/model_grid_retrain.py  # XRP
@@ -114,7 +114,7 @@ All base features are therefore **ratios**, not raw prices. Any additional engin
 Before deployment, verify topic prediction format:
 - **Price topic** → absolute price prediction
 - **Log-return topic** → `log(future/current)` prediction
-- **Volatility topic** → std of 1-minute log returns over the horizon (non-negative float)
+- **Volatility topic** → `sample_std(r_1, ..., r_H) × √H` for 1-minute log returns, using `ddof=1` (non-negative float)
 
 ## Volatility topics
 Topics 79–82 predict 15-minute realised volatility for BTC, ETH, XRP, SOL. Topic 85 predicts 4h ETH/USD volatility.

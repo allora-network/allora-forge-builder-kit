@@ -206,7 +206,7 @@ Every Allora topic defines a prediction task with a specific **target type** —
 
 **Price topics** — predict the absolute price `price[t+H]`. The playground topics (69, 77) use this format and are the recommended starting point.
 
-**Volatility topics** — predict the realized volatility of 1-minute log returns over the horizon: `std(r₁, …, r_H)` where `rᵢ = log(p[t+i] / p[t+i-1])`. The output is a non-negative float. Use `target_type="volatility"` in `AlloraMLWorkflow`.
+**Volatility topics** — predict horizon-scaled realized volatility: `sample_std(r₁, …, r_H) × √H`, where `rᵢ = log(p[t+i] / p[t+i-1])` are 1-minute returns and the sample standard deviation uses `ddof=1`. The output is a non-negative float. Use `target_type="volatility"` in `AlloraMLWorkflow`.
 
 ### Playground topics
 
@@ -223,11 +223,11 @@ Testnet only; may require whitelist.
 
 | Testnet ID | Name | Target type | Notes |
 |-----------|------|-------------|-------|
-| **79** | BTC/USD - 15 Min Volatility Prediction | Volatility | Std of 1-min log returns over 15-min horizon |
+| **79** | BTC/USD - 15 Min Volatility Prediction | Volatility | Sample std of 1-min log returns × √15 |
 | **80** | ETH/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, ETH pair |
 | **81** | XRP/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, XRP pair |
 | **82** | SOL/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, SOL pair |
-| **85** | ETH/USD - 4h Volatility Prediction | Volatility | Std of 1-min log returns over 4-hour horizon |
+| **85** | ETH/USD - 4h Volatility Prediction | Volatility | Sample std of 1-min log returns × √240 |
 
 ### Mainnet topics and testnet equivalents
 
@@ -468,7 +468,7 @@ wm.export_payload_for_hosting(ModelSpec(model_type="my_lgbm", engineered_specs=s
 At any point in time $t$, the model observes a window of $N$ past bars as input features $\mathbf{x} \in \mathbb{R}^d$ and predicts a future outcome $y$ over the next $H$ bars. The target $y$ depends on the topic type:
 
 - **Price / log-return topics** — $y = \log(p_{t+H} / p_t)$ or the absolute price $p_{t+H}$
-- **Volatility topics** — $y = \text{std}(r_1, \ldots, r_H)$ where $r_i = \log(p_{t+i} / p_{t+i-1})$ are consecutive 1-minute log returns over the horizon
+- **Volatility topics** — $y = \text{sample\_std}(r_1, \ldots, r_H)\sqrt{H}$, using `ddof=1`, where $r_i = \log(p_{t+i} / p_{t+i-1})$ are consecutive 1-minute log returns over the horizon
 
 By sliding this window across the full history, a single time series becomes thousands of labeled examples $(\mathbf{x}_i, y_i)$, turning forecasting into a standard supervised learning problem.
 
