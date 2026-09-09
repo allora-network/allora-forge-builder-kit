@@ -43,7 +43,7 @@ pytestmark = [
 ]
 
 
-def test_feature_integrity_allora_5min():
+def test_feature_integrity_allora_5min(integration_check):
     """Test feature integrity with Allora 5-minute bars - validates ALL features."""
     ticker = "btcusd"
     
@@ -181,7 +181,7 @@ def test_feature_integrity_allora_5min():
         print(f"✅ All {sample_size} rows × {workflow.number_of_input_bars} bars = {total_feature_checks:,} checks passed!")
 
 
-def test_feature_integrity_allora_1hour():
+def test_feature_integrity_allora_1hour(integration_check):
     """Test feature integrity with Allora 1-hour bars - validates ALL features."""
     ticker = "btcusd"
     
@@ -263,7 +263,7 @@ def test_feature_integrity_allora_1hour():
         print(f"✅ All {sample_size} rows × {workflow.number_of_input_bars} bars = {total_feature_checks:,} checks passed!")
 
 
-def test_feature_integrity_multi_asset():
+def test_feature_integrity_multi_asset(integration_check):
     """Test feature integrity across multiple assets - validates ALL features."""
     tickers = ["btcusd", "ethusd", "solusd"]
     

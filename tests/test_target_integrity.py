@@ -34,7 +34,7 @@ pytestmark = [
 ]
 
 
-def test_target_integrity_5min():
+def test_target_integrity_5min(integration_check):
     """Test that targets match manually calculated log returns for 5-min bars."""
     ticker = "btcusd"
     target_bars_ahead = 12  # Predict 12 bars (1 hour) ahead
@@ -123,7 +123,7 @@ def test_target_integrity_5min():
         print("✅ All targets match manually calculated log returns!")
 
 
-def test_target_integrity_1hour():
+def test_target_integrity_1hour(integration_check):
     """Test that targets match manually calculated log returns for 1-hour bars."""
     ticker = "btcusd"
     target_bars_ahead = 24  # Predict 24 bars (24 hours) ahead
@@ -200,7 +200,7 @@ def test_target_integrity_1hour():
         print("✅ All targets match manually calculated log returns!")
 
 
-def test_target_integrity_multi_asset():
+def test_target_integrity_multi_asset(integration_check):
     """Test target integrity across multiple assets."""
     tickers = ["btcusd", "ethusd"]
     target_bars_ahead = 24  # 2 hours ahead with 5-min bars
