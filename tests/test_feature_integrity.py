@@ -348,19 +348,4 @@ def test_feature_integrity_multi_asset(integration_check):
 
 
 if __name__ == "__main__":
-    print("="*80)
-    print("Feature Integrity Test Suite - Allora Data")
-    print("="*80)
-    
-    print("\n[Test 1] Allora 5-minute bars (single asset)")
-    test_feature_integrity_allora_5min()
-    
-    print("\n[Test 2] Allora 1-hour bars (single asset)")
-    test_feature_integrity_allora_1hour()
-    
-    print("\n[Test 3] Multi-asset test (btcusd, ethusd, solusd)")
-    test_feature_integrity_multi_asset()
-    
-    print("\n" + "="*80)
-    print("✅ All feature integrity tests passed!")
-    print("="*80)
+    raise SystemExit(pytest.main([__file__, "-s"]))

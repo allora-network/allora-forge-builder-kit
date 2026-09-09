@@ -277,14 +277,4 @@ def test_target_integrity_multi_asset(integration_check):
 
 
 if __name__ == "__main__":
-    print("="*80)
-    print("Target Integrity Test Suite")
-    print("="*80)
-    
-    test_target_integrity_5min()
-    test_target_integrity_1hour()
-    test_target_integrity_multi_asset()
-    
-    print("\n" + "="*80)
-    print("✅ All target integrity tests passed!")
-    print("="*80)
+    raise SystemExit(pytest.main([__file__, "-s"]))
