@@ -32,6 +32,16 @@ pip-wheel-metadata/
 *.tmp
 *.bak
 
+# uv lock file — this is a library, not an application; lock file is a local dev artifact
+uv.lock
+
+# Generated script outputs
+notebooks/testnet/**/scatter_*.png
+worker_secrets.json.lock
+
+# One-off runner scripts
+run_from_57.sh
+
 # Environments
 .env
 .venv/
@@ -75,3 +85,4 @@ managed_artifacts/
 artifacts/
 notebooks/artifacts/
 notebooks/runs/
+**/runs/

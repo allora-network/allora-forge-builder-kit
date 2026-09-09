@@ -15,6 +15,7 @@ Requires:
 """
 
 import asyncio
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -62,7 +63,7 @@ class AlloraTopicDiscovery:
         print(topic.epoch_length)
     """
 
-    def __init__(self, api_key: Optional[str] = None, network: str = "testnet"):
+    def __init__(self, api_key: Optional[str] = None, network: str | None = None):
         try:
             from allora_sdk.api_client import AlloraAPIClient, ChainID
         except ImportError:
@@ -70,7 +71,8 @@ class AlloraTopicDiscovery:
                 "allora_sdk is required for topic discovery.  "
                 "Install it with:  pip install allora_sdk"
             )
-        chain_id = ChainID.MAINNET if network.lower() == "mainnet" else ChainID.TESTNET
+        effective_network = network if network is not None else os.environ.get("ALLORA_NETWORK", "testnet")
+        chain_id = ChainID.MAINNET if effective_network.lower() == "mainnet" else ChainID.TESTNET
         self._client = AlloraAPIClient(chain_id=chain_id, api_key=api_key)
         self._topics_cache: Optional[List[TopicInfo]] = None
 

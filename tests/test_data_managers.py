@@ -54,13 +54,6 @@ def allora_api_key():
     return key
 
 
-@pytest.fixture
-def integration_check():
-    """Check if integration tests should run."""
-    if os.environ.get("RUN_INTEGRATION_TESTS") != "1":
-        pytest.skip("Integration test. Set RUN_INTEGRATION_TESTS=1 to enable.")
-
-
 # ============================================================================
 # Unit Tests - Factory Pattern
 # ============================================================================

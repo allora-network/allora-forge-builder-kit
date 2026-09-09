@@ -49,6 +49,7 @@ if not api_key:
     raise RuntimeError(
         "ALLORA_API_KEY not found. Set the env var or create a .allora_api_key file."
     )
+os.environ["ALLORA_API_KEY"] = api_key  # artifacts read environ at predict time
 
 
 async def main():

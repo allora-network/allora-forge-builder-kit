@@ -28,12 +28,13 @@ def _load_api_key():
 
 
 ALLORA_API_KEY = _load_api_key()
-pytestmark = pytest.mark.skipif(
-    ALLORA_API_KEY is None, reason="ALLORA_API_KEY not available"
-)
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(ALLORA_API_KEY is None, reason="ALLORA_API_KEY not available"),
+]
 
 
-def test_target_integrity_5min():
+def test_target_integrity_5min(integration_check):
     """Test that targets match manually calculated log returns for 5-min bars."""
     ticker = "btcusd"
     target_bars_ahead = 12  # Predict 12 bars (1 hour) ahead
@@ -122,7 +123,7 @@ def test_target_integrity_5min():
         print("✅ All targets match manually calculated log returns!")
 
 
-def test_target_integrity_1hour():
+def test_target_integrity_1hour(integration_check):
     """Test that targets match manually calculated log returns for 1-hour bars."""
     ticker = "btcusd"
     target_bars_ahead = 24  # Predict 24 bars (24 hours) ahead
@@ -199,7 +200,7 @@ def test_target_integrity_1hour():
         print("✅ All targets match manually calculated log returns!")
 
 
-def test_target_integrity_multi_asset():
+def test_target_integrity_multi_asset(integration_check):
     """Test target integrity across multiple assets."""
     tickers = ["btcusd", "ethusd"]
     target_bars_ahead = 24  # 2 hours ahead with 5-min bars
@@ -276,15 +277,4 @@ def test_target_integrity_multi_asset():
 
 
 if __name__ == "__main__":
-    print("="*80)
-    print("Target Integrity Test Suite")
-    print("="*80)
-    
-    test_target_integrity_5min()
-    test_target_integrity_1hour()
-    test_target_integrity_multi_asset()
-    
-    print("\n" + "="*80)
-    print("✅ All target integrity tests passed!")
-    print("="*80)
-
+    raise SystemExit(pytest.main([__file__, "-s"]))

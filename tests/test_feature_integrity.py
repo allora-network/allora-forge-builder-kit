@@ -37,12 +37,13 @@ def _load_api_key():
 
 
 ALLORA_API_KEY = _load_api_key()
-pytestmark = pytest.mark.skipif(
-    ALLORA_API_KEY is None, reason="ALLORA_API_KEY not available"
-)
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(ALLORA_API_KEY is None, reason="ALLORA_API_KEY not available"),
+]
 
 
-def test_feature_integrity_allora_5min():
+def test_feature_integrity_allora_5min(integration_check):
     """Test feature integrity with Allora 5-minute bars - validates ALL features."""
     ticker = "btcusd"
     
@@ -180,7 +181,7 @@ def test_feature_integrity_allora_5min():
         print(f"✅ All {sample_size} rows × {workflow.number_of_input_bars} bars = {total_feature_checks:,} checks passed!")
 
 
-def test_feature_integrity_allora_1hour():
+def test_feature_integrity_allora_1hour(integration_check):
     """Test feature integrity with Allora 1-hour bars - validates ALL features."""
     ticker = "btcusd"
     
@@ -262,7 +263,7 @@ def test_feature_integrity_allora_1hour():
         print(f"✅ All {sample_size} rows × {workflow.number_of_input_bars} bars = {total_feature_checks:,} checks passed!")
 
 
-def test_feature_integrity_multi_asset():
+def test_feature_integrity_multi_asset(integration_check):
     """Test feature integrity across multiple assets - validates ALL features."""
     tickers = ["btcusd", "ethusd", "solusd"]
     
@@ -347,20 +348,4 @@ def test_feature_integrity_multi_asset():
 
 
 if __name__ == "__main__":
-    print("="*80)
-    print("Feature Integrity Test Suite - Allora Data")
-    print("="*80)
-    
-    print("\n[Test 1] Allora 5-minute bars (single asset)")
-    test_feature_integrity_allora_5min()
-    
-    print("\n[Test 2] Allora 1-hour bars (single asset)")
-    test_feature_integrity_allora_1hour()
-    
-    print("\n[Test 3] Multi-asset test (btcusd, ethusd, solusd)")
-    test_feature_integrity_multi_asset()
-    
-    print("\n" + "="*80)
-    print("✅ All feature integrity tests passed!")
-    print("="*80)
-
+    raise SystemExit(pytest.main([__file__, "-s"]))
