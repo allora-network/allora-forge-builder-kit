@@ -271,9 +271,12 @@ for obj in OBJECTIVES:
                 for leaves in NUM_LEAVES:
                     model_num += 1
 
-                    y_train = df_train["target"].values
+                    df_train_fit = df_train
                     if log_space:
-                        y_train = np.log(y_train + 1e-10)
+                        df_train_fit = df_train[df_train["target"] > 0]
+                    y_train = df_train_fit["target"].values
+                    if log_space:
+                        y_train = np.log(y_train)
 
                     model = LGBMRegressor(
                         objective=obj, n_estimators=N_ESTIMATORS_MAX,
@@ -283,12 +286,12 @@ for obj in OBJECTIVES:
                     )
                     if obj == "huber":
                         model.set_params(alpha=0.5)
-                    model.fit(df_train[all_feature_cols], y_train)
+                    model.fit(df_train_fit[all_feature_cols], y_train)
 
                     for n_est in N_ESTIMATORS_CHECKPOINTS:
                         raw_preds = model.predict(df_val[all_feature_cols], num_iteration=n_est)
                         if log_space:
-                            train_resid = y_train - model.predict(df_train[all_feature_cols], num_iteration=n_est)
+                            train_resid = y_train - model.predict(df_train_fit[all_feature_cols], num_iteration=n_est)
                             grid_bias_correction = float(np.exp(0.5 * np.var(train_resid)))
                             preds = np.exp(raw_preds) * grid_bias_correction
                         else:
@@ -328,10 +331,13 @@ print(f"\n[4/4] Training & saving top {TOP_K_DEPLOY}...")
 top_k = results_df.drop_duplicates(subset=["model_num"]).head(TOP_K_DEPLOY)
 n_smoke_failures = 0
 for rank, (_, row) in enumerate(top_k.iterrows()):
-    y_all = df["target"].values
+    df_all_fit = df
     log_space = row["log_space"]
     if log_space:
-        y_all = np.log(y_all + 1e-10)
+        df_all_fit = df[df["target"] > 0]
+    y_all = df_all_fit["target"].values
+    if log_space:
+        y_all = np.log(y_all)
 
     model = LGBMRegressor(
         objective=row["obj"], n_estimators=int(row["n_est"]),
@@ -342,10 +348,10 @@ for rank, (_, row) in enumerate(top_k.iterrows()):
     )
     if row["obj"] == "huber":
         model.set_params(alpha=0.5)
-    model.fit(df[all_feature_cols], y_all)
+    model.fit(df_all_fit[all_feature_cols], y_all)
 
     if log_space:
-        residuals = y_all - model.predict(df[all_feature_cols])
+        residuals = y_all - model.predict(df_all_fit[all_feature_cols])
         _bias_corr = float(np.exp(0.5 * np.var(residuals)))
     else:
         _bias_corr = 1.0
@@ -405,9 +411,12 @@ import matplotlib.pyplot as plt
 
 best_row = top_k.iloc[0]
 log_space = best_row["log_space"]
-y_train_final = df_train["target"].values
+df_train_final = df_train
 if log_space:
-    y_train_final = np.log(y_train_final + 1e-10)
+    df_train_final = df_train[df_train["target"] > 0]
+y_train_final = df_train_final["target"].values
+if log_space:
+    y_train_final = np.log(y_train_final)
 
 best_model = LGBMRegressor(
     objective=best_row["obj"], n_estimators=int(best_row["n_est"]),
@@ -418,11 +427,11 @@ best_model = LGBMRegressor(
 )
 if best_row["obj"] == "huber":
     best_model.set_params(alpha=0.5)
-best_model.fit(df_train[all_feature_cols], y_train_final)
+best_model.fit(df_train_final[all_feature_cols], y_train_final)
 
 raw_preds = best_model.predict(df_test[all_feature_cols])
 if log_space:
-    scatter_bias = float(np.exp(0.5 * np.var(y_train_final - best_model.predict(df_train[all_feature_cols]))))
+    scatter_bias = float(np.exp(0.5 * np.var(y_train_final - best_model.predict(df_train_final[all_feature_cols]))))
     scatter_preds = np.exp(raw_preds) * scatter_bias
 else:
     scatter_preds = raw_preds

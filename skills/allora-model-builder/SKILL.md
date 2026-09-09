@@ -167,12 +167,15 @@ better calibrated predictions that match the target distribution:
 ```python
 import numpy as np
 
-# Train in log-space
-y_train_log = np.log(y_train + 1e-10)
-model.fit(X_train, y_train_log)
+# Train in log-space. Exact-zero volatility has no finite logarithm, so omit
+# those rows from log-space fitting while retaining them in evaluation data.
+positive = y_train > 0
+X_train_log = X_train[positive]
+y_train_log = np.log(y_train[positive])
+model.fit(X_train_log, y_train_log)
 
 # Bias correction: exp(E[log(x)]) underestimates E[x]
-residuals = y_train_log - model.predict(X_train)
+residuals = y_train_log - model.predict(X_train_log)
 bias_correction = np.exp(0.5 * np.var(residuals))
 
 def predict(nonce=None):
