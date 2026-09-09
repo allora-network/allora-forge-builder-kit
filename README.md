@@ -561,7 +561,7 @@ All three produce a complete, runnable pipeline and satisfy the same nine method
 | `notebooks/testnet/topic_38_sol_8h_price/` | Topic 38 SOL/USD 8h price: example + CZAR model |
 | `notebooks/testnet/topic_41_eth_8h_price/` | Topic 41 ETH/USD 8h price: example + CZAR model |
 | `notebooks/testnet/topic_42_btc_8h_price/` | Topic 42 BTC/USD 8h price: example + directional + CZAR models |
-| `notebooks/testnet/topic_57_sol_8h_logreturn/` | Topic 57 SOL/USD 8h log-return example |
+| `notebooks/testnet/topic_58_sol_8h_logreturn/` | Topic 58 SOL/USD 8h log-return example |
 | `notebooks/testnet/topic_61_btc_24h_logreturn/` | Topic 61 BTC/USD 24h log-return example |
 | `notebooks/testnet/topic_62_sol_24h_logreturn/` | Topic 62 SOL/USD 24h log-return example |
 | `notebooks/testnet/topic_63_eth_24h_logreturn/` | Topic 63 ETH/USD 24h log-return example |

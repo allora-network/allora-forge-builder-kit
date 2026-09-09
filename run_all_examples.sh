@@ -53,8 +53,8 @@ run_script topic_42_btc_8h_price example.py
 run_script topic_42_btc_8h_price model_v2_directional.py
 run_script topic_42_btc_8h_price model_v3_czar.py
 
-# ── topic_57 ─────────────────────────────────────────────────────────────────
-run_script topic_57_sol_8h_logreturn example.py
+# ── topic_58 ─────────────────────────────────────────────────────────────────
+run_script topic_58_sol_8h_logreturn example.py
 
 # ── topic_61 ─────────────────────────────────────────────────────────────────
 run_script topic_61_btc_24h_logreturn example.py

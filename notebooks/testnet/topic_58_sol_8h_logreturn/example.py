@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ================================================================================
-Allora Forge Builder Kit v3.0 - Topic 57 SOL/USD Log-Return Prediction Walkthrough
+Allora Forge Builder Kit v3.0 - Topic 58 SOL/USD Log-Return Prediction Walkthrough
 ================================================================================
 
 This walkthrough demonstrates 8-hour SOL/USD price prediction using the 
@@ -52,7 +52,7 @@ NUM_LEAVES = [15, 31, 63]
 # =============================================================================
 
 print("="*80)
-print("Allora Forge Builder Kit v3.0 - Topic 57 Walkthrough")
+print("Allora Forge Builder Kit v3.0 - Topic 58 Walkthrough")
 print("="*80)
 
 
@@ -136,7 +136,7 @@ def save_run_artifacts(df_eval, best_result, best_params, run_dir, feature_cols)
 
     # 5) Human-readable report
     with open(os.path.join(run_dir, "report.txt"), "w") as f:
-        f.write("Allora Topic 57 Run Report\n")
+        f.write("Allora Topic 58 Run Report\n")
         f.write("=" * 40 + "\n")
         f.write(f"Score: {best_result['score']:.1%} ({best_result['num_passed']}/7)\n")
         f.write(f"Grade: {best_result['grade']}\n")
@@ -410,7 +410,7 @@ predict = _make_predict(final_model)
 print("\n🧪 Testing prediction...")
 test_prediction = predict()
 
-pkl_path = os.path.join(os.path.dirname(__file__), "predict_57.pkl")
+pkl_path = os.path.join(os.path.dirname(__file__), "predict_58.pkl")
 with open(pkl_path, "wb") as f:
     cloudpickle.dump(predict, f)
 
@@ -423,5 +423,4 @@ print(f"Run artifacts: {artifacts['run_dir']}")
 print(f"- Predictions: {artifacts['predictions_csv']}")
 print(f"- Scatter plot: {artifacts['scatter_png']}")
 print("="*80)
-print("\nDeploy (from notebooks/): TOPIC_ID=57 PREDICT_PKL=testnet/topic_57_sol_8h_logreturn/predict_57.pkl python deploy_worker.py")
-
+print("\nDeploy (from notebooks/): TOPIC_ID=58 PREDICT_PKL=testnet/topic_58_sol_8h_logreturn/predict_58.pkl python deploy_worker.py")
