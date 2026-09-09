@@ -8,7 +8,6 @@ import pandas as pd
 import pytest
 
 
-N_INPUT_BARS = 60
 SCRIPT_PATHS = [
     Path(f"notebooks/testnet/topic_{topic}/model_grid_retrain.py")
     for topic in (
@@ -24,6 +23,12 @@ SCRIPT_PATHS = [
 def _load_feature_functions(path: Path):
     """Load only feature function definitions, without executing the script."""
     tree = ast.parse(path.read_text(), filename=str(path))
+    assignment = next(
+        node for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "NUMBER_OF_INPUT_BARS" for target in node.targets)
+    )
+    n_input_bars = ast.literal_eval(assignment.value)
     names = {"engineer_features_vectorized", "engineer_features"}
     functions = [
         node
@@ -32,23 +37,23 @@ def _load_feature_functions(path: Path):
     ]
     assert {node.name for node in functions} == names
 
-    namespace = {"np": np, "pd": pd, "NUMBER_OF_INPUT_BARS": N_INPUT_BARS}
+    namespace = {"np": np, "pd": pd, "NUMBER_OF_INPUT_BARS": n_input_bars}
     module = ast.Module(body=functions, type_ignores=[])
     exec(compile(module, str(path), "exec"), namespace)
-    return namespace["engineer_features_vectorized"], namespace["engineer_features"]
+    return namespace["engineer_features_vectorized"], namespace["engineer_features"], n_input_bars
 
 
-def _synthetic_feature_rows() -> pd.DataFrame:
+def _synthetic_feature_rows(n_input_bars: int) -> pd.DataFrame:
     rng = np.random.default_rng(42)
     rows = []
     for _ in range(4):
-        closes = np.exp(np.cumsum(rng.normal(0.0, 0.002, N_INPUT_BARS)))
+        closes = np.exp(np.cumsum(rng.normal(0.0, 0.002, n_input_bars)))
         closes /= closes[-1]
-        spreads = rng.uniform(0.0001, 0.003, N_INPUT_BARS)
-        volumes = rng.lognormal(0.0, 0.4, N_INPUT_BARS)
+        spreads = rng.uniform(0.0001, 0.003, n_input_bars)
+        volumes = rng.lognormal(0.0, 0.4, n_input_bars)
         volumes /= volumes[-1]
         row = {}
-        for i in range(N_INPUT_BARS):
+        for i in range(n_input_bars):
             row[f"feature_close_{i}"] = closes[i]
             row[f"feature_high_{i}"] = closes[i] * (1.0 + spreads[i])
             row[f"feature_low_{i}"] = closes[i] * (1.0 - spreads[i])
@@ -59,10 +64,10 @@ def _synthetic_feature_rows() -> pd.DataFrame:
 
 @pytest.mark.parametrize("script_path", SCRIPT_PATHS, ids=lambda path: path.parent.name)
 def test_vectorized_features_match_live_row_features(script_path: Path):
-    vectorized, row_wise = _load_feature_functions(script_path)
-    source = _synthetic_feature_rows()
+    vectorized, row_wise, n_input_bars = _load_feature_functions(script_path)
+    source = _synthetic_feature_rows(n_input_bars)
 
-    train_features = vectorized(source, N_INPUT_BARS)
+    train_features = vectorized(source, n_input_bars)
     live_features = pd.DataFrame(
         [row_wise(source.iloc[i]) for i in range(len(source))],
         index=source.index,
