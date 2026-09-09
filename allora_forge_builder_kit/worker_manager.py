@@ -167,7 +167,13 @@ class WorkerManager:
         self.artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.key_dir = Path(key_dir)
         self.key_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self._network = network if network is not None else os.environ.get("ALLORA_NETWORK", "testnet")
+        self._network = (
+            network if network is not None else os.environ.get("ALLORA_NETWORK", "testnet")
+        ).strip().lower()
+        if self._network not in ("testnet", "mainnet"):
+            raise ValueError(
+                f"network must be 'testnet' or 'mainnet', got {self._network!r}"
+            )
         self._no_faucet = no_faucet
         # Strip and coerce empty/whitespace-only to None: _build_run_command's truthiness guard
         # otherwise passes a whitespace-only value, spawning a subprocess whose worker_runtime

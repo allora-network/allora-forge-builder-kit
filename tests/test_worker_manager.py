@@ -58,6 +58,26 @@ def _new_manager(tmp_path: Path) -> WorkerManager:
     )
 
 
+@pytest.mark.parametrize(
+    ("network", "expected"),
+    [("MAINNET", "mainnet"), (" testnet ", "testnet")],
+)
+def test_network_argument_is_normalized(tmp_path: Path, network: str, expected: str):
+    manager = _managed_manager(tmp_path, _FakeForgeClient(), network=network)
+    assert manager._network == expected
+
+
+def test_network_environment_is_normalized(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ALLORA_NETWORK", "Mainnet")
+    manager = _managed_manager(tmp_path, _FakeForgeClient())
+    assert manager._network == "mainnet"
+
+
+def test_invalid_network_fails_during_construction(tmp_path: Path):
+    with pytest.raises(ValueError, match="network must be 'testnet' or 'mainnet'"):
+        _managed_manager(tmp_path, _FakeForgeClient(), network="staging")
+
+
 def test_validate_artifact_for_deploy_clean_artifact_ok(tmp_path: Path):
     manager = _managed_manager(tmp_path, _FakeForgeClient())
     artifact = tmp_path / "clean.pkl"
