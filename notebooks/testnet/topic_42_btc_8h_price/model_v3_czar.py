@@ -14,6 +14,7 @@ Combined with the directional features from v2.
 import numpy as np
 import pandas as pd
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 from sklearn.model_selection import TimeSeriesSplit
 from lightgbm import LGBMRegressor
@@ -299,6 +300,7 @@ for rank_idx, (_, row) in enumerate(top3.iterrows()):
 
 print(f"\n[5/5] Saving...")
 # For pickling: use the raw booster for prediction (avoids serializing CZAR objective)
+n_smoke_failures = 0
 for rank_idx, (cfg, model, row) in enumerate(trained):
     def _make_predict(m):
         # Serialize booster to string — avoids pickling czar_loss module
@@ -345,9 +347,11 @@ for rank_idx, (cfg, model, row) in enumerate(trained):
         print(f"   Model {rank_idx+1} (#{cfg}): ${price:,.2f} → {pkl}")
     except Exception as e:
         print(f"   Model {rank_idx+1} (#{cfg}): FAILED ({e}) → {pkl}")
+        n_smoke_failures += 1
     with open(pkl, "wb") as f:
         cloudpickle.dump(fn, f)
 
 print("\n" + "=" * 70)
 print("COMPLETE!")
 print("=" * 70)
+sys.exit(n_smoke_failures)

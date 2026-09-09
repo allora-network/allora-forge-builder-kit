@@ -17,6 +17,7 @@ Features:
 import numpy as np
 import pandas as pd
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 from sklearn.model_selection import TimeSeriesSplit
 from lightgbm import LGBMRegressor
@@ -337,6 +338,7 @@ for rank_idx, (_, row) in enumerate(top3.iterrows()):
 # SAVE PICKLES
 # =============================================================================
 print(f"\n[5/6] Testing & saving...")
+n_smoke_failures = 0
 for rank_idx, (cfg, model, selected, row) in enumerate(trained):
     def _make_predict(m, sel, _tickers=TICKERS[:], _n_input=NUMBER_OF_INPUT_BARS,
                       _target_bars=TARGET_BARS, _interval=INTERVAL,
@@ -381,6 +383,7 @@ for rank_idx, (cfg, model, selected, row) in enumerate(trained):
         print(f"   Model {rank_idx+1} (#{cfg}): ${price:,.2f} → {pkl}")
     except Exception as e:
         print(f"   Model {rank_idx+1} (#{cfg}): FAILED ({e}) → {pkl}")
+        n_smoke_failures += 1
     with open(pkl, "wb") as f:
         cloudpickle.dump(fn, f)
 
@@ -390,3 +393,4 @@ with open("predict_42.pkl", "wb") as fout:
 print("\n" + "=" * 70)
 print("COMPLETE!")
 print("=" * 70)
+sys.exit(n_smoke_failures)
