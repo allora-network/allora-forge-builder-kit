@@ -10,7 +10,7 @@ if ! command -v "$PYTHON" >/dev/null 2>&1; then
     exit 2
 fi
 
-if [[ -z "${ALLORA_API_KEY:-}" && ! -s "$REPO_DIR/.allora_api_key" ]]; then
+if [[ -z "${ALLORA_API_KEY//[[:space:]]/}" ]] && ! grep -q '[^[:space:]]' "$REPO_DIR/.allora_api_key" 2>/dev/null; then
     echo "Allora API key not found." >&2
     echo "Set ALLORA_API_KEY or create $REPO_DIR/.allora_api_key before running the example suite." >&2
     exit 2
