@@ -336,6 +336,8 @@ for rank_idx, (cfg, model, row) in enumerate(trained):
                             current_price = snap_price
                     except (TypeError, ValueError):
                         pass
+            if not np.isfinite(current_price) or current_price <= 0:
+                raise ValueError(f"Invalid current price for inference: {current_price}")
             log_ret = booster.predict(live_eng[_feature_cols].values.reshape(1, -1))[0]
             return float(current_price * np.exp(log_ret))
         return predict
