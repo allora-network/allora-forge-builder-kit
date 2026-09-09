@@ -154,7 +154,11 @@ def czar_hessian(y_true, y_pred, std, mean=0, alpha=1):
 
 def make_czar_objective(std, mean=0, alpha=1):
     """
-    Create a LightGBM-compatible custom objective using CZAR loss.
+    Create a CZAR custom objective for LightGBM's sklearn ``LGBMRegressor``.
+
+    The returned callable uses sklearn's ``(y_true, y_pred)`` argument order.
+    It is not compatible with the native ``lightgbm.train`` custom-objective
+    interface, which calls objectives as ``(preds, train_data)``.
     
     Args:
         std: Rolling volatility for z-scoring (scalar or array matching training data)
@@ -162,7 +166,7 @@ def make_czar_objective(std, mean=0, alpha=1):
         alpha: CZAR alpha parameter (0-1, controls MSE curvature)
     
     Returns:
-        objective function compatible with LightGBM's fobj parameter
+        Objective callable compatible with ``LGBMRegressor(objective=...)``.
     """
     def objective(y_true_or_dataset, y_pred):
         # Handle both LightGBM Dataset objects and raw arrays
