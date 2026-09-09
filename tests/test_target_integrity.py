@@ -28,9 +28,10 @@ def _load_api_key():
 
 
 ALLORA_API_KEY = _load_api_key()
-pytestmark = pytest.mark.skipif(
-    ALLORA_API_KEY is None, reason="ALLORA_API_KEY not available"
-)
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(ALLORA_API_KEY is None, reason="ALLORA_API_KEY not available"),
+]
 
 
 def test_target_integrity_5min():
@@ -287,4 +288,3 @@ if __name__ == "__main__":
     print("\n" + "="*80)
     print("✅ All target integrity tests passed!")
     print("="*80)
-
