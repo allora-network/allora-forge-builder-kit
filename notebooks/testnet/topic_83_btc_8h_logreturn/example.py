@@ -34,7 +34,7 @@ INTERVAL = "5m"
 
 # Feature Configuration
 NUMBER_OF_INPUT_BARS = 288  # 5-minute bars (288 × 5 min = 24 hours of history)
-TARGET_BARS = 96           # Predict 24 bars (hours) ahead
+TARGET_BARS = 96           # 96 × 5 min = 8-hour prediction horizon
 
 # Cross-Validation Configuration
 N_SPLITS = 3               # Number of CV folds
@@ -220,7 +220,7 @@ def engineer_returns(row):
     returns['log_return_1h'] = np.log(closes[-1] + 1e-8) - np.log(closes[-13] + 1e-8) if NUMBER_OF_INPUT_BARS >= 13 else 0
     returns['log_return_6h'] = np.log(closes[-1] + 1e-8) - np.log(closes[-73] + 1e-8) if NUMBER_OF_INPUT_BARS >= 73 else 0
     returns['log_return_12h'] = np.log(closes[-1] + 1e-8) - np.log(closes[-145] + 1e-8) if NUMBER_OF_INPUT_BARS >= 145 else 0
-    returns['log_return_24h'] = np.log(closes[-1] + 1e-8) - np.log(closes[0] + 1e-8) if NUMBER_OF_INPUT_BARS >= 1 else 0
+    returns['log_return_24h'] = np.log(closes[-1] + 1e-8) - np.log(closes[0] + 1e-8) if NUMBER_OF_INPUT_BARS >= 288 else 0
     
     return pd.Series(returns)
 
@@ -424,4 +424,3 @@ print(f"- Predictions: {artifacts['predictions_csv']}")
 print(f"- Scatter plot: {artifacts['scatter_png']}")
 print("="*80)
 print("\nDeploy (from notebooks/): TOPIC_ID=83 PREDICT_PKL=testnet/topic_83_btc_8h_logreturn/predict_83.pkl python deploy_worker.py")
-
