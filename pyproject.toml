@@ -21,7 +21,7 @@ dependencies = [
     "scikit-learn",
     "requests",
     "dill",
-    "polars",
+    "polars>=1.21",
     "pyarrow",
     "pytz",
     "numba",
@@ -51,4 +51,3 @@ Homepage = "https://github.com/allora-network/allora-forge-builder-kit"
 
 [tool.setuptools.packages.find]
 include = ["allora_forge_builder_kit"]
-

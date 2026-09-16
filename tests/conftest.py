@@ -10,6 +10,13 @@ import pytest
 from pathlib import Path
 
 
+@pytest.fixture
+def integration_check():
+    """Require an explicit opt-in before any integration test runs."""
+    if os.environ.get("RUN_INTEGRATION_TESTS") != "1":
+        pytest.skip("Integration test. Set RUN_INTEGRATION_TESTS=1 to enable.")
+
+
 def pytest_configure(config):
     """
     Called before test run starts.

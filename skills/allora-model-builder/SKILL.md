@@ -100,16 +100,21 @@ with open("predict.pkl", "wb") as f:
     cloudpickle.dump(predict, f)
 ```
 
-Then deploy with `allora_sdk`:
+Then deploy with `WorkerManager` (handles wallet creation, key management, and process lifecycle):
+
+```bash
+# From notebooks/
+TOPIC_ID=69 python deploy_worker.py
+```
+
+Or via Python API:
 
 ```python
-from allora_sdk.worker import AlloraWorker
+from pathlib import Path
+from allora_forge_builder_kit import WorkerManager
 
-worker = AlloraWorker(
-    topic_id=69,
-    predict_fn=predict,
-    api_key="UP-...",
-)
+wm = WorkerManager()
+wm.deploy_worker(topic_id=69, artifact_path=Path("predict.pkl"))
 ```
 
 ## Key points
@@ -120,6 +125,68 @@ worker = AlloraWorker(
   Pearson p-value, WRMSE improvement, CZAR improvement) scored out of 7.
 - For **price topics**, return an absolute price.
   For **log-return topics**, return the log return.
+- For **volatility topics**, return `sample_std(r_1, ..., r_H) × √H` for
+  1-minute log returns, using `ddof=1`
+  over the horizon (a non-negative float). Use `target_type="volatility"`.
+
+## Volatility target workflow
+
+For topics that predict realised volatility (e.g. Topic 79):
+
+```python
+workflow = AlloraMLWorkflow(
+    tickers=["btcusd"],
+    number_of_input_bars=15,   # 15 minutes of 1-min bars
+    target_bars=15,            # 15-minute volatility horizon
+    interval="1m",             # base data interval
+    target_type="volatility",  # std of log returns over horizon
+    data_source="allora",
+    api_key="UP-...",
+)
+```
+
+The target is defined as:
+```
+r_i = log(close[t+i] / close[t+i-1])  for i in 1..target_bars
+target[t] = sample_std(r_1, ..., r_{target_bars}) * sqrt(target_bars)  # ddof=1
+```
+
+The predict function returns the volatility directly (no price conversion):
+```python
+def predict(nonce=None):
+    features = workflow.get_live_features("btcusd")
+    vol = model.predict(features[feature_cols].values.reshape(1, -1))[0]
+    return float(max(0.0, vol))  # volatility is non-negative
+```
+
+### Best-performing approach: log-space prediction
+
+Predicting `log(vol)` and transforming back with bias correction produces
+better calibrated predictions that match the target distribution:
+
+```python
+import numpy as np
+
+# Train in log-space. Exact-zero volatility has no finite logarithm, so omit
+# those rows from log-space fitting while retaining them in evaluation data.
+positive = y_train > 0
+X_train_log = X_train[positive]
+y_train_log = np.log(y_train[positive])
+model.fit(X_train_log, y_train_log)
+
+# Bias correction: exp(E[log(x)]) underestimates E[x]
+residuals = y_train_log - model.predict(X_train_log)
+bias_correction = np.exp(0.5 * np.var(residuals))
+
+def predict(nonce=None):
+    features = workflow.get_live_features("btcusd")
+    log_pred = model.predict(features[feature_cols].values.reshape(1, -1))[0]
+    vol = np.exp(log_pred) * bias_correction
+    return float(max(0.0, vol))
+```
+
+Volatility topics: 79 (BTC), 80 (ETH), 81 (XRP), 82 (SOL), 85 (ETH 4h).
+See `notebooks/testnet/topic_79_btc_vol/model_grid_retrain.py` for the full implementation.
 
 ## Base feature normalization
 

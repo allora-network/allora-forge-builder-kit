@@ -48,6 +48,7 @@ class ModelSpec:
     engineered_specs: list[dict[str, Any]]
     number_of_input_bars: int
     target_bars: int
+    target_type: str = "log_return"
     hyperparameters: dict[str, Any] = field(default_factory=dict)
     model_family: str = "lightgbm"
     data_source: str = "binance"
@@ -70,6 +71,10 @@ class ModelSpec:
             raise ValueError("number_of_input_bars must be >= 1")
         if self.target_bars < 1:
             raise ValueError("target_bars must be >= 1")
+        if self.target_type not in ("log_return", "volatility"):
+            raise ValueError(
+                f"target_type {self.target_type!r} must be log_return|volatility"
+            )
         if self.days_of_history < 1:
             raise ValueError("days_of_history must be >= 1")
         # supports_training must be a real bool: the manifest XOR check compares it
@@ -120,6 +125,7 @@ class ModelSpec:
             "days_of_history": self.days_of_history,
             "number_of_input_bars": self.number_of_input_bars,
             "target_bars": self.target_bars,
+            "target_type": self.target_type,
             "engineered_specs": self.engineered_specs,
             "hyperparameters": self.hyperparameters,
             "supports_training": self.supports_training,
@@ -260,6 +266,7 @@ HYPERPARAMETERS = _CONFIG["hyperparameters"]
 SOURCE = _CONFIG["data_source"]
 NUMBER_OF_INPUT_BARS = _CONFIG["number_of_input_bars"]
 TARGET_BARS = _CONFIG["target_bars"]
+TARGET_TYPE = _CONFIG.get("target_type", "log_return")
 DAYS_OF_HISTORY = _CONFIG["days_of_history"]
 SUPPORTS_TRAINING = _CONFIG.get("supports_training", True)
 MODEL_FILENAME = "model.joblib"
@@ -313,6 +320,7 @@ def _workflow() -> AlloraMLWorkflow:
         tickers=[_pair()],
         number_of_input_bars=NUMBER_OF_INPUT_BARS,
         target_bars=TARGET_BARS,
+        target_type=TARGET_TYPE,
         interval=_timeframe(),
         data_source=SOURCE,
         **kwargs,

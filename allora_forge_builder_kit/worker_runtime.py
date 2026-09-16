@@ -241,7 +241,7 @@ def main() -> None:
     parser.add_argument("--artifact", required=True)
     parser.add_argument("--api-key", default=None)
     parser.add_argument("--mnemonic-file", default=None, help="Path to wallet key file (managed by WorkerManager)")
-    parser.add_argument("--network", default="testnet", choices=["testnet", "mainnet"])
+    parser.add_argument("--network", default=os.environ.get("ALLORA_NETWORK", "testnet"), choices=["testnet", "mainnet"])
     parser.add_argument("--no-faucet", action="store_true", help="Skip SDK faucet checks (use when already funded)")
     parser.add_argument(
         "--custody",
@@ -277,6 +277,7 @@ def main() -> None:
         )
 
     api_key = _load_api_key(args.api_key)
+    os.environ["ALLORA_API_KEY"] = api_key  # artifacts read environ at predict time
     # _resolve_wallet_cfg validates the managed-custody env (FORGE_BACKEND_URL default-to-prod and
     # fee-granter warnings) on the seam, so those diagnostics fire for any caller, not just the CLI.
     wallet_cfg = _resolve_wallet_cfg(args.custody, args.mnemonic_file)

@@ -1,0 +1,463 @@
+#!/usr/bin/env python3
+"""
+================================================================================
+Allora Forge Builder Kit v3.0 - Topic 38 SOL/USD Price Prediction Walkthrough
+================================================================================
+
+This walkthrough demonstrates 8-hour SOL/USD price prediction using the 
+Allora ML Workflow Kit with base features and LightGBM.
+
+Data is sourced from the Atlas data service (Tiingo 1-min candles).
+
+================================================================================
+"""
+
+import numpy as np
+import pandas as pd
+import os
+import json
+from datetime import datetime, timedelta, timezone
+from sklearn.model_selection import TimeSeriesSplit
+from lightgbm import LGBMRegressor
+import matplotlib.pyplot as plt
+import cloudpickle
+from allora_forge_builder_kit import AlloraMLWorkflow, PerformanceEvaluator
+
+# =============================================================================
+# EXPERIMENT CONFIGURATION
+# =============================================================================
+
+# Data Configuration
+TICKERS = ["solusd"]
+DAYS_OF_HISTORY = 1825     # ~5 years
+INTERVAL = "1h"            # 1-hour bars
+
+# Feature Configuration
+NUMBER_OF_INPUT_BARS = 48   # 2 days of hourly bars (48h lookback)
+TARGET_BARS = 8             # Predict 8 bars (8 hours) ahead
+
+# Cross-Validation Configuration
+N_SPLITS = 3               # Number of CV folds
+MAX_TRAIN_SIZE = 100_000_000  # Maximum training samples per fold
+
+# Model Configuration
+N_ESTIMATORS_MAX = 500    # Train with max trees, evaluate at checkpoints
+N_ESTIMATORS_CHECKPOINTS = [100, 300, 500]
+LEARNING_RATES = [0.01, 0.05, 0.1]
+MAX_DEPTHS = [3, 5, 7]
+NUM_LEAVES = [15, 31, 63]
+
+# =============================================================================
+# SCRIPT START
+# =============================================================================
+
+print("="*80)
+print("Allora Forge Builder Kit v3.0 - Topic 38 Walkthrough")
+print("="*80)
+
+
+def _to_serializable(obj):
+    """Convert numpy/pandas objects into JSON-serializable Python types."""
+    if isinstance(obj, (np.floating, np.integer)):
+        return obj.item()
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (pd.Timestamp, datetime)):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _to_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_to_serializable(v) for v in obj]
+    return obj
+
+
+def save_run_artifacts(df_eval, best_result, best_params, run_dir, feature_cols):
+    """Persist config/metrics/predictions and basic diagnostic plots for reproducibility."""
+    os.makedirs(run_dir, exist_ok=True)
+
+    # 1) Run config
+    config = {
+        "tickers": TICKERS,
+        "days_of_history": DAYS_OF_HISTORY,
+        "interval": INTERVAL,
+        "number_of_input_bars": NUMBER_OF_INPUT_BARS,
+        "target_bars": TARGET_BARS,
+        "n_splits": N_SPLITS,
+        "max_train_size": MAX_TRAIN_SIZE,
+        "n_estimators_checkpoints": N_ESTIMATORS_CHECKPOINTS,
+        "learning_rates": LEARNING_RATES,
+        "max_depths": MAX_DEPTHS,
+        "num_leaves": NUM_LEAVES,
+        "best_params": best_params,
+        "feature_count": len(feature_cols),
+    }
+    with open(os.path.join(run_dir, "config.json"), "w") as f:
+        json.dump(_to_serializable(config), f, indent=2)
+
+    # 2) Metrics
+    metrics_payload = {
+        "score": best_result["score"],
+        "grade": best_result["grade"],
+        "num_passed": best_result["num_passed"],
+        "num_primary_metrics": best_result.get("num_primary_metrics"),
+        "thresholds": best_result.get("thresholds", {}),
+        "passed": best_result.get("passed", {}),
+        "metrics": best_result.get("metrics", {}),
+    }
+    with open(os.path.join(run_dir, "metrics.json"), "w") as f:
+        json.dump(_to_serializable(metrics_payload), f, indent=2)
+
+    # 3) Predictions table
+    export_df = df_eval.copy()
+    if "predictions" in best_result:
+        export_df["pred"] = best_result["predictions"].values
+
+    export_cols = ["open_time", "target", "pred"]
+    export_cols = [c for c in export_cols if c in export_df.columns]
+    preds_df = export_df[export_cols].dropna(subset=["pred"]).copy()
+    preds_csv_path = os.path.join(run_dir, "predictions.csv")
+    preds_df.to_csv(preds_csv_path, index=False)
+
+    # 4) Scatter plot: pred vs target
+    plt.figure(figsize=(8, 8))
+    plt.scatter(preds_df["target"], preds_df["pred"], s=8, alpha=0.35)
+    lim_min = float(min(preds_df["target"].min(), preds_df["pred"].min()))
+    lim_max = float(max(preds_df["target"].max(), preds_df["pred"].max()))
+    plt.plot([lim_min, lim_max], [lim_min, lim_max], linestyle="--", linewidth=1)
+    plt.xlabel("Target (log return)")
+    plt.ylabel("Prediction (log return)")
+    plt.title("Predictions vs Target")
+    plt.tight_layout()
+    scatter_path = os.path.join(run_dir, "scatter_pred_vs_target.png")
+    plt.savefig(scatter_path, dpi=150)
+    plt.close()
+
+    # 5) Human-readable report
+    with open(os.path.join(run_dir, "report.txt"), "w") as f:
+        f.write("Allora Topic 38 Run Report\n")
+        f.write("=" * 40 + "\n")
+        f.write(f"Score: {best_result['score']:.1%} ({best_result['num_passed']}/7)\n")
+        f.write(f"Grade: {best_result['grade']}\n")
+        f.write(f"Best params: {best_params}\n\n")
+        f.write("Primary metric pass/fail:\n")
+        for metric_name, did_pass in best_result.get("passed", {}).items():
+            f.write(f"- {metric_name}: {'PASS' if did_pass else 'FAIL'}\n")
+
+    return {
+        "run_dir": run_dir,
+        "predictions_csv": preds_csv_path,
+        "scatter_png": scatter_path,
+    }
+
+# =============================================================================
+# STEP 1: Initialize Workflow
+# =============================================================================
+print("\n[1/6] Initializing workflow...")
+
+# Resolve Allora API key (env var → file → prompt).
+# Get a free key at https://developer.allora.network
+# Alternatively, set data_source="binance" below to skip the API key entirely.
+from allora_forge_builder_kit.utils import get_api_key
+api_key = get_api_key(api_key_file=os.path.join(os.path.dirname(__file__), "..", "..", "..", ".allora_api_key"))
+os.environ["ALLORA_API_KEY"] = api_key
+
+workflow = AlloraMLWorkflow(
+    tickers=TICKERS,
+    number_of_input_bars=NUMBER_OF_INPUT_BARS,
+    target_bars=TARGET_BARS,
+    interval=INTERVAL,
+    data_source="allora",
+    api_key=api_key
+)
+
+print(f"✅ Workflow initialized")
+print(f"   Assets: {TICKERS} | Interval: {INTERVAL}")
+print(f"   Input: {NUMBER_OF_INPUT_BARS} bars → Features: {NUMBER_OF_INPUT_BARS*5}")
+print(f"   Target: {TARGET_BARS} bars ahead")
+
+# =============================================================================
+# STEP 2: Backfill Historical Data
+# =============================================================================
+print(f"\n[2/6] Backfilling {DAYS_OF_HISTORY} days of historical data...")
+
+start_date = datetime.now(timezone.utc) - timedelta(days=DAYS_OF_HISTORY)
+try:
+    workflow.backfill(start=start_date)
+    print("✅ Backfill complete")
+except Exception as e:
+    print(f"⚠️ Backfill failed: {e}")
+    print("   Will attempt to use locally cached parquet data...")
+
+# =============================================================================
+# STEP 3: Extract Features & Engineer New Features
+# =============================================================================
+print("\n[3/6] Extracting and engineering features...")
+
+try:
+    df_all = workflow.get_full_feature_target_dataframe(start_date=start_date).reset_index()
+except Exception as e:
+    raise RuntimeError(
+        f"No data available: {e}\n\n"
+        "This usually means the backfill failed (bad/missing API key) and there is "
+        "no locally cached parquet data.\n\n"
+        "Fix options:\n"
+        "  1. Set a valid ALLORA_API_KEY (free at https://developer.allora.network)\n"
+        "  2. Use data_source='binance' in AlloraMLWorkflow() to skip the API key\n"
+    ) from e
+
+# Feature Engineering: Add log returns to base features
+# For detailed TA indicators and visualizations, see: feature_engineering_example.py
+
+def engineer_returns(row):
+    """Add return, momentum, and volatility features (no data leakage - same row only)"""
+    n = NUMBER_OF_INPUT_BARS
+    closes = np.array([row[f'feature_close_{i}'] for i in range(n)])
+    highs = np.array([row[f'feature_high_{i}'] for i in range(n)])
+    lows = np.array([row[f'feature_low_{i}'] for i in range(n)])
+    volumes = np.array([row[f'feature_volume_{i}'] for i in range(n)])
+    
+    log_rets = np.diff(np.log(closes + 1e-12))
+    features = {}
+    
+    # Log returns at multiple horizons
+    features['ret_1h'] = log_rets[-1] if len(log_rets) >= 1 else 0
+    features['ret_4h'] = np.sum(log_rets[-4:]) if len(log_rets) >= 4 else 0
+    features['ret_8h'] = np.sum(log_rets[-8:]) if len(log_rets) >= 8 else 0
+    features['ret_24h'] = np.sum(log_rets[-24:]) if len(log_rets) >= 24 else 0
+    features['ret_48h'] = np.sum(log_rets) if len(log_rets) >= 2 else 0
+    
+    # Realised volatility at multiple horizons
+    features['vol_8h'] = np.std(log_rets[-8:], ddof=1) if len(log_rets) >= 8 else 0
+    features['vol_24h'] = np.std(log_rets[-24:], ddof=1) if len(log_rets) >= 24 else 0
+    features['vol_48h'] = np.std(log_rets, ddof=1) if len(log_rets) >= 2 else 0
+    
+    # Momentum: short vs long return
+    features['momentum_ratio'] = features['ret_8h'] / (abs(features['ret_48h']) + 1e-12)
+    
+    # Mean reversion signal: distance from recent mean
+    features['mean_reversion'] = (closes[-1] - np.mean(closes[-24:])) / (np.std(closes[-24:]) + 1e-12) if n >= 24 else 0
+    
+    # High-low range (proxy for intraday vol)
+    hl_range = highs - lows
+    features['hl_range_8h'] = np.mean(hl_range[-8:])
+    features['hl_range_ratio'] = np.mean(hl_range[-8:]) / (np.mean(hl_range) + 1e-12)
+    
+    # Volume trend
+    features['volume_ratio'] = np.mean(volumes[-8:]) / (np.mean(volumes) + 1e-12)
+    
+    # Trend strength (efficiency ratio)
+    net_move = abs(np.sum(log_rets[-8:]))
+    total_path = np.sum(np.abs(log_rets[-8:]))
+    features['efficiency_8h'] = net_move / (total_path + 1e-12)
+    
+    return pd.Series(features)
+
+# Get base features
+base_feature_cols = [col for col in df_all.columns if col.startswith('feature_')]
+
+# Apply feature engineering
+print("   Engineering log return features...")
+engineered_features = df_all.apply(engineer_returns, axis=1)
+df_all = pd.concat([df_all, engineered_features], axis=1)
+
+# Use base features + engineered returns
+feature_cols = base_feature_cols + list(engineered_features.columns)
+df_all = df_all.dropna(subset=feature_cols + ['target'])
+
+print(f"✅ Dataset: {len(df_all):,} samples ({df_all['open_time'].min().date()} to {df_all['open_time'].max().date()})")
+print(f"   Features: {len(base_feature_cols)} base + {len(engineered_features.columns)} returns = {len(feature_cols)} total")
+print(f"   📚 See feature_engineering_example.py for more TA indicators")
+
+# Setup time series cross-validation
+tscv = TimeSeriesSplit(
+    n_splits=N_SPLITS, 
+    gap=TARGET_BARS, 
+    max_train_size=MAX_TRAIN_SIZE
+)
+
+print(f"✅ Walk-forward CV: {N_SPLITS} splits, {TARGET_BARS}-bar embargo")
+for fold_idx, (train_idx, test_idx) in enumerate(tscv.split(df_all)):
+    print(f"   Fold {fold_idx+1}: Train={len(train_idx):,}, Test={len(test_idx):,}")
+
+# =============================================================================
+# STEP 4: Grid Search with Walk-Forward Cross-Validation
+# =============================================================================
+print("\n[4/6] Running grid search...")
+
+results = []
+evaluator = PerformanceEvaluator()
+config_num = 0
+
+for lr in LEARNING_RATES:
+    for depth in MAX_DEPTHS:
+        for leaves in NUM_LEAVES:
+            
+            # Train once with max trees, evaluate at checkpoints
+            fold_models = []
+            for fold_idx, (train_idx, test_idx) in enumerate(tscv.split(df_all)):
+                X_train = df_all.iloc[train_idx][feature_cols]
+                y_train = df_all.iloc[train_idx]['target']
+                
+                lgb = LGBMRegressor(
+                    n_estimators=N_ESTIMATORS_MAX,
+                    learning_rate=lr,
+                    max_depth=depth,
+                    num_leaves=leaves,
+                    subsample=0.8,
+                    colsample_bytree=0.7,
+                    min_child_samples=50,
+                    reg_alpha=0.1,
+                    reg_lambda=1.0,
+                    random_state=42,
+                    verbose=-1
+                )
+                lgb.fit(X_train, y_train)
+                fold_models.append((lgb, test_idx))
+            
+            # Evaluate at tree count checkpoints
+            for n_est in N_ESTIMATORS_CHECKPOINTS:
+                config_num += 1
+                df_all['pred'] = np.nan
+                
+                # Generate predictions using first n_est trees
+                for lgb, test_idx in fold_models:
+                    X_test = df_all.iloc[test_idx][feature_cols]
+                    preds = lgb.predict(X_test, num_iteration=n_est)
+                    df_all.iloc[test_idx, df_all.columns.get_loc('pred')] = preds
+                
+                # Evaluate
+                valid_mask = ~df_all['pred'].isna()
+                metrics = evaluator.evaluate(
+                    y_true=df_all.loc[valid_mask, 'target'],
+                    y_pred=df_all.loc[valid_mask, 'pred']
+                )
+                
+                # Store results
+                results.append({
+                    'config_num': config_num,
+                    'n_estimators': n_est,
+                    'learning_rate': lr,
+                    'max_depth': depth,
+                    'num_leaves': leaves,
+                    'predictions': df_all['pred'].copy(),
+                    **metrics
+                })
+                
+                print(f"   [{config_num:2d}] n={n_est:4d}, lr={lr:.2f}, d={depth}, l={leaves:2d} -> "
+                      f"{metrics['num_passed']}/7 ({metrics['score']:.1%} - {metrics['grade']})")
+
+# Analyze results
+results_df = pd.DataFrame([{k: v for k, v in r.items() if k != 'predictions'} for r in results])
+results_df = results_df.sort_values(['num_passed', 'score'], ascending=[False, False])
+
+print(f"\n✅ Tested {len(results)} configurations")
+print(f"\n   Top 5 models:")
+top5_cols = ['config_num', 'n_estimators', 'learning_rate', 'max_depth', 'num_leaves', 'num_passed', 'score']
+print(results_df[top5_cols].head().to_string(index=False))
+
+# Select best model
+best_result = results[results_df.iloc[0]['config_num'] - 1]
+best_params = {k: best_result[k] for k in ['n_estimators', 'learning_rate', 'max_depth', 'num_leaves']}
+
+print(f"\nBest: Config #{best_result['config_num']}")
+print(f"   {best_result['num_passed']}/7 points ({best_result['score']:.1%}) | "
+      f"n={best_params['n_estimators']}, lr={best_params['learning_rate']}, d={best_params['max_depth']}, l={best_params['num_leaves']}")
+
+# =============================================================================
+# STEP 5: Evaluate Best Model
+# =============================================================================
+print("\n[5/6] Detailed evaluation...")
+print("="*80)
+evaluator.print_report(best_result, detailed=False)
+print("="*80)
+
+# Save reproducibility artifacts + diagnostic plot
+run_timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+run_dir = os.path.join(os.path.dirname(__file__), "runs", run_timestamp)
+artifacts = save_run_artifacts(
+    df_eval=df_all,
+    best_result=best_result,
+    best_params=best_params,
+    run_dir=run_dir,
+    feature_cols=feature_cols,
+)
+
+# =============================================================================
+# STEP 6: Train Production Model
+# =============================================================================
+print("\n[6/6] Training production model...")
+
+final_model = LGBMRegressor(
+    n_estimators=best_params['n_estimators'],
+    learning_rate=best_params['learning_rate'],
+    max_depth=best_params['max_depth'],
+    num_leaves=best_params['num_leaves'],
+    subsample=0.8,
+    colsample_bytree=0.7,
+    min_child_samples=50,
+    reg_alpha=0.1,
+    reg_lambda=1.0,
+    random_state=42,
+    verbose=-1
+)
+final_model.fit(df_all[feature_cols], df_all['target'])
+print(f"✅ Final model trained on {len(df_all):,} samples")
+
+def _make_predict(m, _feature_cols=feature_cols[:], _base_feature_cols=base_feature_cols[:],
+                  _tickers=TICKERS[:], _n_input=NUMBER_OF_INPUT_BARS,
+                  _target_bars=TARGET_BARS, _interval=INTERVAL,
+                  _eng_fn=engineer_returns):
+    _model_str = m.booster_.model_to_string()
+    def predict(nonce=None):
+        import os
+        import lightgbm as lgb
+        import numpy as np
+        import pandas as pd
+        from allora_forge_builder_kit import AlloraMLWorkflow
+        _wf = AlloraMLWorkflow(
+            tickers=_tickers, number_of_input_bars=_n_input,
+            target_bars=_target_bars, interval=_interval,
+            data_source="allora", api_key=os.environ["ALLORA_API_KEY"],
+        )
+        booster = lgb.Booster(model_str=_model_str)
+        live_row = _wf.get_live_features(ticker=_tickers[0])
+        if live_row is None or len(live_row) == 0:
+            raise ValueError("Could not get live features")
+        live_returns = _eng_fn(live_row.iloc[0])
+        live_features = pd.concat([live_row[_base_feature_cols].iloc[0], live_returns])
+        current_price = float(live_row.attrs.get("current_price", np.nan))
+        if not np.isfinite(current_price) or current_price <= 0:
+            snap = _wf._dm.get_live_snapshot(_tickers)
+            if snap is not None and len(snap) > 0 and "close" in snap.columns:
+                current_price = float(snap["close"].iloc[-1])
+        if not np.isfinite(current_price) or current_price <= 0:
+            raise ValueError(f"Invalid current price for inference: {current_price}")
+        predicted_log_return = booster.predict(live_features[_feature_cols].values.reshape(1, -1))[0]
+        predicted_price = current_price * np.exp(predicted_log_return)
+        print(f"\nLive Prediction: ${predicted_price:,.2f} ({predicted_log_return:+.4f} log return)")
+        return float(predicted_price)
+    return predict
+
+predict = _make_predict(final_model)
+
+# Test and save
+print("\n🧪 Testing prediction...")
+test_prediction = predict()
+
+pkl_path = os.path.join(os.path.dirname(__file__), "predict_38.pkl")
+with open(pkl_path, "wb") as f:
+    cloudpickle.dump(predict, f)
+
+print("\n" + "="*80)
+print("COMPLETE!")
+print("="*80)
+print(f"{len(feature_cols)} features | {best_result['num_passed']}/7 points ({best_result['score']:.1%})")
+print(f"Saved to {pkl_path}")
+print(f"Run artifacts: {artifacts['run_dir']}")
+print(f"- Predictions: {artifacts['predictions_csv']}")
+print(f"- Scatter plot: {artifacts['scatter_png']}")
+print("="*80)
+print("\nDeploy (from notebooks/): TOPIC_ID=38 PREDICT_PKL=testnet/topic_38_sol_8h_price/predict_38.pkl python deploy_worker.py")
+

@@ -20,6 +20,7 @@ def main():
 
     topic_id = int(os.environ.get("TOPIC_ID", "69"))
     predict_pkl = os.environ.get("PREDICT_PKL", "predict.pkl")
+    network = os.environ.get("ALLORA_NETWORK", "testnet")
 
     artifact = Path(predict_pkl)
     if not artifact.exists():
@@ -29,7 +30,7 @@ def main():
             "  python notebooks/example_topic_77_bitcoin_5min_walkthrough.py"
         )
 
-    wm = WorkerManager()
+    wm = WorkerManager(network=network)
 
     print(f"Deploying worker for Topic {topic_id}...")
     result = wm.deploy_worker(topic_id=topic_id, artifact_path=artifact)
