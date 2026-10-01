@@ -4,6 +4,8 @@ All generated state belongs to one unique directory, removed in fixture teardown
 Existing test fixtures and worker state are never modified.
 """
 import json
+import copy
+import runpy
 import os
 from pathlib import Path
 import shutil
@@ -99,6 +101,13 @@ def _reference_target(raw, row):
 
 
 def test_workflow_dataset(integration_run):
+    # Reject coarse source candles before loading them; preserve the general
+    # native-bar builder rather than forcing all research horizons to 1h/24.
+    from types import SimpleNamespace
+    probe = copy.copy(integration_run['workflow'])
+    probe._dm = SimpleNamespace(interval='5m')
+    with pytest.raises(ValueError, match='one-minute source candles'):
+        probe.get_full_feature_target_dataframe()
     data = integration_run['data']
     assert set(TARGETS) <= set(data)
     resolved = data.dropna(subset=TARGETS)
@@ -144,6 +153,53 @@ def _run_example(state):
 
 
 def test_example_outputs(integration_run):
+    from allora_forge_builder_kit import PerformanceEvaluator
+    from allora_forge_builder_kit.worker_monitor import _labeled_value_text
+    from allora_sdk.rpc_client.protos.emissions.v10 import InputLabeledValue
+
+    queries = pd.date_range('2026-01-01', periods=2, tz='UTC')
+    for empty in ([], np.empty((0, 3))):
+        np.testing.assert_allclose(
+            PerformanceEvaluator.causal_class_baseline(queries, [], empty),
+            np.full((2, 3), 1/3))
+    with pytest.raises(ValueError):
+        PerformanceEvaluator.causal_class_baseline(queries, [], np.empty((0, 2)))
+    with pytest.raises(ValueError):
+        PerformanceEvaluator.causal_class_baseline(queries, queries[:1], np.empty((0, 3)))
+
+    entries = tuple(InputLabeledValue(label=k, value=str(v))
+                    for k, v in zip(('down', 'neutral', 'up'), (.2, .3, .5)))
+    for values in (entries, iter(entries), list(entries)):
+        assert json.loads(_labeled_value_text(values)) == {'down': '0.2', 'neutral': '0.3', 'up': '0.5'}
+    assert _labeled_value_text((InputLabeledValue(label='y', value='42'),)) == '42'
+    assert _labeled_value_text([], scalar='42') == '42'
+
+    example = runpy.run_path(str(SCRIPT))
+    key_globals = example['api_key'].__globals__
+    key_root = integration_run['root'] / 'credentials'
+    (key_root / 'notebooks').mkdir(parents=True)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.chdir(key_root / 'notebooks')
+        patch.setitem(key_globals, '__file__', str(key_root / 'notebooks' / 'example.py'))
+        patch.setenv('ALLORA_API_KEY', '   ')
+        (key_root / 'notebooks' / '.allora_api_key').write_text('  ')
+        with pytest.raises(RuntimeError, match='Set ALLORA_API_KEY'):
+            example['api_key']()
+        sentinel = 'test-only-review-credential'
+        (key_root / '.allora_api_key').write_text('  ' + sentinel + '\n')
+        assert example['api_key']() == sentinel
+        patch.setitem(key_globals, 'AlloraMLWorkflow', lambda **kwargs: kwargs)
+        config = example['make_workflow'](87, key_root / 'cache')
+        assert config['api_key'] == sentinel
+        assert os.environ['ALLORA_API_KEY'] == sentinel
+        artifact = example['make_predict'](None, [], 'hl_xyzgold_1min', 100)
+        assert sentinel.encode() not in cloudpickle.dumps(artifact)
+        patch.setenv('ALLORA_API_KEY', '  env-key  ')
+        assert example['api_key']() == 'env-key'
+        patch.setenv('ALLORA_API_KEY', '   ')
+        with pytest.raises(RuntimeError, match='required for live Atlas'):
+            artifact()
+
     output = _run_example(integration_run)
     expected = ['predict.pkl', 'config.json', 'metrics.json', 'predictions.csv', 'report.txt',
                 'triple_barrier_example.png', 'confusion_matrix.png', 'directional_payoff.png',

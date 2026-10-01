@@ -349,6 +349,15 @@ class AlloraMLWorkflow:
 
     # ---------- Historical features/targets ----------
     def get_full_feature_target_dataframe(self, start_date=None, end_date=None) -> pl.DataFrame:
+        if self.target_type == "triple_barrier":
+            from .atlas_data_manager import AtlasDataManager
+            # Atlas stores minute candles regardless of the feature interval;
+            # other managers must explicitly supply minute historical data.
+            if not isinstance(self._dm, AtlasDataManager) and getattr(self._dm, 'interval', None) != '1m':
+                raise ValueError(
+                    "Triple-barrier targets require one-minute source candles; "
+                    "use Atlas (data_source='allora') or a data manager with interval='1m'."
+                )
         print(f"[workflow] Loading data")
         raw = self._dm.load_polars(self.tickers, start=start_date, end=end_date)
 
@@ -553,6 +562,10 @@ class AlloraMLWorkflow:
         averaging interval excludes its right endpoint; ranges at its start
         use only candles inside that interval. Missing minute coverage leaves all
         target columns null. Minute ties resolve down first.
+
+        This is a general native-bar target builder. Forge topics 87-89 use
+        interval='1h', target_bars=24, and barrier_multiplier=0.25; other
+        configurations define different targets and must not be submitted there.
 
         Metadata uses the ``tb_`` prefix and must not be used as model features.
         ``tb_exit_time`` is the end of the first-hit minute (or expiry), the

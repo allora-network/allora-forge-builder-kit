@@ -814,16 +814,17 @@ def _labeled_value_text(values, scalar="") -> str:
         except (ValueError, TypeError):
             return original  # retain evidence rather than replacing it with value=0
     if values:
-        if isinstance(values, list):
-            labeled = {
-                (v.get("label") if isinstance(v, dict) else v.label):
-                (v.get("value") if isinstance(v, dict) else v.value)
-                for v in values
-            }
-        elif isinstance(values, dict):
+        if isinstance(values, dict):
             labeled = values
         else:
-            return str(values)
+            try:
+                labeled = {
+                    (v.get("label") if isinstance(v, dict) else v.label):
+                    (v.get("value") if isinstance(v, dict) else v.value)
+                    for v in values
+                }
+            except (TypeError, AttributeError):
+                return str(values)
         if set(labeled) == {"y"}:
             return str(labeled["y"])
         return json.dumps(labeled, sort_keys=True)

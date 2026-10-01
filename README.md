@@ -242,7 +242,10 @@ The `AlloraMLWorkflow` handles this construction: `backfill()` fetches historica
 ### Triple-barrier targets
 
 The horizon is `target_bars × interval`. The example uses 100 hourly input bars,
-24 target bars, and a barrier multiplier of 0.25. ATR is the mean high–low log
+24 target bars, and a barrier multiplier of 0.25. These settings define Forge
+topics 87–89; changing the native interval or horizon defines a different target.
+The general builder accepts other configurations for research. Historical source
+candles must be one-minute data (Atlas supplies these regardless of feature interval). ATR is the mean high–low log
 range over 100 target horizons, computed on native/resampled candles.
 
 For hourly bars and prediction time T, average the 2,400 samples opening in

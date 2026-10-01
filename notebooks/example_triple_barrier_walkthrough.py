@@ -32,21 +32,25 @@ INPUT_BARS = 100
 
 def api_key():
     """Runtime credential lookup; secrets are never serialized into the model."""
-    value = os.environ.get('ALLORA_API_KEY')
+    value = os.environ.get('ALLORA_API_KEY', '').strip()
     if value:
         return value
     for path in (Path.cwd() / '.allora_api_key', Path(__file__).resolve().parent / '.allora_api_key',
                  Path(__file__).resolve().parents[1] / '.allora_api_key'):
         if path.exists():
-            return path.read_text().strip()
+            value = path.read_text().strip()
+            if value:
+                return value
     raise RuntimeError('Set ALLORA_API_KEY to your authorized Atlas/Allora key')
 
 
 def make_workflow(topic, cache_dir):
+    key = api_key()
+    os.environ['ALLORA_API_KEY'] = key
     return AlloraMLWorkflow(tickers=[TOPICS[topic]], number_of_input_bars=INPUT_BARS,
                             target_bars=TARGET_BARS, interval=INTERVAL,
                             target_type='triple_barrier', data_source='allora',
-                            api_key=api_key(), base_dir=str(cache_dir))
+                            api_key=key, base_dir=str(cache_dir))
 
 
 def model_probabilities(model, features):
@@ -62,7 +66,7 @@ def make_predict(model, features, ticker, input_bars):
         import os
         import numpy as np
         from allora_forge_builder_kit import AlloraMLWorkflow, PerformanceEvaluator
-        key = os.environ.get('ALLORA_API_KEY')
+        key = os.environ.get('ALLORA_API_KEY', '').strip()
         if not key:
             raise RuntimeError('ALLORA_API_KEY is required for live Atlas features')
         workflow = AlloraMLWorkflow(

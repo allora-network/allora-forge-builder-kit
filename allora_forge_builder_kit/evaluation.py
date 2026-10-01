@@ -583,7 +583,13 @@ class PerformanceEvaluator:
         merely the subset of opportunities at which the worker submitted.
         """
         import pandas as pd
-        truth = PerformanceEvaluator.validate_probabilities(history_truth)
+        truth = np.asarray(history_truth, dtype=float)
+        # No resolved history is valid; preserve shape validation for malformed
+        # empty inputs instead of treating every zero-sized array as Nx3.
+        if truth.shape == (0,):
+            truth = np.empty((0, 3))
+        if truth.shape != (0, 3):
+            truth = PerformanceEvaluator.validate_probabilities(truth)
         if not np.isin(truth, [0, 1]).all():
             raise ValueError("Baseline history must be one-hot")
         times = pd.DatetimeIndex(pd.to_datetime(history_times, utc=True))
