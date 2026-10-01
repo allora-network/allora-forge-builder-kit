@@ -328,7 +328,7 @@ def run(args):
     data = workflow.get_full_feature_target_dataframe().reset_index()
     resolved = data.dropna(subset=TARGETS).copy()
     if resolved.empty:
-        raise ValueError('No resolved targets; include 101 horizons of warmup and complete minute coverage')
+        raise ValueError('No resolved targets; include 100 horizons plus one native bar of warmup and complete minute coverage')
     print(f'Loaded {len(data)} rows; {len(resolved)} resolved; class totals: {resolved[TARGETS].sum().to_dict()}')
     plot_intro(data, resolved, output, args.show)
     features = [c for c in data if c.startswith('feature_')]

@@ -548,8 +548,10 @@ class AlloraMLWorkflow:
 
         A row's prediction time is its opening time plus ``self.interval``.
         ATR is the mean of trailing ``target_bars`` high/low log ranges over
-        100 horizons, calculated on the already-resampled candles. Both rolling
-        slices exclude their right endpoint. Missing minute coverage leaves all
+        100 horizons, calculated on the already-resampled candles. Each range
+        includes both endpoints (h + 1 bars), matching the reputer SQL. The
+        averaging interval excludes its right endpoint; ranges at its start
+        use only candles inside that interval. Missing minute coverage leaves all
         target columns null. Minute ties resolve down first.
 
         Metadata uses the ``tb_`` prefix and must not be used as model features.
@@ -585,9 +587,19 @@ class AlloraMLWorkflow:
         native = native.reindex(pd.date_range(native.index.min(), native.index.max(), freq=width))
         counts = valid.astype(int).resample(width).sum().reindex(native.index, fill_value=0)
         native.loc[counts != minutes_per_bar, ['high', 'low']] = np.nan
-        ranges = (np.log(native.high.rolling(h, min_periods=h).max())
-                  - np.log(native.low.rolling(h, min_periods=h).min())).shift(1)
-        atr = ranges.rolling(100 * h, min_periods=100 * h).mean().shift(1)
+        lookback = 100 * h
+        # SQL RANGE BETWEEN horizon PRECEDING AND CURRENT ROW includes h+1
+        # candle openings. WHERE clips history BEFORE the window calculation,
+        # so the first h ranges of each lookback have lengths 1, ..., h.
+        ranges = (np.log(native.high.rolling(h + 1, min_periods=1).max())
+                  - np.log(native.low.rolling(h + 1, min_periods=1).min()))
+        range_sum = ranges.rolling(lookback, min_periods=lookback).sum()
+        for j in range(h):
+            partial = (np.log(native.high.rolling(j + 1, min_periods=1).max())
+                       - np.log(native.low.rolling(j + 1, min_periods=1).min()))
+            range_sum += (partial - ranges).shift(lookback - 1 - j)
+        # A row opens at T-width. Samples must open before T-width.
+        atr = (range_sum / lookback).shift(1)
         # Also require every sample candle in the historical averaging interval.
         complete = (counts == minutes_per_bar).rolling(100 * h, min_periods=100 * h).sum().shift(1)
         atr = atr.where(complete == 100 * h)

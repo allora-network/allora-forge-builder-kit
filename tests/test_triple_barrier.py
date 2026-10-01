@@ -71,17 +71,17 @@ def _reference_target(raw, row):
     """
     t = row.open_time + pd.Timedelta(hours=1)
     historical_end = row.open_time
-    historical_start = historical_end - pd.Timedelta(hours=2400+24)
+    historical_start = historical_end - pd.Timedelta(hours=2400)
     history = raw.loc[(raw.index >= historical_start) & (raw.index < historical_end)]
     expected = pd.date_range(historical_start, historical_end, freq='min', inclusive='left')
     if not history.index.equals(expected):
         return None
     hourly = history.resample('1h').agg({'high': 'max', 'low': 'min'})
     ranges = []
-    # The final 2,400 sample openings each use the 24 bars strictly before them.
+    # Reproduce SQL WHERE first, then inclusive RANGE through CURRENT ROW.
     for sample in pd.date_range(historical_end-pd.Timedelta(hours=2400), historical_end, freq='h', inclusive='left'):
-        window = hourly[(hourly.index >= sample-pd.Timedelta(hours=24)) & (hourly.index < sample)]
-        assert len(window) == 24
+        window = hourly[(hourly.index >= sample-pd.Timedelta(hours=24)) & (hourly.index <= sample)]
+        assert len(window) == min(25, int((sample-historical_start)/pd.Timedelta(hours=1)) + 1)
         ranges.append(np.log(window.high.max()) - np.log(window.low.min()))
     atr = sum(ranges)/len(ranges)
     start, end = t-pd.Timedelta(minutes=1), t+pd.Timedelta(hours=24)-pd.Timedelta(minutes=1)
