@@ -90,7 +90,7 @@ Only `tests/test_triple_barrier.py`. Use real Atlas Gold data and the workflow's
 - [x] **1. Minimal workflow + independent target verification.** Build a non-empty dataset with `target_type="triple_barrier"`. Verify target columns exist; resolved rows are 0/1, non-negative, and sum to 1; unresolved rows remain null.
   Independently verify targets on a deterministic sample of resolved rows using raw Atlas minute OHLC (normal cached source data is acceptable). Include each available class, and both-hit cases if present. Starting from the candle end represented by each sampled row, derive T using the existing convention. In a simple test-only reference loop, independently calculate hourly ranges/lookback/barriers and replay the exact minute testing interval in chronological order. Compare the expected one-hot result with the workflow row; report timestamp, expected/actual label, barriers, and first touch on mismatch. Do not call the production target method or reuse its computed barriers/intermediates. Use raw timestamps to check complete coverage and inspect available unresolved rows too. This deliberately duplicates the mathematical definition, not the optimized implementation; keep it small and readable. Do not claim coverage for edge cases absent from the real data.
 - [x] **2. Full example on the same dataset.** Run the whole script; require successful completion and the listed artifact family. Check CSV target/probability columns, finite non-negative unit-sum probabilities, agreed report structure, and plots. Reload `predict.pkl` and verify labeled probability output. Functional completion does not require the model to pass all six quality criteria.
-- [ ] **3. Deploy with `deploy_worker.py`.** Use test 2's artifact and topic 87 in isolated new-worker state. Require a successful labeled on-chain submission and monitoring evidence, not just a running process.
+- [x] **3. Deploy with `deploy_worker.py`.** Use test 2's artifact and topic 87 in isolated new-worker state. Require a successful labeled on-chain submission and monitoring evidence, not just a running process.
 
 **Isolation/cleanup:** one unique run ID owns all produced files: cache, example outputs, copied artifacts, worker keys/state/database, logs, and temporary evidence. Standard filenames are allowed inside unique directories. Share prerequisites without depending on pytest execution order. Guaranteed teardown stops only the test-created worker and removes only that run's local files, including after failure. Leave existing caches, fleet, source key, venv, code, and this plan untouched. On-chain records naturally remain.
 
@@ -98,7 +98,7 @@ Only `tests/test_triple_barrier.py`. Use real Atlas Gold data and the workflow's
 | --- | --- |
 | 1. Dataset + independent minute replay | Passed: 2,831 resolved rows; 12 independently checked targets |
 | 2. Example outputs + reloadable artifact | Passed with 100 input bars and fold timeline |
-| 3. Successful deployment + monitoring | Blocked: SDK reports topic 87 whitelist restriction after registration |
+| 3. Successful deployment + monitoring | Passed after topic permission fix; labeled prediction confirmed on testnet |
 | Run ID / cleanup outcome | triple-barrier-test-afe4000dc4ee4468a18fab2056df02aa: 2 passed, deployment deselected, run files removed |
 
 ## Documentation after implementation
@@ -110,7 +110,7 @@ Only `tests/test_triple_barrier.py`. Use real Atlas Gold data and the workflow's
 
 References: https://github.com/allora-network/allora-sdk-py · https://pypi.org/project/allora_sdk/1.4.0rc4/ · https://github.com/allora-network/docs
 
-Latest review (2026-10-01): plan reviewed for consistency and prepared as the first feature-branch commit. Implementation has not started. The reference PDF remains local; the later blog draft remains untracked as requested.
+Latest review (2026-10-01): implementation committed at 560c732; all three integration steps have now passed. The reference PDF remains local; the later blog draft remains untracked as requested.
 
 ## Working checkpoint
 
@@ -118,8 +118,15 @@ Latest review (2026-10-01): plan reviewed for consistency and prepared as the fi
 - Atlas resolver now also accepts exact dataset names; its old Tiingo ticker lookup is preserved.
 - Real Gold dataset: 2,831 resolved rows; independent replay matched all 12 sampled targets. Full example and reloaded live probability artifact passed.
 - Selection uses earlier-fold mean log loss. The 100-bar development run produced 55.1% final-fold accuracy and +$694.41 across 494 one-unit trades with zero costs; it does not pass all eligibility criteria.
-- Isolated testnet worker funded and registered, but SDK reported not whitelisted on topic 87. Team is investigating; no successful submission claimed. Test worker/files were cleaned up.
+- Initial deployment was blocked by topic permissions. After the team fixed access, a fresh isolated testnet worker successfully submitted labeled probabilities on topic 87; monitoring confirmed the transaction. Both test runs cleaned up their local worker/files.
 - Default artifacts moved to triple_barrier_example_output; fold timeline added. No generated artifacts or reference PDF belong in the implementation commit.
 - External Allora docs and local blog remain outstanding.
 
 Pre-commit validation: 2 real-data integration tests passed in 92.14 seconds; deployment intentionally deselected pending team permission fix. Generic output run and fold plot inspected; git diff --check passed.
+
+Submission retest: `test_deploy_worker` passed in 125.48 seconds (SDK deprecation warnings only).
+- Run: `triple-barrier-test-a496e617ad2f4d5588efd416eaf494ef`
+- Network/topic: `allora-testnet-1` / `87`
+- Worker: `allo179w43zmd23u6dvp0q8gz2ptmsclk4u0kcw0stj`
+- Transaction: `07715A38B06D67C30DF36FB89C6FB49F8A5180415A9AAFFC7DC4C185A73DCBE6`
+- Monitor verified a successful submission with down/neutral/up labels and unit-sum probabilities. Test worker stopped and run-owned files removed; existing fleet untouched.
