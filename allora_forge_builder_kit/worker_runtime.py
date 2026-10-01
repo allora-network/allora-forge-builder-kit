@@ -203,15 +203,27 @@ async def _run(
     """Load the pickled inference artifact and drive the worker submission loop.
 
     Artifact contract: the pickled callable is invoked as ``fn(nonce: int)`` and must return a
-    finite numeric value. Artifacts written to the newer SDK contract (``fn(ctx)`` taking a
+    finite numeric value or a dictionary of labels to finite numeric values. Artifacts written to the newer SDK contract (``fn(ctx)`` taking a
     ``RunContext``) are also supported; the call shape is probed and cached on the first invocation.
     """
     with open(artifact_path, "rb") as f:
         raw_fn = cloudpickle.load(f)
     call_artifact = _ArtifactCaller(raw_fn)
 
-    def run_fn(ctx: RunContext) -> float:
+    def run_fn(ctx: RunContext) -> float | dict[str, float]:
         value = call_artifact(ctx)
+        if isinstance(value, dict):
+            if not value or any(not isinstance(k, str) or not k.strip() for k in value):
+                raise RuntimeError("Labeled inference requires non-empty string labels")
+            try:
+                labeled = {k: float(v) for k, v in value.items()}
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise RuntimeError("Labeled inference values must be numeric") from exc
+            if not all(math.isfinite(v) for v in labeled.values()):
+                raise RuntimeError("Labeled inference values must be finite")
+            # Multi-output topics need not be probabilities. Classification-specific
+            # constraints are validated by the example; zero entries are valid.
+            return labeled
         try:
             v = float(value)
         except Exception as e:

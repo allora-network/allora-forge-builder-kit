@@ -6,7 +6,9 @@ Usage:
     python notebooks/deploy_worker.py                    # defaults to topic 69
     TOPIC_ID=77 python notebooks/deploy_worker.py       # override topic
 
-Expects predict.pkl in the current directory.
+Expects predict.pkl in the current directory, or PREDICT_PKL=/path/to/predict.pkl.
+For triple barrier use TOPIC_ID=87 (or 88/89) and the walkthrough output artifact.
+Run in a separate working directory to keep its worker state isolated.
 The WorkerManager handles wallet creation, key management, and process
 lifecycle automatically — no interactive prompts required.
 """
@@ -27,10 +29,11 @@ def main():
         raise FileNotFoundError(
             f"{predict_pkl} not found. Run a walkthrough first:\n"
             "  python notebooks/example_topic_69_bitcoin_walkthrough.py\n"
-            "  python notebooks/example_topic_77_bitcoin_5min_walkthrough.py"
+            "  python notebooks/example_topic_77_bitcoin_5min_walkthrough.py\n"
+            "  python notebooks/example_triple_barrier_walkthrough.py"
         )
 
-    wm = WorkerManager(network=network)
+    wm = WorkerManager(network=network, reconcile_on_start=False)
 
     print(f"Deploying worker for Topic {topic_id}...")
     result = wm.deploy_worker(topic_id=topic_id, artifact_path=artifact)

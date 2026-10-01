@@ -49,7 +49,7 @@ workers          predictions                                        revealed
 polled           locked                                           + rewarded
 ```
 
-All live topics today are crypto market predictions across assets like BTC, ETH, SOL, and NEAR. New topics are added over time.
+Live topics include crypto market predictions and commodity triple-barrier classification. New topics are added over time.
 
 ## What is the Allora Forge?
 
@@ -228,6 +228,79 @@ Testnet only; may require whitelist.
 | **81** | XRP/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, XRP pair |
 | **82** | SOL/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, SOL pair |
 | **85** | ETH/USD - 4h Volatility Prediction | Volatility | Sample std of 1-min log returns × √240 |
+
+### Triple-barrier topics
+
+Topics **87 (Gold), 88 (Silver), and 89 (WTI)** use Atlas datasets
+`hl_xyzgold_1min`, `hl_xyzsilver_1min`, and `hl_xyzcl_1min`. Binance does not
+provide this example's data. Install the SDK prerelease used by this example:
+
+```bash
+python3 -m venv notebooks/.venv
+source notebooks/.venv/bin/activate
+pip install -e ".[dev]" "allora-sdk==1.4.0rc4"
+# Set ALLORA_API_KEY to your authorized key before running.
+python notebooks/example_triple_barrier_walkthrough.py --topic 87
+```
+
+The walkthrough uses 100 hourly input bars and a 24-hour target. Select the
+new target with `AlloraMLWorkflow(..., target_type="triple_barrier")`:
+the dataframe adds one-hot `target_up`, `target_neutral`, and `target_down`.
+The horizon follows `target_bars × interval`; the ATR lookback is always 100
+horizons. ATR averages trailing high–low log ranges on resampled bars;
+minute high/low candles determine first touch, with down winning a minute tie.
+Missing historical or future coverage leaves targets null. Include at least
+101 horizons of history for ATR warmup, plus training and evaluation data.
+
+Model selection minimizes mean log loss on earlier walk-forward folds. The
+last fold is held out for evaluation and trading illustrations. Saved inference
+returns labeled probabilities `{"down": p_down, "neutral": p_neutral, "up": p_up}`.
+Existing scalar worker artifacts continue to work.
+
+Outputs default to **`notebooks/triple_barrier_example_output/`** (git-ignored):
+`predict.pkl`, `config.json`, `metrics.json`, `predictions.csv`, `report.txt`,
+`trades.csv`, and charts of the barrier problem, walk-forward fold periods,
+confusion matrix, classification payoff, example trades, and cumulative PnL.
+Repeated runs replace these outputs; use `--output-dir` to retain a separate run.
+The cache is inside the output folder unless `--cache-dir` is supplied.
+
+Classification evaluation reports six strict criteria: accuracy improvement
+> 0.02; positive lower bounds for accuracy improvement, quadratic weighted
+kappa, Brier skill, and focal skill; participation > 0.90. Bounds use paired
+circular bootstrap blocks of 10 rows, 1,000 replicates, and 5th/95th percentiles.
+The baseline uses the previous 100 resolved targets. Offline coverage is labeled
+as such and does not establish network participation. Classification reports
+have no letter grade; the optional directional-payoff cost is declared separately.
+
+Trading plots use fixed one-unit overlapping positions, exact barrier exit
+prices, or the last in-window close at expiry. `--trade-cost-bps` controls costs
+per side (default 0); `--diagnostic-cost` separately controls classification
+payoff cost in barrier units. These are illustrations, not capital-normalized
+portfolio returns.
+
+Deploy with the existing script. A separate working directory isolates the new
+worker's state from any existing fleet:
+
+```bash
+# Run from repository root with the notebooks virtualenv active.
+REPO_ROOT="$PWD"
+mkdir -p notebooks/triple_barrier_example_output/worker
+cd notebooks/triple_barrier_example_output/worker
+TOPIC_ID=87 PREDICT_PKL="$REPO_ROOT/notebooks/triple_barrier_example_output/predict.pkl" \
+  python "$REPO_ROOT/notebooks/deploy_worker.py"
+python -m allora_forge_builder_kit.web_dashboard
+```
+
+The three integration tests use real Atlas data, independently replay selected
+minute paths, run the full example, and attempt an isolated deployment. They
+clean up their own files and worker afterward. The deployment test requires
+topic permission for the newly generated wallet:
+
+```bash
+RUN_INTEGRATION_TESTS=1 notebooks/.venv/bin/python -m pytest tests/test_triple_barrier.py -v -s
+# Data and example only, while topic access is unavailable:
+RUN_INTEGRATION_TESTS=1 notebooks/.venv/bin/python -m pytest tests/test_triple_barrier.py -v -s -k 'not deploy_worker'
+```
 
 ### Mainnet topics and testnet equivalents
 

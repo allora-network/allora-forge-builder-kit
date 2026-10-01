@@ -74,6 +74,17 @@ HTML = """<!doctype html>
       return Number.parseFloat(n.toPrecision(sig)).toString();
     }
 
+    function fmtInference(v) {
+      if (v === null || v === undefined || v === '') return '—';
+      try {
+        const parsed = typeof v === 'string' ? JSON.parse(v) : v;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return Object.entries(parsed).map(([label, value]) => `${label}: ${fmtSig(value)}`).join(' · ');
+        }
+      } catch (_) {}
+      return fmtSig(v);
+    }
+
     function timelineHtml(tl) {
       const slots = (tl && tl.slots) ? tl.slots : [];
       const cells = slots.map((s) => {
@@ -84,7 +95,7 @@ HTML = """<!doctype html>
           `slot status: ${s.status || 'missed'}`,
           `submission at: ${sub.observed_at || '—'}`,
           `submission status: ${sub.status || '—'}`,
-          `inference value: ${(sub.inference_value === null || sub.inference_value === undefined) ? '—' : sub.inference_value}`,
+          `inference value: ${fmtInference(sub.inference_value)}`,
           `tx hash: ${sub.tx_hash || '—'}`,
           `tx code: ${(sub.code === null || sub.code === undefined) ? '—' : sub.code}`,
           `reward fraction (latest): ${(sub.reward_fraction === null || sub.reward_fraction === undefined) ? '—' : sub.reward_fraction}`,
@@ -181,7 +192,7 @@ HTML = """<!doctype html>
             <td>${esc(fmtSig(rewardFrac))}</td>
             <td>${esc((p24.submission_success || 0))} ok · avgS ${esc(fmtSig(p24.score_avg))}</td>
             <td>${esc((p7.submission_success || 0))} ok · avgS ${esc(fmtSig(p7.score_avg))}</td>
-            <td>${esc(fmtSig(w.last_inference_value))}</td>
+            <td>${esc(fmtInference(w.last_inference_value))}</td>
             <td>${esc((w.last_inference_at === null || w.last_inference_at === undefined) ? '—' : w.last_inference_at)}</td>`;
           tb.appendChild(trMain);
 
