@@ -16,7 +16,7 @@ import cloudpickle
 import numpy as np
 import pandas as pd
 from lightgbm import LGBMClassifier
-from sklearn.model_selection import TimeSeriesSplit
+from sklearn.model_selection import ParameterGrid, TimeSeriesSplit
 from sklearn.metrics import log_loss
 
 from allora_forge_builder_kit import AlloraMLWorkflow, PerformanceEvaluator
@@ -28,6 +28,52 @@ PREDS = ['pred_' + c for c in CLASSES]
 INTERVAL = '1h'
 TARGET_BARS = 24
 INPUT_BARS = 100
+N_FOLDS = 5
+HOLDOUT_FOLDS = 2  # Final folds excluded from hyperparameter selection.
+
+# ParameterGrid searches every combination of the value lists below.
+# Add another parameter with a list of values here to include it in the search.
+LGBM_SEARCH_GRID = {
+    'n_estimators': [25, 50, 75, 100],
+    'num_leaves': [7, 15, 31],
+    'max_depth': [3,4,5],
+    'learning_rate': [0.01, 0.03, 0.05],
+}
+# Shared settings; a parameter in the search grid overrides its fixed value.
+LGBM_FIXED_PARAMS = dict(
+    # learning_rate=.03,
+    # max_depth=5,
+    min_child_samples=30,
+    random_state=42,
+    n_jobs=2,
+    verbosity=-1
+)
+
+
+# Optional derived features, following the topic 69 recipe. Uncomment or edit.
+# The shared helper currently supports log_return; custom features go below.
+ENGINEERED_SPECS = [
+    # {'kind': 'log_return', 'window_bars': 1},
+    # {'kind': 'log_return', 'window_bars': 6},
+    # {'kind': 'log_return', 'window_bars': 24},
+]
+
+
+def engineer_features(frame, specs, input_bars):
+    """Edit here: return (dataframe, added column names) for training AND serving.
+
+    Use only feature_* inputs, which are normalized OHLCV ratios. Compute each
+    row independently from its input window: serving supplies a single row.
+    Never use target_*/tb_* columns or shift/roll across training rows. Return
+    every added model feature's name. Keep imports inside this function so its
+    code can travel with predict.pkl; do not close over credentials/data managers.
+    """
+    from allora_forge_builder_kit import apply_engineered_features
+    frame, added = apply_engineered_features(frame, specs, input_bars)
+    # Example custom feature (uncomment both lines to enable):
+    # frame['last_bar_range'] = frame[f'feature_high_{input_bars-1}'] - frame[f'feature_low_{input_bars-1}']
+    # added.append('last_bar_range')
+    return frame, added
 
 
 def api_key():
@@ -59,10 +105,13 @@ def model_probabilities(model, features):
     return PerformanceEvaluator.validate_probabilities(probabilities)
 
 
-def make_predict(model, features, ticker, input_bars):
+def make_predict(model, features, ticker, input_bars, feature_fn=None, engineered_specs=None):
     """Self-contained callable compatible with the existing nonce artifact flow."""
     # Capture training configuration, never a data manager/API credential.
+    from copy import deepcopy
     interval, target_bars = INTERVAL, TARGET_BARS
+    feature_fn = engineer_features if feature_fn is None else feature_fn
+    specs = deepcopy(ENGINEERED_SPECS if engineered_specs is None else engineered_specs)
     def predict(nonce: int = None):
         import os
         import numpy as np
@@ -74,7 +123,8 @@ def make_predict(model, features, ticker, input_bars):
             tickers=[ticker], number_of_input_bars=input_bars, target_bars=target_bars, interval=interval,
             target_type='triple_barrier', data_source='allora', api_key=key,
         )
-        live = workflow.get_live_features(ticker)[features]
+        live, _ = feature_fn(workflow.get_live_features(ticker), specs, input_bars)
+        live = live[features]
         probabilities = np.zeros((len(live), 3))
         probabilities[:, np.asarray(model.classes_, dtype=int)] = model.predict_proba(live)
         PerformanceEvaluator.validate_probabilities(probabilities)
@@ -230,7 +280,7 @@ def plot_results(data, holdout, trades, output, diagnostic_cost, trade_cost_bps)
     display = ConfusionMatrixDisplay(confusion_matrix(y, hard, labels=[0, 1, 2]), display_labels=CLASSES)
     display.plot(ax=ax, cmap='Blues', colorbar=False, values_format='d',
                  text_kw={'fontsize': 23, 'fontweight': 'semibold'})
-    ax.set_title('Final holdout: predicted vs. actual class', pad=22)
+    ax.set_title('Combined OOS holdout: predicted vs. actual class', pad=22)
     ax.tick_params(labelsize=16)
     save_plot(fig, output, 'confusion_matrix.png'); plt.close(fig)
     payoff = (hard-1)*(y-1) - diagnostic_cost*(hard != 1)
@@ -243,7 +293,7 @@ def plot_results(data, holdout, trades, output, diagnostic_cost, trade_cost_bps)
     selected = holdout.loc[hard != 1]
     fig, axes = plt.subplots(3, 1, figsize=(13, 15), layout='constrained')
     fig.set_constrained_layout_pads(hspace=.12)
-    fig.suptitle('Example trades from the final holdout', x=.08, ha='left')
+    fig.suptitle('Example trades from the OOS holdout', x=.08, ha='left')
     if len(selected):
         positions = np.unique(np.linspace(0, len(selected)-1, min(3, len(selected)), dtype=int))
         for number, (ax, pos) in enumerate(zip(axes, positions), start=1):
@@ -267,13 +317,13 @@ def plot_results(data, holdout, trades, output, diagnostic_cost, trade_cost_bps)
         ax.step(cumulative.index, cumulative.gross_pnl, where='post', label='Gross', color='#397ca8', lw=2.5)
         ax.step(cumulative.index, cumulative.net_pnl, where='post', label='Net', color='#cc7825', lw=2)
         ax.legend(loc='upper left', framealpha=1, facecolor='white')
-    ax.set(title=f'Final holdout: cumulative trading PnL\n1 unit per trade · {trade_cost_bps:g} bps per side · overlapping positions',
+    ax.set(title=f'Combined OOS holdout: cumulative trading PnL\n1 unit per trade · {trade_cost_bps:g} bps per side · overlapping positions',
            ylabel='Cumulative realized PnL (USD)', xlabel=f'Exit date · UTC ({year})')
     date_axis(ax)
     save_plot(fig, output, 'cumulative_trade_pnl.png'); plt.close(fig)
 
 
-def plot_folds(samples, splits, output):
+def plot_folds(samples, splits, output, holdout_folds=HOLDOUT_FOLDS):
     """Show the actual training/validation dates, including excluded label gaps."""
     import matplotlib.dates as mdates
     import matplotlib.pyplot as plt
@@ -287,7 +337,7 @@ def plot_folds(samples, splits, output):
         train_end = samples.iloc[train[-1]].tb_prediction_time + width
         valid_start = samples.iloc[valid[0]].tb_prediction_time
         valid_end = samples.iloc[valid[-1]].tb_prediction_time + width
-        final = i == len(splits)-1
+        final = i >= len(splits)-holdout_folds
         for start, end, color in [(train_start, train_end, '#397ca8'),
                                    (valid_start, valid_end, '#9254a1' if final else '#269b80')]:
             left, right = mdates.date2num(start), mdates.date2num(end)
@@ -300,21 +350,21 @@ def plot_folds(samples, splits, output):
                 f'{len(train):,} train', fontsize=14, color='white', weight='semibold', ha='center', va='center')
         ax.text((mdates.date2num(valid_start)+mdates.date2num(valid_end))/2, i,
                 f'{len(valid):,} OOS', fontsize=14, color='white', weight='semibold', ha='center', va='center')
-        periods.append(dict(fold=i+1, role='final_holdout' if final else 'model_selection',
+        periods.append(dict(fold=i+1, role='oos_holdout' if final else 'model_selection',
                             train_start=train_start.isoformat(), train_end_exclusive=train_end.isoformat(),
                             validation_start=valid_start.isoformat(), validation_end_exclusive=valid_end.isoformat(),
                             train_rows=len(train), validation_rows=len(valid)))
-    ax.set_yticks(range(len(splits)), [f'Fold {i+1}' + (' — final holdout' if i == len(splits)-1 else '')
+    ax.set_yticks(range(len(splits)), [f'Fold {i+1}' + (' — OOS holdout' if i >= len(splits)-holdout_folds else '')
                                      for i in range(len(splits))])
     ax.invert_yaxis()
     ax.xaxis_date()
     date_axis(ax)
     ax.grid(axis='y', visible=False)
     ax.set_xlabel(f'Prediction date · UTC ({samples.tb_prediction_time.iloc[0].year})')
-    ax.set_title('Walk-forward model selection\nEarlier folds: minimize log loss · final fold: OOS evaluation', pad=24)
+    ax.set_title(f'Walk-forward model selection\nFirst {len(splits)-holdout_folds} folds: select · last {holdout_folds}: OOS evaluation', pad=24)
     ax.legend(handles=[Patch(color='#397ca8', label='Training'),
                        Patch(color='#269b80', label='CV validation'),
-                       Patch(color='#9254a1', label='Final OOS holdout'),
+                       Patch(color='#9254a1', label='OOS holdout'),
                        Patch(facecolor='#eeeeee', edgecolor='#888888', hatch='///', label='Unresolved-label gap')],
               loc='upper center', bbox_to_anchor=(.5, -.2), ncol=2, frameon=False, fontsize=13)
     save_plot(fig, output, 'walk_forward_folds.png')
@@ -323,6 +373,10 @@ def plot_folds(samples, splits, output):
 
 
 def run(args):
+    if not 1 <= args.holdout_folds < args.folds:
+        raise ValueError('Require at least one selection fold and one held-out fold')
+    if not LGBM_SEARCH_GRID:
+        raise ValueError('LGBM_SEARCH_GRID must contain at least one candidate')
     configure_plot_style()
     output = Path(args.output_dir).resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -331,12 +385,20 @@ def run(args):
     if not args.skip_backfill:
         workflow.backfill(start=datetime.now(timezone.utc)-timedelta(days=args.days))
     data = workflow.get_full_feature_target_dataframe().reset_index()
+    base_features = [c for c in data if c.startswith('feature_')]
+    # Supply only causal input columns to the editable transform, just as at serve time.
+    engineered, added_features = engineer_features(data[base_features], ENGINEERED_SPECS, INPUT_BARS)
+    if not engineered.index.equals(data.index):
+        raise ValueError('engineer_features must preserve row index and order')
+    features = base_features + added_features
+    if len(set(features)) != len(features):
+        raise ValueError('Engineered feature names must be unique and distinct from base features')
+    data[features] = engineered[features]
     resolved = data.dropna(subset=TARGETS).copy()
     if resolved.empty:
         raise ValueError('No resolved targets; include 100 horizons plus one native bar of warmup and complete minute coverage')
     print(f'Loaded {len(data)} rows; {len(resolved)} resolved; class totals: {resolved[TARGETS].sum().to_dict()}')
     plot_intro(data, resolved, output, args.show)
-    features = [c for c in data if c.startswith('feature_')]
     samples = resolved.dropna(subset=features).copy().reset_index(drop=True)
     samples = samples[np.isfinite(samples[features]).all(axis=1)].reset_index(drop=True)
     if len(samples) < args.folds + 1:
@@ -352,26 +414,34 @@ def run(args):
         if not len(train):
             raise ValueError('Training window has no resolved labels before validation')
         splits.append((train, valid))
-    fold_periods = plot_folds(samples, splits, output)
-    configurations = [dict(n_estimators=n, num_leaves=leaves) for n, leaves in [(80, 7), (150, 15), (250, 15)]]
+    fold_periods = plot_folds(samples, splits, output, args.holdout_folds)
+    configurations = list(ParameterGrid(LGBM_SEARCH_GRID))
+    selection_splits = splits[:-args.holdout_folds]
+    print(f'Model selection: {len(selection_splits)} folds; OOS evaluation: {args.holdout_folds} folds')
     cv_results = []
     for config in configurations:
         losses = []
-        for train, valid in splits[:-1]:
-            model = LGBMClassifier(**config, learning_rate=.03, max_depth=5, min_child_samples=30,
-                                   random_state=42, n_jobs=2, verbosity=-1)
+        for train, valid in selection_splits:
+            model = LGBMClassifier(**{**LGBM_FIXED_PARAMS, **config})
             model.fit(samples.iloc[train][features], truth[train])
             p = model_probabilities(model, samples.iloc[valid][features])
             losses.append(float(log_loss(truth[valid], p, labels=[0, 1, 2])))
         cv_results.append(dict(params=config, mean_log_loss=float(np.mean(losses)), fold_losses=losses))
     best = min(cv_results, key=lambda r: r['mean_log_loss'])
     print(f"Selected by earlier-fold mean log loss: {best['mean_log_loss']:.6f}; {best['params']}")
-    train, valid = splits[-1]
-    model = LGBMClassifier(**best['params'], learning_rate=.03, max_depth=5, min_child_samples=30,
-                           random_state=42, n_jobs=2, verbosity=-1)
-    model.fit(samples.iloc[train][features], truth[train])
-    holdout = samples.iloc[valid].copy()
-    holdout[PREDS] = model_probabilities(model, holdout[features])
+    # Freeze the configuration after selection. Refit before each held-out fold
+    # using only labels available at its cutoff; later fits may include earlier
+    # held-out outcomes once resolved, but never use them to reselect parameters.
+    holdouts = []
+    for fold, (train, valid) in enumerate(splits[-args.holdout_folds:],
+                                         start=len(selection_splits)+1):
+        model = LGBMClassifier(**{**LGBM_FIXED_PARAMS, **best['params']})
+        model.fit(samples.iloc[train][features], truth[train])
+        part = samples.iloc[valid].copy()
+        part[PREDS] = model_probabilities(model, part[features])
+        part['oos_fold'] = fold
+        holdouts.append(part)
+    holdout = pd.concat(holdouts).sort_values('tb_prediction_time').reset_index(drop=True)
     evaluator = PerformanceEvaluator(target_type='triple_barrier')
     baseline = evaluator.causal_class_baseline(holdout.tb_prediction_time, resolved.tb_resolution_time, resolved[TARGETS])
     holdout[['baseline_'+c for c in CLASSES]] = baseline
@@ -386,18 +456,21 @@ def run(args):
     plot_results(data, holdout, trades, output, args.diagnostic_cost, args.trade_cost_bps)
     config = dict(topic=args.topic, dataset=TOPICS[args.topic], interval=INTERVAL, target_bars=TARGET_BARS,
                   input_bars=INPUT_BARS, atr_lookback_horizons=100, barrier_multiplier=.25,
-                  cv=cv_results, best_params=best['params'], selection='lowest mean log loss on earlier folds only; final fold held out',
+                  cv=cv_results, best_params=best['params'], selection='lowest mean log loss on selection folds; fixed configuration refit before each OOS fold',
+                  search_grid=LGBM_SEARCH_GRID, fixed_params=LGBM_FIXED_PARAMS, holdout_folds=args.holdout_folds,
+                  engineered_specs=ENGINEERED_SPECS, engineered_features=added_features,
                   class_order=CLASSES, features=features, trade_size=1., trade_cost_bps=args.trade_cost_bps,
                   diagnostic_cost=args.diagnostic_cost, sdk='1.4.0rc4', folds=args.folds, fold_periods=fold_periods)
     for name, content in [('metrics.json', report), ('config.json', config)]:
         (output / name).write_text(json.dumps(content, indent=2, allow_nan=False))
-    (output / 'report.txt').write_text('Final-fold OOS classification and trades\n' + json.dumps(report, indent=2) +
+    (output / 'report.txt').write_text(f'Combined OOS classification and trades ({args.holdout_folds} folds)\n' + json.dumps(report, indent=2) +
                                      f'\nTrades: {len(trades)}; net PnL: {trades.net_pnl.sum():.6f} USD\n'
                                      'Fixed one-unit overlapping trades; exact boundary fills, expiry at last in-window close.\n'
                                      'Participation is offline coverage, not observed network participation.\n')
     # Holdout figures above remain OOS; production refit does not overwrite them.
     model.fit(samples[features], truth)
-    predict = make_predict(model, features, TOPICS[args.topic], INPUT_BARS)
+    predict = make_predict(model, features, TOPICS[args.topic], INPUT_BARS,
+                           feature_fn=engineer_features, engineered_specs=ENGINEERED_SPECS)
     with (output / 'predict.pkl').open('wb') as handle:
         cloudpickle.dump(predict, handle)
     print(f'COMPLETE: {output}')
@@ -409,7 +482,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--topic', type=int, choices=TOPICS, default=87)
     parser.add_argument('--days', type=int, default=220)
-    parser.add_argument('--folds', type=int, default=4)
+    parser.add_argument('--folds', type=int, default=N_FOLDS, help='Total walk-forward folds')
+    parser.add_argument('--holdout-folds', type=int, default=HOLDOUT_FOLDS,
+                        help='Final folds reserved for OOS evaluation; remaining folds select the model')
     parser.add_argument('--output-dir', default=str(Path(__file__).resolve().parent / 'triple_barrier_example_output'),
                         help='Artifacts directory; repeated runs replace outputs here (override to retain separate runs)')
     parser.add_argument('--cache-dir')
@@ -418,8 +493,8 @@ def main():
     parser.add_argument('--diagnostic-cost', type=float, default=0., help='Cost per directional signal in barrier units')
     parser.add_argument('--trade-cost-bps', type=float, default=0., help='Trading cost per side in basis points')
     args = parser.parse_args()
-    if args.folds < 2 or min(args.diagnostic_cost, args.trade_cost_bps) < 0:
-        parser.error('At least two folds and non-negative costs required')
+    if args.folds < 2 or not 1 <= args.holdout_folds < args.folds or min(args.diagnostic_cost, args.trade_cost_bps) < 0:
+        parser.error('Require selection and holdout folds (1 <= holdout-folds < folds), and non-negative costs')
     run(args)
 
 

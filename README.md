@@ -299,7 +299,7 @@ From here, improving your score comes down to three levers:
 
 1. **Feature engineering** — what information goes into $\mathbf{x}$. The base features are normalized OHLCV ratios (last-close normalized to 1.0). Adding technical indicators (RSI, MACD, realized volatility), log-return series, or cross-asset signals is where most alpha lives.
 2. **Model and regularization** — early stopping, tree depth, learning rate, and subsampling to keep variance in check.
-3. **Out-of-sample evaluation** — use the metrics appropriate to the topic family below. The triple-barrier example selects the lowest mean log loss across earlier folds, then evaluates the selected configuration on the untouched final fold before production refitting.
+3. **Out-of-sample evaluation** — use the metrics appropriate to the topic family below. The triple-barrier example defaults to five folds: the first three select the lowest mean log loss, and the last two supply combined OOS evaluation. The selected configuration stays fixed; each OOS fold refits using labels available at its cutoff, including earlier OOS outcomes once resolved. Production refitting follows evaluation. `--folds` and `--holdout-folds` control the split; `LGBM_SEARCH_GRID` and `LGBM_FIXED_PARAMS` near the top of the script expose the model search. Just below them, edit `ENGINEERED_SPECS` and `engineer_features()` to add derived features; the same function runs during training and is captured in the inference artifact.
 
 For structured methodology guidance on each of these levers, see the [Model creation skills](#model-creation-skills) section.
 

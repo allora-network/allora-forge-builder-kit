@@ -252,7 +252,45 @@ def _run_example(state):
     return output
 
 
+def _verify_editable_feature_artifact():
+    import allora_forge_builder_kit as kit
+    example = runpy.run_path(str(SCRIPT))
+    recipe = [{'kind': 'log_return', 'window_bars': 1}]
+    base = pd.DataFrame({'feature_close_0': [.9, .8], 'feature_close_1': [.95, .9],
+                         'feature_close_2': [1., 1.], 'feature_high_2': [1.02, 1.03],
+                         'feature_low_2': [.98, .97]})
+    default_engineer = example['engineer_features']
+
+    def custom_engineer(frame, specs, input_bars):
+        frame, added = default_engineer(frame, specs, input_bars)
+        frame['custom_range'] = frame[f'feature_high_{input_bars-1}'] - frame[f'feature_low_{input_bars-1}']
+        return frame, added + ['custom_range']
+
+    trained, added = custom_engineer(base, recipe, 3)
+    features = list(base) + added
+    expected = trained.iloc[[-1]][features]
+
+    class CheckingModel:
+        classes_ = np.array([0, 1, 2])
+
+        def predict_proba(self, frame):
+            pd.testing.assert_frame_equal(frame, expected)
+            return np.array([[.2, .3, .5]])
+
+    predict = example['make_predict'](CheckingModel(), features, 'test', 3,
+                                      feature_fn=custom_engineer, engineered_specs=recipe)
+    recipe[0]['window_bars'] = 2  # artifact must retain its training recipe
+    loaded = cloudpickle.loads(cloudpickle.dumps(predict))
+    from types import SimpleNamespace
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv('ALLORA_API_KEY', 'test-feature-key')
+        patch.setattr(kit, 'AlloraMLWorkflow', lambda **kw: SimpleNamespace(
+            get_live_features=lambda ticker: base.iloc[[-1]].copy()))
+        assert loaded() == {'down': .2, 'neutral': .3, 'up': .5}
+
+
 def test_example_outputs(integration_run):
+    _verify_editable_feature_artifact()
     _verify_review_evaluation_and_monitoring()
     from allora_forge_builder_kit import PerformanceEvaluator
     from allora_forge_builder_kit.worker_monitor import _labeled_value_text
@@ -307,9 +345,24 @@ def test_example_outputs(integration_run):
                 'example_trades.png', 'cumulative_trade_pnl.png', 'trades.csv', 'walk_forward_folds.png']
     assert all((output/name).stat().st_size > 0 for name in expected)
     config = json.loads((output/'config.json').read_text())
-    assert config['fold_periods'][-1]['role'] == 'final_holdout'
-    assert all(p['role'] == 'model_selection' for p in config['fold_periods'][:-1])
+    count = config['holdout_folds']
+    assert count == 2
+    assert all(p['role'] == 'oos_holdout' for p in config['fold_periods'][-count:])
+    assert all(p['role'] == 'model_selection' for p in config['fold_periods'][:-count])
+    assert all(len(c['fold_losses']) == config['folds'] - count for c in config['cv'])
+    assert config['best_params'] == min(config['cv'], key=lambda c: c['mean_log_loss'])['params']
+    assert config['search_grid'] and config['fixed_params']
+    from sklearn.model_selection import ParameterGrid
+    assert [c['params'] for c in config['cv']] == list(ParameterGrid(config['search_grid']))
     frame = pd.read_csv(output/'predictions.csv')
+    expected_folds = config['fold_periods'][-count:]
+    assert set(frame.oos_fold) == {p['fold'] for p in expected_folds}
+    assert not frame.open_time.duplicated().any()
+    for period in expected_folds:
+        rows = frame[frame.oos_fold == period['fold']]
+        assert len(rows) == period['validation_rows']
+        assert pd.Timestamp(rows.tb_prediction_time.min()) == pd.Timestamp(period['validation_start'])
+        assert pd.Timestamp(period['train_end_exclusive']) <= pd.Timestamp(period['validation_start'])
     p = frame[PREDS].to_numpy()
     assert np.isfinite(p).all() and (p >= 0).all()
     np.testing.assert_allclose(p.sum(axis=1), 1)
