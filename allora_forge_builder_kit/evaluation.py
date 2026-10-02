@@ -3,7 +3,7 @@ from __future__ import annotations
 Allora Forge Builder Kit - Performance Metrics Evaluation
 ==========================================================
 
-Official metrics for log return predictions with comprehensive evaluation framework.
+Offline evaluation for scalar returns and triple-barrier class probabilities.
 
 Usage:
     from allora_forge_builder_kit import PerformanceEvaluator
@@ -27,8 +27,10 @@ class PerformanceEvaluator:
     """
     Comprehensive performance metrics calculator for financial time-series predictions.
     
-    Implements 7 primary metrics with pass/fail thresholds plus additional metrics
-    for evaluating predictive model performance.
+    Scalar evaluation implements seven criteria with a letter grade.
+    Triple-barrier evaluation implements six strict criteria and no grade.
+    The volatility mode retains the legacy scalar path; dedicated volatility
+    diagnostics live in the volatility example workflows.
     
     v3.0 evaluation framework:
       - DA CI lower bound >= 0.50
@@ -67,9 +69,11 @@ class PerformanceEvaluator:
 
     TEMPORAL_COVERAGE_THRESHOLD = 0.50
     
-    def __init__(self):
-        """Initialize the performance evaluator."""
-        pass
+    def __init__(self, target_type="log_return"):
+        """Select scalar evaluation (default) or triple-barrier classification."""
+        if target_type not in ("log_return", "volatility", "triple_barrier"):
+            raise ValueError(f"Unknown target_type: {target_type}")
+        self.target_type = target_type
     
     @staticmethod
     def power_tanh(x: np.ndarray, p: float = 3.0) -> np.ndarray:
@@ -561,15 +565,160 @@ class PerformanceEvaluator:
         grade = self.GRADES.get(num_passed, 'F')
         return score, grade, num_passed
     
+    @staticmethod
+    def validate_probabilities(values):
+        """Validate probabilities in explicit [down, neutral, up] order."""
+        p = np.asarray(values, dtype=float)
+        if p.ndim != 2 or p.shape[1] != 3 or not len(p):
+            raise ValueError("Expected a non-empty Nx3 probability array [down, neutral, up]")
+        if not np.isfinite(p).all() or (p < 0).any() or (p > 1).any():
+            raise ValueError("Probabilities must be finite and between zero and one")
+        if not np.allclose(p.sum(axis=1), 1, rtol=0, atol=1e-8):
+            raise ValueError("Probability rows must sum to one")
+        return p
+
+    @staticmethod
+    def causal_class_baseline(prediction_times, history_times, history_truth):
+        """Previous 100 resolved targets; history_times are availability times.
+
+        Call per topic. Include history preceding the evaluation window, not
+        merely the subset of opportunities at which the worker submitted.
+        """
+        import pandas as pd
+        truth = np.asarray(history_truth, dtype=float)
+        # No resolved history is valid; preserve shape validation for malformed
+        # empty inputs instead of treating every zero-sized array as Nx3.
+        if truth.shape == (0,):
+            truth = np.empty((0, 3))
+        if truth.shape != (0, 3):
+            truth = PerformanceEvaluator.validate_probabilities(truth)
+        if not np.isin(truth, [0, 1]).all():
+            raise ValueError("Baseline history must be one-hot")
+        times = pd.DatetimeIndex(pd.to_datetime(history_times, utc=True)).as_unit("ns")
+        queries = pd.DatetimeIndex(pd.to_datetime(prediction_times, utc=True)).as_unit("ns")
+        if len(times) != len(truth) or times.hasnans or queries.hasnans:
+            raise ValueError("Aligned, non-null availability and prediction times required")
+        order = np.argsort(times.asi8, kind='stable')
+        times, truth = times.asi8[order], truth[order]
+        sums = np.vstack([np.zeros(3), np.cumsum(truth, axis=0)])
+        ends = np.searchsorted(times, queries.asi8, side='right')
+        starts = np.maximum(0, ends - 100)
+        result = np.full((len(queries), 3), 1 / 3)
+        valid = ends > starts
+        result[valid] = (sums[ends[valid]] - sums[starts[valid]]) / (ends - starts)[valid, None]
+        return result
+
+    def evaluate_classification(
+        self, y_true, y_pred, *, baseline_probabilities,
+        n_expected_epochs=None, n_submitted=None, participation_kind='observed',
+        transaction_cost=None, seed=42,
+    ):
+        """Six ratified gates; optional payoff is reported separately.
+
+        Bounds are paired circular block-bootstrap percentiles (10 rows,
+        1,000 replicates). n_eff=nvalid/10 is a descriptive block count, not
+        another eligibility gate. Missing participation fails that gate.
+        """
+        truth = self.validate_probabilities(y_true)
+        pred = self.validate_probabilities(y_pred)
+        baseline = self.validate_probabilities(baseline_probabilities)
+        if truth.shape != pred.shape or truth.shape != baseline.shape:
+            raise ValueError("Truth, predictions, and baseline must have identical shapes")
+        if not np.isin(truth, [0, 1]).all():
+            raise ValueError("Classification truth must be one-hot")
+        if participation_kind not in ('observed', 'offline'):
+            raise ValueError("participation_kind must be observed or offline")
+        n = len(truth)
+        y, hard, base_hard = truth.argmax(1), pred.argmax(1), baseline.argmax(1)
+        weights = (np.arange(3)[:, None] - np.arange(3)[None, :]) ** 2 / 4
+
+        def metrics(indices):
+            actual, ph, bh = y[indices], hard[indices], base_hard[indices]
+            yt, pp, bp = truth[indices], pred[indices], baseline[indices]
+            acc, bacc = np.mean(ph == actual), np.mean(bh == actual)
+            observed = np.mean(weights[actual, ph])
+            expected = (weights * np.outer(np.bincount(actual, minlength=3),
+                                           np.bincount(ph, minlength=3))).sum() / len(indices) ** 2
+            kappa = 1 - observed / expected if expected > 0 else np.nan
+            bl, bbl = np.mean(np.sum((pp - yt) ** 2, axis=1)), np.mean(np.sum((bp - yt) ** 2, axis=1))
+            # Clip only the realized class probability, not the whole vector.
+            pt = np.clip(pp[np.arange(len(indices)), actual], 1e-15, 1)
+            bt = np.clip(bp[np.arange(len(indices)), actual], 1e-15, 1)
+            fl, bfl = np.mean(-(1 - pt) ** 2 * np.log(pt)), np.mean(-(1 - bt) ** 2 * np.log(bt))
+            return dict(accuracy=acc, baseline_accuracy=bacc, accuracy_improvement=acc - bacc,
+                        quadratic_weighted_kappa=kappa, brier_loss=bl, baseline_brier_loss=bbl,
+                        brier_skill=1 - bl / bbl if bbl > 0 else np.nan,
+                        focal_loss=fl, baseline_focal_loss=bfl,
+                        focal_skill=1 - fl / bfl if bfl > 0 else np.nan)
+
+        report = metrics(np.arange(n))
+        names = ('accuracy_improvement', 'quadratic_weighted_kappa', 'brier_skill', 'focal_skill')
+        boot = {k: [] for k in names}
+        # For n <= block length, circular samples are permutations of the same
+        # rows and bounds can collapse. Keep the ratified gates unchanged;
+        # provisional reports must not be read as independent-sample evidence.
+        rng = np.random.default_rng(seed)
+        for _ in range(1000):
+            starts = rng.integers(0, n, size=(n + 9) // 10)
+            idx = ((starts[:, None] + np.arange(10)) % n).ravel()[:n]
+            m = metrics(idx)
+            for key in names:
+                if np.isfinite(m[key]):
+                    boot[key].append(m[key])
+        for key in names:
+            vals = boot[key]
+            bounds = np.percentile(vals, [5, 95]) if vals else [None, None]
+            report[key + '_ci'] = dict(lower=bounds[0], upper=bounds[1])
+            if not vals:
+                report[key] = None
+        participation = None
+        if n_expected_epochs is not None:
+            submitted = n if n_submitted is None else n_submitted
+            if (int(n_expected_epochs) != n_expected_epochs or n_expected_epochs <= 0
+                    or int(submitted) != submitted or not 0 <= submitted <= n_expected_epochs):
+                raise ValueError("Participation requires integer counts: 0 <= submitted <= available, available > 0")
+            participation = submitted / n_expected_epochs
+        report.update(nvalid=n, n_eff=n / 10, n_eff_method='nvalid / bootstrap block length',
+                      provisional=n < 100, participation=participation,
+                      participation_kind=participation_kind if participation is not None else 'unavailable',
+                      bootstrap=dict(block_length=10, replicates=1000, seed=seed,
+                                     finite_replicates={k: len(v) for k, v in boot.items()}))
+        gates = [('accuracy_improvement', report['accuracy_improvement'], .02)]
+        gates += [(k + '_lower', report[k + '_ci']['lower'], 0) for k in names]
+        gates += [('participation', participation, .90)]
+        report['criteria'] = [dict(key=k, value=v, threshold=t,
+                                   passed=bool(v is not None and np.isfinite(v) and v > t)) for k, v, t in gates]
+        report['eligible'] = all(c['passed'] for c in report['criteria'])
+        if transaction_cost is not None:
+            if not np.isfinite(transaction_cost) or transaction_cost < 0:
+                raise ValueError("transaction_cost must be finite and non-negative")
+            payoff = (hard - 1) * (y - 1) - transaction_cost * (hard != 1)
+            report['directional_payoff'] = dict(mean=float(payoff.mean()), sum=float(payoff.sum()),
+                                               transaction_cost=float(transaction_cost), units='barrier units')
+        def clean(x):
+            if isinstance(x, dict):
+                return {k: clean(v) for k, v in x.items()}
+            if isinstance(x, list):
+                return [clean(v) for v in x]
+            if isinstance(x, (float, np.floating)):
+                return float(x) if np.isfinite(x) else None
+            return x
+        return clean(report)
+
     def evaluate(
         self,
         y_true: np.ndarray,
         y_pred: np.ndarray,
         epoch_length_minutes: int = 60,
         n_expected_epochs: Optional[int] = None,
+        **classification_options,
     ) -> Dict:
         """
-        Calculate all performance metrics for log return predictions.
+        Evaluate scalar returns by default, or probabilities for triple_barrier.
+
+        Classification requires baseline_probabilities in classification_options;
+        see evaluate_classification for its full keyword contract and report.
+        The scalar arguments and graded report below apply to scalar mode only.
         
         Args:
             y_true: Ground truth log returns (actual)
@@ -586,6 +735,10 @@ class PerformanceEvaluator:
             ``n_expected_epochs`` is not provided, or a ``bool`` when it is.
             Guard with ``is not None`` before using it.
         """
+        if self.target_type == "triple_barrier":
+            return self.evaluate_classification(y_true, y_pred, n_expected_epochs=n_expected_epochs, **classification_options)
+        if classification_options:
+            raise TypeError("Classification options require target_type=triple_barrier")
         y_true = np.asarray(y_true).flatten()
         y_pred = np.asarray(y_pred).flatten()
         
@@ -639,6 +792,10 @@ class PerformanceEvaluator:
             report: Output from evaluate()
             detailed: If True, show all metrics. If False, show only primary metrics.
         """
+        if 'criteria' in report:
+            import json
+            print(json.dumps(report, indent=2, allow_nan=False))
+            return
         m = report['metrics']
         p = report['passed']
         

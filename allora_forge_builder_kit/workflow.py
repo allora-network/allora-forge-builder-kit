@@ -100,6 +100,8 @@ class AlloraMLWorkflow:
                 - "log_return" (default): log(close[t+H] / close[t])
                 - "volatility": std of 1-minute log returns over the target horizon.
                   Requires interval="1m"; target_bars defines the horizon in minutes.
+                - "triple_barrier": one-hot up/neutral/down first-touch targets;
+                  horizon = target_bars × interval, ATR lookback = 100 horizons.
             **data_manager_kwargs: Arguments passed to DataManager factory:
                 - Binance: market="futures", batch_timeout=20, base_dir="..."
                 - Allora: api_key="...", base_dir="...", max_pages=1000
@@ -140,7 +142,7 @@ class AlloraMLWorkflow:
             dm = DataManager(source="binance", interval="5m", market="futures")
             workflow = AlloraMLWorkflow(..., data_manager=dm)
         """
-        _valid_target_types = ("log_return", "volatility")
+        _valid_target_types = ("log_return", "volatility", "triple_barrier")
         if target_type not in _valid_target_types:
             raise ValueError(
                 f"target_type must be one of {_valid_target_types}, got {target_type!r}"
@@ -249,7 +251,10 @@ class AlloraMLWorkflow:
             ticker: Symbol to fetch features for
             
         Returns:
-            DataFrame with features for the most recent complete bar
+            DataFrame for the latest resampled row returned by the shared live
+            pipeline. The feature window includes that row. Depending on feed
+            timing, its native candle may be partial; this method does not align
+            rows to a topic nonce or guarantee a completed native candle.
             
         Raises:
             ValueError: If not enough historical data or no features extracted
@@ -347,6 +352,12 @@ class AlloraMLWorkflow:
 
     # ---------- Historical features/targets ----------
     def get_full_feature_target_dataframe(self, start_date=None, end_date=None) -> pl.DataFrame:
+        if self.target_type == "triple_barrier":
+            if not self._dm.minute_candles_available:
+                raise ValueError(
+                    "Triple-barrier targets require one-minute source candles; "
+                    "use Atlas (data_source='allora') or a data manager with interval='1m'."
+                )
         print(f"[workflow] Loading data")
         raw = self._dm.load_polars(self.tickers, start=start_date, end=end_date)
 
@@ -360,10 +371,13 @@ class AlloraMLWorkflow:
                 print(f"[workflow] Skipping {t} - no data available")
                 continue
 
+            minute_data = df
             df = self.stand_alone_features_from_1min_bars(df, live_mode=False)
 
             if self.target_type == "volatility":
                 df = self.compute_volatility_target_polars(df, self.target_bars)
+            elif self.target_type == "triple_barrier":
+                df = self.compute_triple_barrier_target_polars(df, self.target_bars, minute_data)
             else:
                 df = self.compute_target_polars(df, self.target_bars)
 
@@ -391,7 +405,9 @@ class AlloraMLWorkflow:
             freq: Polars duration string, e.g. '5m', '1h', '1d'
             ohlcv_cols: Dict mapping OHLCV column names to aggregation functions
             groupby: List of columns to group by (e.g. ['symbol'])
-            live_mode: If True, drop incomplete bars and align to end at last timestamp
+            live_mode: Apply the existing incomplete-minute trimming rule;
+                minute-based intervals also align to the last available minute.
+                This does not guarantee that the final native candle is complete.
         
         Returns:
             Polars DataFrame with resampled OHLCV data
@@ -535,6 +551,130 @@ class AlloraMLWorkflow:
         df = df.drop("_log_return")
         return df
     
+    def compute_triple_barrier_target_polars(
+        self, df: pl.DataFrame, target_bars: int, minute_data: pl.DataFrame,
+        barrier_multiplier: float = 0.25,
+    ) -> pl.DataFrame:
+        """Append one-hot first-touch targets without changing feature construction.
+
+        A row's prediction time is its opening time plus ``self.interval``.
+        ATR is the mean of trailing ``target_bars`` high/low log ranges over
+        100 horizons, calculated on the already-resampled candles. Each range
+        includes both endpoints (h + 1 bars), matching the reputer SQL. The
+        averaging interval excludes its right endpoint; ranges at its start
+        use only candles inside that interval. Missing minute coverage leaves all
+        target columns null. Minute ties resolve down first.
+
+        This is a general native-bar target builder. Forge topics 87-89 use
+        interval='1h', target_bars=24, and barrier_multiplier=0.25; other
+        configurations define different targets and must not be submitted there.
+
+        Metadata uses the ``tb_`` prefix and must not be used as model features.
+        ``tb_exit_time`` is the end of the first-hit minute (or expiry), the
+        earliest time that candle's high/low/close is observable.
+        """
+        if isinstance(target_bars, bool) or int(target_bars) != target_bars or target_bars < 1:
+            raise ValueError("target_bars must be a positive integer")
+        if not np.isfinite(barrier_multiplier) or barrier_multiplier <= 0:
+            raise ValueError("barrier_multiplier must be positive and finite")
+        h = int(target_bars)
+        minutes_per_bar = int(round(60 / self._parse_interval_to_bars_per_hour(self.interval)))
+        if minutes_per_bar < 1:
+            raise ValueError("triple barrier requires bars of at least one minute")
+        width = pd.Timedelta(minutes=minutes_per_bar)
+        horizon = h * width
+        raw = minute_data.select("open_time", "open", "high", "low", "close").to_pandas()
+        raw = raw.sort_values("open_time").set_index("open_time")
+        if raw.index.tz is None:
+            raise ValueError("Triple-barrier minute timestamps must be timezone-aware UTC")
+        if raw.index.has_duplicates:
+            raise ValueError("Duplicate minute timestamps in triple-barrier input")
+        if raw.empty:
+            raise ValueError("No minute candles for triple-barrier targets")
+        if not (raw.index == raw.index.floor("min")).all():
+            raise ValueError("Minute candle timestamps must be minute-aligned")
+        grid = pd.date_range(raw.index.min(), raw.index.max(), freq="min")
+        raw = raw.reindex(grid)
+        valid = np.isfinite(raw).all(axis=1) & (raw > 0).all(axis=1)
+        valid &= (raw.high >= raw[['open', 'close', 'low']].max(axis=1))
+        valid &= (raw.low <= raw[['open', 'close', 'high']].min(axis=1))
+        # Resampled prices are the workflow's native bars; minute counts validate
+        # them instead of silently treating a partial bar as complete.
+        native = df.select("open_time", "high", "low").to_pandas().set_index("open_time")
+        if native.index.tz is None:
+            raise ValueError("Triple-barrier native timestamps must be timezone-aware UTC")
+        native = native.reindex(pd.date_range(native.index.min(), native.index.max(), freq=width))
+        counts = valid.astype(int).resample(width, origin=native.index.min(), label='left', closed='left').sum().reindex(native.index, fill_value=0)
+        native.loc[counts != minutes_per_bar, ['high', 'low']] = np.nan
+        lookback = 100 * h
+        # SQL RANGE BETWEEN horizon PRECEDING AND CURRENT ROW includes h+1
+        # candle openings. WHERE clips history BEFORE the window calculation,
+        # so the first h ranges of each lookback have lengths 1, ..., h.
+        ranges = (np.log(native.high.rolling(h + 1, min_periods=1).max())
+                  - np.log(native.low.rolling(h + 1, min_periods=1).min()))
+        range_sum = ranges.rolling(lookback, min_periods=lookback).sum()
+        for j in range(h):
+            partial = (np.log(native.high.rolling(j + 1, min_periods=1).max())
+                       - np.log(native.low.rolling(j + 1, min_periods=1).min()))
+            range_sum += (partial - ranges).shift(lookback - 1 - j)
+        # A row opens at T-width. Samples must open before T-width.
+        atr = (range_sum / lookback).shift(1)
+        # Also require every sample candle in the historical averaging interval.
+        complete = (counts == minutes_per_bar).rolling(100 * h, min_periods=100 * h).sum().shift(1)
+        atr = atr.where(complete == 100 * h)
+        bad_prefix = np.r_[0, np.cumsum(~valid.to_numpy())]
+        lows, highs, closes = (raw[c].to_numpy() for c in ('low', 'high', 'close'))
+        first = grid[0]
+        records = []
+        unresolved_history = unresolved_future = 0
+        for opening in df['open_time'].to_list():
+            t = pd.Timestamp(opening) + width
+            end = t + horizon - pd.Timedelta(minutes=1)
+            rec: dict[str, object] = dict(target_down=None, target_neutral=None, target_up=None,
+                       tb_prediction_time=t, tb_resolution_time=end,
+                       tb_atr=None, tb_base=None, tb_upper=None, tb_lower=None,
+                       tb_exit_time=None, tb_exit_price=None, tb_exit_reason=None)
+            a = atr.get(pd.Timestamp(opening), np.nan)
+            start_i = int((t - pd.Timedelta(minutes=1) - first) / pd.Timedelta(minutes=1))
+            end_i = start_i + h * minutes_per_bar
+            if not np.isfinite(a):
+                unresolved_history += 1
+                records.append(rec)
+                continue
+            if (start_i < 0 or end_i > len(raw)
+                    or bad_prefix[end_i] != bad_prefix[start_i]):
+                unresolved_future += 1
+                records.append(rec)
+                continue
+            base = closes[start_i]
+            upper, lower = base * np.exp(barrier_multiplier * a), base * np.exp(-barrier_multiplier * a)
+            down = lows[start_i:end_i] <= lower
+            up = highs[start_i:end_i] >= upper
+            hits = np.flatnonzero(down | up)
+            if len(hits):
+                j = int(hits[0])
+                label = 'down' if down[j] else 'up'
+                exit_price = lower if label == 'down' else upper
+                exit_time = grid[start_i + j] + pd.Timedelta(minutes=1)
+            else:
+                label, exit_price, exit_time = 'neutral', closes[end_i - 1], end
+            rec.update({f'target_{c}': int(c == label) for c in ('down', 'neutral', 'up')})
+            rec.update(tb_atr=float(a), tb_base=float(base), tb_upper=float(upper), tb_lower=float(lower),
+                       tb_exit_time=exit_time, tb_exit_price=float(exit_price),
+                       tb_exit_reason='expiry' if label == 'neutral' else label)
+            records.append(rec)
+        print(f"[workflow] triple-barrier: {len(records)-unresolved_history-unresolved_future}/{len(records)} resolved; "
+              f"{unresolved_history} unresolved history (warmup/gaps); "
+              f"{unresolved_future} unresolved testing interval (tail/gaps); "
+              f"{int((counts != minutes_per_bar).sum())} incomplete native bars")
+        metadata = pl.from_pandas(pd.DataFrame(records)).with_columns(
+            pl.col('target_up', 'target_neutral', 'target_down').cast(pl.Int8),
+            pl.col('tb_atr', 'tb_base', 'tb_upper', 'tb_lower', 'tb_exit_price').cast(pl.Float64),
+            pl.col('tb_prediction_time', 'tb_resolution_time', 'tb_exit_time').cast(pl.Datetime('us', 'UTC')),
+            pl.col('tb_exit_reason').cast(pl.String),
+        )
+        return df.hstack(metadata)
+
     def extract_features_polars(
         self,
         df: pl.DataFrame,

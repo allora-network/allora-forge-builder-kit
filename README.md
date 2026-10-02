@@ -5,7 +5,7 @@
 Build, evaluate, and deploy ML inference workers on the [Allora Network](https://allora.network).
 
 > [!IMPORTANT]
-> **SDK v10 — testnet and mainnet.** Both networks have completed the emissions v9 → v10 chain upgrade. Requires `allora-sdk>=1.3.0`.
+> **SDK v10 — testnet and mainnet.** Both networks have completed the emissions v9 → v10 chain upgrade. This repository pins `allora-sdk==1.4.0rc4` for scalar and labeled multi-output submissions.
 >
 > ```bash
 > pip install "allora-forge-builder-kit @ git+https://github.com/allora-network/allora-forge-builder-kit.git@main"
@@ -16,17 +16,13 @@ Build, evaluate, and deploy ML inference workers on the [Allora Network](https:/
 - [What is Allora?](#what-is-allora)
 - [What is the Allora Forge?](#what-is-the-allora-forge)
 - [What you get](#what-you-get)
-- [Zero to deploy](#zero-to-deploy)
-- [Topic reference](#topic-reference)
-- [Wallet linking](#wallet-linking)
-- [Deploy to the hosting platform (export)](#deploy-to-the-hosting-platform-export)
-- [Python API (quick reference)](#python-api-quick-reference)
+- [Topic types](#topic-types)
+- [Topics](#topics)
+- [Quick start](#quick-start)
 - [The learning problem](#the-learning-problem)
 - [Evaluation metrics](#evaluation-metrics)
-- [Model creation skills](#model-creation-skills)
-- [File map](#file-map)
-- [Testing](#testing)
-- [Links](#links)
+- [Worker operations](#worker-operations)
+- [Development and references](#development-and-references)
 
 ## What is Allora?
 
@@ -49,7 +45,7 @@ workers          predictions                                        revealed
 polled           locked                                           + rewarded
 ```
 
-All live topics today are crypto market predictions across assets like BTC, ETH, SOL, and NEAR. New topics are added over time.
+Live topics include crypto market predictions and commodity triple-barrier classification. New topics are added over time.
 
 ## What is the Allora Forge?
 
@@ -67,169 +63,34 @@ This toolkit handles everything between your model and the network: data, featur
 
 ---
 
-## Zero to deploy
+## Topic types
 
-### Step 1 — Clone and install
+The workflow supports three target types. Price topics use the log-return workflow
+and convert its prediction to an absolute price at submission.
 
-```bash
-git clone https://github.com/allora-network/allora-forge-builder-kit.git
-cd allora-forge-builder-kit
+| Topic family | Workflow `target_type` | Worker output |
+|---|---|---|
+| Price / log returns | `log_return` (default) | Absolute price or log return, as required by the topic |
+| Volatility | `volatility` | Nonnegative horizon-scaled realized volatility |
+| Triple barrier | `triple_barrier` | Labeled probabilities: `down`, `neutral`, `up` |
 
-python3.11 -m venv .venv
-source .venv/bin/activate
+## Topics
 
-pip install -e ".[dev,wallet-link]"
-```
+### Price / log returns
 
-Get a free API key from [developer.allora.network](https://developer.allora.network) and save it:
+Predict future price or `log(future price / current price)`. Start with the
+[topic 69 price walkthrough](notebooks/example_topic_69_bitcoin_walkthrough.py),
+[topic 77 fast price walkthrough](notebooks/example_topic_77_bitcoin_5min_walkthrough.py),
+or [topic 83 log-return workflow](notebooks/testnet/topic_83_btc_8h_logreturn/example.py).
 
-```bash
-echo "UP-..." > .allora_api_key
-
-# Load into env without displaying the value
-export ALLORA_API_KEY=$(cat .allora_api_key)
-```
-
-To persist across terminal sessions, add to your shell profile:
-
-```bash
-echo 'export ALLORA_API_KEY=$(cat /path/to/allora-forge-builder-kit/.allora_api_key)' >> ~/.bashrc
-```
-
-> **No API key?** Use `data_source="binance"` in `AlloraMLWorkflow()` to pull data from Binance instead.
-
-### Step 2 — Train a model
-
-```bash
-cd notebooks
-
-# Topic 69 — 1-day BTC/USD price prediction (1h bars, ~3 min)
-python example_topic_69_bitcoin_walkthrough.py
-
-# Topic 77 — 5-min BTC/USD price prediction (5m bars, ~2 min)
-python example_topic_77_bitcoin_5min_walkthrough.py
-```
-
-Each script backfills historical data, engineers features, trains and evaluates a model, and saves a `predict.pkl` artifact.
-
-### Step 3 — Deploy a worker
-
-```bash
-# Still in notebooks/
-python deploy_worker.py
-```
-
-On first run, `WorkerManager` creates a wallet, writes the key file to `worker_keys/`, and requests ALLO from the faucet automatically. The worker process starts and begins polling the chain for open submission windows.
-
-> **Faucet activity is logged, not printed.** If a worker fails to start, check `worker_logs/` for the subprocess output — faucet requests, balance checks, and on-chain errors all appear there.
-
-### Step 4 — Monitor and manage workers
-
-```bash
-# Web dashboard (recommended)
-python -m allora_forge_builder_kit.web_dashboard
-```
-
-Open **http://localhost:8787** — auto-refreshes every 5 seconds, shows all workers with submission timelines, on-chain scores, and live log tails.
-
-> Pass `--host 0.0.0.0` to expose on all interfaces. An auth token is printed to stderr; append it as `?token=...` in the URL.
-
-```bash
-# CLI dashboard — text summary of all workers
-python -m allora_forge_builder_kit.workerctl dashboard
-```
-
-**Worker management via the Python API:**
-
-```python
-from allora_forge_builder_kit import WorkerManager
-
-wm = WorkerManager(reconcile_on_start=False)
-
-# See all workers and their status
-for w in wm.status_all():
-    print(w['topic_id'], w['address'], w['status'])
-
-# Stop a worker (keeps it registered, can be restarted)
-wm.stop_worker(topic_id=69, address="allo1...")
-
-# Start a stopped worker
-wm.start_worker(topic_id=69, address="allo1...")
-
-# Remove a worker entirely (stops it and deletes the record)
-wm.remove_worker(topic_id=69, address="allo1...", force=True)
-
-# Stop all running workers
-wm.stop_all()
-
-# Restart all enabled workers (e.g. after a reboot)
-wm.start_all()
-
-# Tail a worker's log
-lines = wm.get_worker_log_tail(topic_id=69, address="allo1...", lines=50)
-print("\n".join(lines))
-```
-
-> **Managed-custody security:** when `WorkerManager` uses `FORGE_API_KEY`, that key is a
-> managed-wallet signing credential, not a transaction-scoped permission. The underlying
-> remote signer can sign arbitrary SignDoc bytes and 32-byte digests, so possession of the key
-> authorizes any transaction the managed wallet can sign. Disabling Forge's optional
-> `/transfer` convenience route does not constrain `/sign`. Protect and revoke the API key as
-> carefully as a private wallet key.
-
-### Step 5 — Deploy other topics
-
-```bash
-TOPIC_ID=42 python deploy_worker.py   # deploy topic 42
-TOPIC_ID=77 python deploy_worker.py   # deploy topic 77
-```
-
-Discover available topics:
-
-```python
-from allora_forge_builder_kit import AlloraTopicDiscovery
-
-d = AlloraTopicDiscovery(api_key="UP-...", network="testnet")
-for t in d.get_all_topics():
-    print(t.topic_id, t.raw.get("topic_name"), t.epoch_length, t.loss_method)
-```
-
-See [Topic reference](#topic-reference) for all available topics and their prediction types.
-
----
-
-## Topic reference
-
-Every Allora topic defines a prediction task with a specific **target type** — what the model must output and what the reputer scores against.
-
-**Log-return topics** — predict `log(price[t+H] / price[t])` over a fixed horizon `H`. The output is a dimensionless ratio; positive means "price goes up." Most mainnet topics are log-return.
-
-**Price topics** — predict the absolute price `price[t+H]`. The playground topics (69, 77) use this format and are the recommended starting point.
-
-**Volatility topics** — predict horizon-scaled realized volatility: `sample_std(r₁, …, r_H) × √H`, where `rᵢ = log(p[t+i] / p[t+i-1])` are 1-minute returns and the sample standard deviation uses `ddof=1`. The output is a non-negative float. Use `target_type="volatility"` in `AlloraMLWorkflow`.
-
-### Playground topics
-
-No whitelist required — the recommended starting point.
+Playground topics:
 
 | Testnet ID | Name | Target type | Notes |
 |-----------|------|-------------|-------|
 | **69** | BTC/USD - 1 Day Price Prediction | Price | Example walkthroughs use this |
 | **77** | BTC/USD - 5 Min Price Prediction | Price | Playground Fast |
 
-### Volatility topics
-
-Testnet only; may require whitelist.
-
-| Testnet ID | Name | Target type | Notes |
-|-----------|------|-------------|-------|
-| **79** | BTC/USD - 15 Min Volatility Prediction | Volatility | Sample std of 1-min log returns × √15 |
-| **80** | ETH/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, ETH pair |
-| **81** | XRP/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, XRP pair |
-| **82** | SOL/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, SOL pair |
-| **85** | ETH/USD - 4h Volatility Prediction | Volatility | Sample std of 1-min log returns × √240 |
-
-### Mainnet topics and testnet equivalents
+Mainnet topics and testnet equivalents:
 
 | Mainnet ID | Mainnet Name | Testnet ID | Testnet Name |
 |-----------|-------------|-----------|-------------|
@@ -245,221 +106,123 @@ Testnet only; may require whitelist.
 | 18 | BTC/USD - Log Returns - 20m | — | Missing |
 | 19 | NEAR/USD - Log Returns - 8h | 71 | 8h NEAR/USD Log-Return Prediction |
 
----
+### Volatility
 
-## Wallet linking
+Predict `sample_std(r₁, …, r_H) × √H` for consecutive one-minute log returns,
+using `ddof=1`. See the [BTC grid-search workflow](notebooks/testnet/topic_79_btc_vol/model_grid_retrain.py).
+Equivalent workflows are available for
+[ETH](notebooks/testnet/topic_80_eth_vol/model_grid_retrain.py),
+[XRP](notebooks/testnet/topic_81_xrp_vol/model_grid_retrain.py),
+[SOL](notebooks/testnet/topic_82_sol_vol/model_grid_retrain.py), and
+[4-hour ETH](notebooks/testnet/topic_85_eth_4h_vol/model_grid_retrain.py).
 
-When you deploy a **local-custody** worker the signing key lives in `worker_keys/` on your machine, but Forge doesn't know which `allo1...` addresses belong to your account. **Wallet linking** proves ownership: the CLI signs an ADR-036 challenge with each local worker key and a browser-authenticated Forge user approves the link.
+| Testnet ID | Name | Target type | Notes |
+|-----------|------|-------------|-------|
+| **79** | BTC/USD - 15 Min Volatility Prediction | Volatility | Sample std of 1-min log returns × √15 |
+| **80** | ETH/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, ETH pair |
+| **81** | XRP/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, XRP pair |
+| **82** | SOL/USD - 15 Min Volatility Prediction | Volatility | Same definition as 79, SOL pair |
+| **85** | ETH/USD - 4h Volatility Prediction | Volatility | Sample std of 1-min log returns × √240 |
 
-> **Managed-custody workers** (deployed with `custody="managed"`) are linked automatically by the backend — no `workerctl link` step needed.
+### Triple barrier
 
-### Custody modes at a glance
+Predict which price barrier is touched first, or neutral if neither is touched
+before expiry. Follow the [triple-barrier walkthrough](notebooks/example_triple_barrier_walkthrough.py).
+These commodity datasets require Atlas; Binance is not an alternative source.
 
-| Mode | Key lives | Linking |
-|------|-----------|---------|
-| **Local** (default) | `worker_keys/` on your machine | Run `workerctl link` once per address |
-| **Managed** | Forge backend (Privy wallet) | Automatic — no CLI step |
+| Testnet ID | Asset | Atlas dataset | Horizon |
+|---|---|---|---|
+| 87 | Gold | `hl_xyzgold_1min` | 24h |
+| 88 | Silver | `hl_xyzsilver_1min` | 24h |
+| 89 | WTI oil | `hl_xyzcl_1min` | 24h |
 
-### Quick start
+The tables are a repository reference. For current network metadata, see
+[topic discovery](allora_forge_builder_kit/topic_discovery.py) and the
+[Forge](https://forge.allora.network).
 
-```bash
-# Requires the wallet-link extra (cosmpy for ADR-036 signing)
-pip install -e ".[wallet-link]"
+## Quick start
 
-# Link all local worker wallets to your Forge account
-workerctl link
-```
+### 1. Set up the environment
 
-The CLI:
-1. Reads your `worker_secrets.json` to find local key files
-2. Opens a device-flow session with the Forge API
-3. Signs each ADR-036 challenge locally — the mnemonic never leaves your machine
-4. Opens your browser; you approve with your logged-in Forge account
-5. Polls until approved and prints which addresses were linked
-
-```
-$ workerctl link
-
-Linking 2 worker address(es) to Allora Forge at https://forge.allora.network
-
-  First copy your one-time code: ABCD-1234
-  Then approve the link at: https://forge.allora.network/link?code=ABCD-1234
-
-Opened your browser. Waiting for approval...
-
-Linked 2 verified worker(s):
-  + allo1abc...
-  + allo1def...
-```
-
-### Link specific addresses
+Use Python 3.10 or newer. The repository pins `allora-sdk==1.4.0rc4`, including
+support for labeled multi-output submissions.
 
 ```bash
-# Link a single address
-workerctl link --address allo1abc...
-
-# Link two specific addresses
-workerctl link --address allo1abc... --address allo1def...
+git clone https://github.com/allora-network/allora-forge-builder-kit.git
+cd allora-forge-builder-kit
+python3.11 -m venv notebooks/.venv
+source notebooks/.venv/bin/activate
+pip install -e ".[dev,wallet-link]"
+export REPO_ROOT="$PWD"
 ```
 
-### Headless / CI environments
+Get an API key from [developer.allora.network](https://developer.allora.network),
+save it locally as `.allora_api_key`, then load it without displaying it:
 
 ```bash
-# Print the URL and code without opening a browser
-workerctl link --no-browser
+export ALLORA_API_KEY="$(cat "$REPO_ROOT/.allora_api_key")"
+export ALLORA_NETWORK=testnet
 ```
 
-Output the one-time code and URL to stdout so you can open them on a separate device or paste them into a CI log.
+Keep the same shell for the commands below. Binance can be used for supported
+crypto datasets when adapting a workflow; the examples below use Atlas.
 
-### Non-default secrets file
+### 2. Run one example and deploy its artifact
+
+Choose one block. Each uses its own working directory for artifacts and worker
+state. Training can take substantial time, especially the volatility grid search.
+The scripts print their evaluation results and output locations.
+
+**Price — topic 69:**
 
 ```bash
-workerctl link --secrets-path /path/to/worker_secrets.json
+mkdir -p "$REPO_ROOT/notebooks/runs/price_example"
+cd "$REPO_ROOT/notebooks/runs/price_example"
+python "$REPO_ROOT/notebooks/example_topic_69_bitcoin_walkthrough.py"
+TOPIC_ID=69 PREDICT_PKL="$PWD/predict.pkl" python "$REPO_ROOT/notebooks/deploy_worker.py"
 ```
 
-### CLI reference
-
-`workerctl link` accepts the following flags:
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--secrets-path PATH` | `worker_secrets.json` | Path to the WorkerManager secrets file that maps addresses to local key files. |
-| `--address ADDR` | all local keys | Limit to a specific `allo1...` address. Repeatable — pass once per address. |
-| `--no-browser` | off | Print the approval URL and code without auto-opening a browser. |
-
-### Python API
-
-```python
-from allora_forge_builder_kit.wallet_link import run_link
-
-rc = run_link(
-    secrets_path="worker_secrets.json",
-    addresses=None,       # None = link all local keys; pass a list to limit
-    open_browser=True,
-)
-# rc is 0 on success, 1 on any error
-```
-
-### Troubleshooting
-
-**`cosmpy` not found** — install the wallet-link extra: `pip install -e ".[wallet-link]"` or `pip install cosmpy==0.11.1`.
-
-**`No worker keys found`** — the secrets file is missing or empty. Deploy a local-custody worker first (`WorkerManager.deploy_worker(...)` or `python deploy_worker.py`).
-
-**`No local key for: allo1...`** — the address is a managed-custody worker (linked automatically) or the secrets file is stale. Managed workers do not need manual linking.
-
-**Link request denied** — the browser approval was rejected. Re-run `workerctl link` to start a fresh session.
-
-**Link request expired** — the 30-minute approval window closed before the browser was used. Re-run to start a new session.
-
----
-
-## Deploy to the hosting platform (export)
-
-The [Zero to deploy](#zero-to-deploy) flow runs a worker **locally** with `WorkerManager`. The other path is to let the Allora **hosting platform** run the worker for you in a container. Instead of a running process, you produce a *package* — worker code + `pyproject.toml` + `manifest.json` (+ an optional `weights/` dir) — and upload it to forge.
-
-See [`notebooks/export_to_hosting.py`](notebooks/export_to_hosting.py) for a runnable walkthrough. The essentials:
-
-```python
-from allora_forge_builder_kit import WorkerManager, ModelSpec
-
-# Model-INTRINSIC config (baked into the package's config.json). Pair/timeframe/
-# topic are NOT here — they are chosen per deployment (see env vars below).
-spec = ModelSpec(
-    model_type="my_lgbm",                          # entry-point name; [a-z0-9][a-z0-9_-]*
-    engineered_specs=[{"kind": "log_return", "window_bars": 6}],
-    number_of_input_bars=24,
-    target_bars=24,
-    hyperparameters={"n_estimators": 500},
-    data_source="binance",                          # "binance" | "allora"
-    supports_training=True,                         # train-on-platform (no weights)
-)
-wm = WorkerManager(reconcile_on_start=False)
-wm.export_payload_for_hosting(spec, out_dir="build/my_lgbm_package")
-```
-
-Or from the command line, which can also produce the upload-ready zip:
+**Volatility — topic 79:** runs the default 800-day grid search and saves ranked
+artifacts and a scatter plot, and prints evaluation metrics. Deploy the highest-ranked artifact:
 
 ```bash
-workerctl export-payload --config model.json --out build/my_lgbm_package --zip
-# then upload build/my_lgbm_package.zip to forge (POST /api/v1/models)
+mkdir -p "$REPO_ROOT/notebooks/runs/volatility_example"
+cd "$REPO_ROOT/notebooks/runs/volatility_example"
+python "$REPO_ROOT/notebooks/testnet/topic_79_btc_vol/model_grid_retrain.py"
+TOPIC_ID=79 PREDICT_PKL="$PWD/predict_79_grid_rank1.pkl" python "$REPO_ROOT/notebooks/deploy_worker.py"
 ```
 
-`--zip` writes the package **contents** at the archive root, so forge finds `manifest.json` at the extraction root. The generated worker code is **generic over pair/timeframe**; code-only (train-on-platform) packages can be deployed against many pairs/timeframes/topics. Bundled-weight packages must use parameters matching how the weights were trained.
+**Triple barrier — topic 87:**
 
-### Two deployment modes
-
-Exactly **one** of these must hold (forge rejects the package otherwise; `export_payload_for_hosting` enforces it and fails loudly):
-
-| Mode | Set | Weights | Who trains |
-|------|-----|---------|-----------|
-| **Train-on-platform** | `supports_training=True` (default) | none | the platform |
-| **Train-locally** | `supports_training=False` (or `--no-training`) + `--weights <dir>` | bundled | you, before export |
-
-- **Train-on-platform.** The platform runs training as an `allora-worker train` job on a schedule the operator configures (it is not an in-process timer). Each run skips retraining if the current artifact is younger than 12h (unless `FORCE_RETRAIN=true`). Training only runs while `supports_training` is true. **Before the first successful training run there is no artifact**, and the generated worker's inference raises `model artifact not found` until one exists — expect the first inferences to fail until training completes and writes weights.
-- **Train-locally.** `supports_training=False` means the platform never retrains; it serves the weights you bundled (imported into storage by the platform's import step). Updating those weights means re-exporting/re-importing — the generated worker does not hot-reload weights in this mode (the SDK's model watcher only runs for models that report a watchable artifact, which the generated model ties to `supports_training`).
-
-### Deployment env vars
-
-`pair`/`timeframe`/`topic` are **deploy-time** parameters the operator injects as env vars, never baked into the package. The hosted worker reads:
-
-| Env var | Purpose | Default |
-|---------|---------|---------|
-| `PAIR` | Trading pair, e.g. `BTCUSD` | required |
-| `TIMEFRAME` | Bar interval, e.g. `5m`, `1h` | required |
-| `ALLORA_TOPIC_ID` | Target topic | `69` |
-| `ALLORA_API_KEY` | Required only for the `allora` data source | — |
-| `SUBMIT_RETURNS` | `true`/`false` to force log-return vs price output; unset/`auto` derives it from the topic's on-chain loss method | `auto` |
-| `DATA_BASE_PATH` | Where the worker reads/writes model artifacts | `./data` |
-
----
-
-## Python API (quick reference)
-
-```python
-from allora_forge_builder_kit import AlloraMLWorkflow
-
-# Build a training dataset (log-return target — default)
-workflow = AlloraMLWorkflow(
-    tickers=["btcusd"],
-    number_of_input_bars=48,
-    target_bars=24,
-    interval="1h",
-    data_source="allora",
-    api_key="UP-...",
-)
-workflow.backfill(days=500)
-df = workflow.get_full_feature_target_dataframe()
-
-# Volatility target (std of 1-min log returns over the horizon)
-vol_workflow = AlloraMLWorkflow(
-    tickers=["btcusd"],
-    number_of_input_bars=15,
-    target_bars=15,           # 15-minute volatility window
-    interval="1m",
-    target_type="volatility", # NEW: "log_return" (default) or "volatility"
-    data_source="allora",
-    api_key="UP-...",
-)
-
-# Evaluate a predict function
-from allora_forge_builder_kit import PerformanceEvaluator
-evaluator = PerformanceEvaluator()
-report = evaluator.evaluate(y_true, y_pred)
-
-# Shared engineered features (identical at train and serve — the anti-skew guard)
-from allora_forge_builder_kit import apply_engineered_features, engineered_feature_names
-specs = [{"kind": "log_return", "window_bars": 6}]
-df, added_cols = apply_engineered_features(df, specs, number_of_input_bars=48)
-
-# Package a model for the hosting platform (see "Deploy to the hosting platform")
-from allora_forge_builder_kit import WorkerManager, ModelSpec
-wm = WorkerManager(reconcile_on_start=False)
-wm.export_payload_for_hosting(ModelSpec(model_type="my_lgbm", engineered_specs=specs,
-                                        number_of_input_bars=48, target_bars=24), out_dir="build/pkg")
+```bash
+cd "$REPO_ROOT"
+python notebooks/example_triple_barrier_walkthrough.py --topic 87
+mkdir -p notebooks/triple_barrier_example_output/worker
+cd notebooks/triple_barrier_example_output/worker
+TOPIC_ID=87 PREDICT_PKL="$REPO_ROOT/notebooks/triple_barrier_example_output/predict.pkl" python "$REPO_ROOT/notebooks/deploy_worker.py"
 ```
 
----
+Triple-barrier outputs are in `notebooks/triple_barrier_example_output/`:
+`predict.pkl`, `config.json`, `metrics.json`, `predictions.csv`, `report.txt`,
+`trades.csv`, and six charts. Repeated runs replace these outputs; use
+`--output-dir` to retain another run. Data is cached inside the output directory
+unless `--cache-dir` is supplied. To use Silver or WTI, change both the example's
+`--topic` and deployment's `TOPIC_ID` to 88 or 89.
+
+Deployment creates a wallet, requests testnet funding, and starts a worker.
+Inspect `worker_logs/` for funding, registration, or submission failures.
+A started process alone does not confirm successful submissions.
+
+### 3. Monitor
+
+From the same worker directory:
+
+```bash
+python -m allora_forge_builder_kit.web_dashboard
+```
+
+Open **http://localhost:8787** to inspect submissions, scores, and logs.
+For a terminal summary, use `python -m allora_forge_builder_kit.workerctl dashboard`.
 
 ## The learning problem
 
@@ -470,9 +233,41 @@ At any point in time $t$, the model observes a window of $N$ past bars as input 
 - **Price / log-return topics** — $y = \log(p_{t+H} / p_t)$ or the absolute price $p_{t+H}$
 - **Volatility topics** — $y = \text{sample\_std}(r_1, \ldots, r_H)\sqrt{H}$, using `ddof=1`, where $r_i = \log(p_{t+i} / p_{t+i-1})$ are consecutive 1-minute log returns over the horizon
 
+- **Triple-barrier topics** — a one-hot label for the first upper/lower barrier touched, or neutral at expiry. Models submit probabilities labeled `down`, `neutral`, and `up`.
+
 By sliding this window across the full history, a single time series becomes thousands of labeled examples $(\mathbf{x}_i, y_i)$, turning forecasting into a standard supervised learning problem.
 
 The `AlloraMLWorkflow` handles this construction: `backfill()` fetches historical data, `get_full_feature_target_dataframe()` builds the feature matrix and target vector, ready for any scikit-learn compatible model.
+
+### Triple-barrier targets
+
+The horizon is `target_bars × interval`. The example uses 100 hourly input bars,
+24 target bars, and a barrier multiplier of 0.25. These settings define Forge
+topics 87–89; changing the native interval or horizon defines a different target.
+The general builder accepts other configurations for research. Historical source
+candles must be one-minute data (Atlas supplies these regardless of feature interval). ATR is the mean high–low log
+range over 100 target horizons, computed on native/resampled candles.
+
+For hourly bars and prediction time T, average the 2,400 samples opening in
+`[T − 2401h, T − 1h)`. Each range includes both endpoints of `[t − 24h, t]`
+(25 hourly openings). Match the reputer's SQL by restricting history to the
+averaging interval first, so the initial ranges are partial.
+
+With base price P equal to the minute close at `T − 1m`, upper and lower
+barriers are `P × exp(0.25 × ATR)` and `P × exp(−0.25 × ATR)`.
+Test minute high/low candles in `[T − 1m, T + 24h − 1m)` chronologically:
+first lower touch → down; first upper touch → up; no touch → neutral.
+A same-minute tie resolves down. Missing required coverage leaves targets null.
+Allow 100 horizons plus one native bar of history before usable targets,
+plus sufficient training and evaluation data.
+
+The walkthrough illustrates the learning problem, fold periods, confusion
+matrix, example trades, and cumulative PnL. Trades use overlapping one-unit
+positions, exact barrier fills, and the last in-window close at expiry.
+`--trade-cost-bps` sets per-side trading costs (default zero); these plots are
+not capital-normalized portfolio returns.
+
+[Target implementation](allora_forge_builder_kit/workflow.py#L543).
 
 ### Empirical risk minimization
 
@@ -504,15 +299,20 @@ From here, improving your score comes down to three levers:
 
 1. **Feature engineering** — what information goes into $\mathbf{x}$. The base features are normalized OHLCV ratios (last-close normalized to 1.0). Adding technical indicators (RSI, MACD, realized volatility), log-return series, or cross-asset signals is where most alpha lives.
 2. **Model and regularization** — early stopping, tree depth, learning rate, and subsampling to keep variance in check.
-3. **Maximizing out-of-sample metrics** — the evaluation suite (DA, Pearson $r$, WRMSE, CZAR) is the scorecard, not in-sample loss. A higher grade means better generalization and a higher expected score on the Allora network.
+3. **Out-of-sample evaluation** — use the metrics appropriate to the topic family below. The triple-barrier example defaults to five folds: the first three select the lowest mean log loss, and the last two supply combined OOS evaluation. The selected configuration stays fixed; each OOS fold refits using labels available at its cutoff, including earlier OOS outcomes once resolved. Production refitting follows evaluation. `--folds` and `--holdout-folds` control the split; `LGBM_SEARCH_GRID` and `LGBM_FIXED_PARAMS` near the top of the script expose the model search. Just below them, edit `ENGINEERED_SPECS` and `engineer_features()` to add derived features; the same function runs during training and is captured in the inference artifact.
 
 For structured methodology guidance on each of these levers, see the [Model creation skills](#model-creation-skills) section.
 
----
-
 ## Evaluation metrics
 
-`PerformanceEvaluator` scores your model on 7 primary metrics before you deploy. Each has a pass/fail threshold. The composite score (out of 7) maps to a letter grade.
+Evaluation depends on the topic family. Offline reports help assess a model;
+network participation and live scores must be checked after deployment.
+
+### Price / log returns
+
+The price examples evaluate predicted log returns before converting to prices
+for submission. [PerformanceEvaluator](allora_forge_builder_kit/evaluation.py#L697)
+reports seven primary criteria and a letter grade:
 
 | # | Metric | Threshold | What it measures |
 |---|--------|-----------|-----------------|
@@ -536,9 +336,231 @@ For structured methodology guidance on each of these levers, see the [Model crea
 | 2 | D |
 | ≤ 1 | F |
 
----
+### Volatility
 
-## Model creation skills
+The volatility workflows calculate their own metrics in
+[`vol_metrics`](notebooks/testnet/topic_79_btc_vol/model_grid_retrain.py#L54).
+These are example diagnostics, not the return evaluator's seven-point grade.
+
+| Metric | Purpose |
+|---|---|
+| Pearson r / Spearman rho | Linear / rank association |
+| R² / RMSE | Explained variation / prediction error |
+| QLIKE | Relative volatility prediction loss |
+| Calibration ratio | Predicted standard deviation divided by actual standard deviation |
+
+The example ranks models using `R² − 0.5 × QLIKE − 0.3 × abs(1 − calibration ratio)`;
+see [`composite_score`](notebooks/testnet/topic_79_btc_vol/model_grid_retrain.py#L68).
+
+### Triple barrier
+
+[`evaluate_classification`](allora_forge_builder_kit/evaluation.py#L603) consumes
+probabilities in `[down, neutral, up]` order. Hard classes for accuracy and
+confusion matrices use deterministic argmax; submissions retain probabilities.
+The causal baseline uses the previous 100 resolved targets, with uniform
+probabilities when no prior targets exist.
+
+| Criterion | Strict threshold |
+|---|---|
+| Accuracy improvement over baseline | > 0.02 |
+| Accuracy-improvement lower bound | > 0 |
+| Quadratic weighted kappa lower bound | > 0 |
+| Brier skill lower bound | > 0 |
+| Focal skill lower bound | > 0 |
+| Participation | > 0.90 |
+
+Brier loss is the mean sum of squared probability errors. Focal loss is
+`mean(−(1 − p_true)² × ln(p_true))`, clipping only `p_true` to `[1e-15, 1]`.
+Both skills are `1 − worker loss / baseline loss`. Kappa treats classes as ordinal.
+
+Bounds use paired circular bootstrap blocks of 10 rows, 1,000 replicates, and
+5th/95th percentiles. Reports include raw metrics, intervals, individual criteria,
+and `eligible` when all six pass; there is no letter grade. Offline participation
+is coverage of the evaluation sample, not observed network participation.
+
+Optional directional payoff awards +1 for a correct directional class, −1 for
+an opposite class, and zero when either class is neutral, minus the declared
+cost for a directional prediction. `--diagnostic-cost` sets this cost in barrier
+units, separately from trading costs. It is not a seventh eligibility criterion.
+
+## Worker operations
+
+### Local workers
+
+Use the [deployment script](notebooks/deploy_worker.py) and
+[WorkerManager](allora_forge_builder_kit/worker_manager.py) for lifecycle operations.
+Worker state, keys, and logs belong to the working directory used at deployment;
+run monitoring and wallet-linking commands there. Keep generated state and secrets
+out of git.
+
+The dashboard defaults to localhost. `--host 0.0.0.0` exposes it on all interfaces;
+use the authentication token printed to stderr as the URL's `?token=...` parameter.
+
+> **Managed-custody security:** `FORGE_API_KEY` is a managed-wallet signing
+> credential, not a transaction-scoped permission. The remote signer can sign
+> arbitrary SignDoc bytes and 32-byte digests. Disabling the optional `/transfer`
+> route does not constrain `/sign`. Protect and revoke this key like a private key.
+
+<details>
+<summary>Wallet linking: setup, options, and troubleshooting</summary>
+
+### Wallet linking
+
+When you deploy a **local-custody** worker the signing key lives in `worker_keys/` on your machine, but Forge doesn't know which `allo1...` addresses belong to your account. **Wallet linking** proves ownership: the CLI signs an ADR-036 challenge with each local worker key and a browser-authenticated Forge user approves the link.
+
+> **Managed-custody workers** (deployed with `custody="managed"`) are linked automatically by the backend — no `workerctl link` step needed.
+
+#### Custody modes at a glance
+
+| Mode | Key lives | Linking |
+|------|-----------|---------|
+| **Local** (default) | `worker_keys/` on your machine | Run `workerctl link` once per address |
+| **Managed** | Forge backend (Privy wallet) | Automatic — no CLI step |
+
+#### Quick start
+
+```bash
+# Requires the wallet-link extra (cosmpy for ADR-036 signing)
+pip install -e ".[wallet-link]"
+
+# Link all local worker wallets to your Forge account
+workerctl link
+```
+
+The CLI:
+1. Reads your `worker_secrets.json` to find local key files
+2. Opens a device-flow session with the Forge API
+3. Signs each ADR-036 challenge locally — the mnemonic never leaves your machine
+4. Opens your browser; you approve with your logged-in Forge account
+5. Polls until approved and prints which addresses were linked
+
+```
+$ workerctl link
+
+Linking 2 worker address(es) to Allora Forge at https://forge.allora.network
+
+  First copy your one-time code: ABCD-1234
+  Then approve the link at: https://forge.allora.network/link?code=ABCD-1234
+
+Opened your browser. Waiting for approval...
+
+Linked 2 verified worker(s):
+  + allo1abc...
+  + allo1def...
+```
+
+#### Link specific addresses
+
+```bash
+# Link a single address
+workerctl link --address allo1abc...
+
+# Link two specific addresses
+workerctl link --address allo1abc... --address allo1def...
+```
+
+#### Headless / CI environments
+
+```bash
+# Print the URL and code without opening a browser
+workerctl link --no-browser
+```
+
+Output the one-time code and URL to stdout so you can open them on a separate device or paste them into a CI log.
+
+#### Non-default secrets file
+
+```bash
+workerctl link --secrets-path /path/to/worker_secrets.json
+```
+
+#### CLI reference
+
+`workerctl link` accepts the following flags:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--secrets-path PATH` | `worker_secrets.json` | Path to the WorkerManager secrets file that maps addresses to local key files. |
+| `--address ADDR` | all local keys | Limit to a specific `allo1...` address. Repeatable — pass once per address. |
+| `--no-browser` | off | Print the approval URL and code without auto-opening a browser. |
+
+#### Troubleshooting
+
+**`cosmpy` not found** — install the wallet-link extra: `pip install -e ".[wallet-link]"` or `pip install cosmpy==0.11.1`.
+
+**`No worker keys found`** — the secrets file is missing or empty. Deploy a local-custody worker first (`WorkerManager.deploy_worker(...)` or `python deploy_worker.py`).
+
+**`No local key for: allo1...`** — the address is a managed-custody worker (linked automatically) or the secrets file is stale. Managed workers do not need manual linking.
+
+**Link request denied** — the browser approval was rejected. Re-run `workerctl link` to start a fresh session.
+
+**Link request expired** — the 30-minute approval window closed before the browser was used. Re-run to start a new session.
+
+</details>
+
+### Hosting export
+
+For hosted deployment, follow the runnable
+[export walkthrough](notebooks/export_to_hosting.py) and
+[export implementation](allora_forge_builder_kit/export.py).
+The package contains worker code, dependencies, a manifest, and optional weights.
+Choose training on the platform or bundling locally trained weights.
+The triple-barrier walkthrough currently demonstrates local WorkerManager deployment.
+
+<details>
+<summary>Hosting export: modes and deployment configuration</summary>
+
+Or from the command line, which can also produce the upload-ready zip:
+
+```bash
+workerctl export-payload --config model.json --out build/my_lgbm_package --zip
+# then upload build/my_lgbm_package.zip to forge (POST /api/v1/models)
+```
+
+`--zip` writes the package **contents** at the archive root, so forge finds `manifest.json` at the extraction root. The generated worker code is **generic over pair/timeframe**; code-only (train-on-platform) packages can be deployed against many pairs/timeframes/topics. Bundled-weight packages must use parameters matching how the weights were trained.
+
+#### Two deployment modes
+
+Exactly **one** of these must hold (forge rejects the package otherwise; `export_payload_for_hosting` enforces it and fails loudly):
+
+| Mode | Set | Weights | Who trains |
+|------|-----|---------|-----------|
+| **Train-on-platform** | `supports_training=True` (default) | none | the platform |
+| **Train-locally** | `supports_training=False` (or `--no-training`) + `--weights <dir>` | bundled | you, before export |
+
+- **Train-on-platform.** The platform runs training as an `allora-worker train` job on a schedule the operator configures (it is not an in-process timer). Each run skips retraining if the current artifact is younger than 12h (unless `FORCE_RETRAIN=true`). Training only runs while `supports_training` is true. **Before the first successful training run there is no artifact**, and the generated worker's inference raises `model artifact not found` until one exists — expect the first inferences to fail until training completes and writes weights.
+- **Train-locally.** `supports_training=False` means the platform never retrains; it serves the weights you bundled (imported into storage by the platform's import step). Updating those weights means re-exporting/re-importing — the generated worker does not hot-reload weights in this mode (the SDK's model watcher only runs for models that report a watchable artifact, which the generated model ties to `supports_training`).
+
+#### Deployment env vars
+
+`pair`/`timeframe`/`topic` are **deploy-time** parameters the operator injects as env vars, never baked into the package. The hosted worker reads:
+
+| Env var | Purpose | Default |
+|---------|---------|---------|
+| `PAIR` | Trading pair, e.g. `BTCUSD` | required |
+| `TIMEFRAME` | Bar interval, e.g. `5m`, `1h` | required |
+| `ALLORA_TOPIC_ID` | Target topic | `69` |
+| `ALLORA_API_KEY` | Required only for the `allora` data source | — |
+| `SUBMIT_RETURNS` | `true`/`false` to force log-return vs price output; unset/`auto` derives it from the topic's on-chain loss method | `auto` |
+| `DATA_BASE_PATH` | Where the worker reads/writes model artifacts | `./data` |
+
+</details>
+
+## Development and references
+
+### Testing
+
+Run `pytest tests/test_data_managers.py -v -m "not integration"` for the data-manager
+unit checks. Network integration tests require `RUN_INTEGRATION_TESTS=1` and an
+exported `ALLORA_API_KEY`.
+
+For triple barrier, run `RUN_INTEGRATION_TESTS=1 python -m pytest tests/test_triple_barrier.py -v -s`.
+Its three tests build a real Atlas dataset and independently replay minute targets,
+run the complete example and reload its artifact, then deploy an isolated testnet
+worker and verify a labeled submission. They clean up their own files and worker.
+Add `-k 'not deploy_worker'` for data and example verification only.
+
+### Model creation skills
 
 The [`allora_research_model_skills/`](allora_research_model_skills/README.md) bundle contains three Claude Code skills for building financial prediction models. Each enters model design from a different angle:
 
@@ -550,61 +572,21 @@ The [`allora_research_model_skills/`](allora_research_model_skills/README.md) bu
 
 All three produce a complete, runnable pipeline and satisfy the same nine methodology principles. See [`allora_research_model_skills/README.md`](allora_research_model_skills/README.md) for selection guidance.
 
----
+### Module map
 
-## File map
+| Module | Purpose |
+|---|---|
+| [workflow.py](allora_forge_builder_kit/workflow.py) | Data, features, and all three target builders |
+| [evaluation.py](allora_forge_builder_kit/evaluation.py) | Return and triple-barrier evaluation |
+| [engineered_features.py](allora_forge_builder_kit/engineered_features.py) | Shared training/inference feature transformations |
+| [topic_discovery.py](allora_forge_builder_kit/topic_discovery.py) | Network topic metadata |
+| [worker_manager.py](allora_forge_builder_kit/worker_manager.py) | Wallets and worker lifecycle |
+| [worker_runtime.py](allora_forge_builder_kit/worker_runtime.py) | Scalar and labeled inference submission |
+| [workerctl.py](allora_forge_builder_kit/workerctl.py) | CLI operations |
+| [web_dashboard.py](allora_forge_builder_kit/web_dashboard.py) | Monitoring UI |
+| [Feature example](notebooks/feature_engineering_example.py) | Feature engineering walkthrough |
 
-| Path | Purpose |
-|------|---------|
-| `notebooks/example_topic_69_bitcoin_walkthrough.py` | End-to-end example for topic 69: data → features → model → artifact |
-| `notebooks/example_topic_77_bitcoin_5min_walkthrough.py` | End-to-end example for topic 77: 5-min BTC prediction |
-| `notebooks/testnet/topic_38_sol_8h_price/` | Topic 38 SOL/USD 8h price: example + CZAR model |
-| `notebooks/testnet/topic_41_eth_8h_price/` | Topic 41 ETH/USD 8h price: example + CZAR model |
-| `notebooks/testnet/topic_42_btc_8h_price/` | Topic 42 BTC/USD 8h price: example + directional + CZAR models |
-| `notebooks/testnet/topic_58_sol_8h_logreturn/` | Topic 58 SOL/USD 8h log-return example |
-| `notebooks/testnet/topic_61_btc_24h_logreturn/` | Topic 61 BTC/USD 24h log-return example |
-| `notebooks/testnet/topic_62_sol_24h_logreturn/` | Topic 62 SOL/USD 24h log-return example |
-| `notebooks/testnet/topic_63_eth_24h_logreturn/` | Topic 63 ETH/USD 24h log-return example |
-| `notebooks/testnet/topic_71_near_8h_logreturn/` | Topic 71 NEAR/USD 8h log-return example |
-| `notebooks/testnet/topic_79_btc_vol/` | Topic 79 BTC/USD 15m volatility: grid-retrain model |
-| `notebooks/testnet/topic_80_eth_vol/` | Topic 80 ETH/USD 15m volatility: grid-retrain model |
-| `notebooks/testnet/topic_81_xrp_vol/` | Topic 81 XRP/USD 15m volatility: grid-retrain model |
-| `notebooks/testnet/topic_82_sol_vol/` | Topic 82 SOL/USD 15m volatility: grid-retrain model |
-| `notebooks/testnet/topic_83_btc_8h_logreturn/` | Topic 83 BTC/USD 8h log-return example |
-| `notebooks/testnet/topic_84_eth_8h_logreturn/` | Topic 84 ETH/USD 8h log-return example |
-| `notebooks/testnet/topic_85_eth_4h_vol/` | Topic 85 ETH/USD 4h volatility: grid-retrain + importance-groups |
-| `notebooks/deploy_worker.py` | Deploy any topic with WorkerManager (`TOPIC_ID=N python deploy_worker.py`) |
-| `notebooks/deploy_worker_raw.py` | Minimal SDK-only deployment reference (no WorkerManager) |
-| `notebooks/feature_engineering_example.py` | Standalone feature engineering reference |
-| `notebooks/export_to_hosting.py` | Export a model into a hosting-deployable package (`ModelSpec` → `WorkerManager.export_payload_for_hosting`) |
-| `allora_forge_builder_kit/workflow.py` | Data + feature pipeline (`target_type="log_return"` or `"volatility"`) |
-| `allora_forge_builder_kit/czar_loss.py` | CZAR directional loss with gradient/hessian for custom LightGBM objectives |
-| `allora_forge_builder_kit/engineered_features.py` | Shared engineered-feature computation (train == serve; the guard against skew) |
-| `allora_forge_builder_kit/export.py` | Package a model for the hosting platform (`ModelSpec`, internal packaging logic) |
-| `allora_forge_builder_kit/evaluation.py` | Model scoring (7 primary metrics + grading) |
-| `allora_forge_builder_kit/topic_discovery.py` | Query live topics on testnet/mainnet |
-| `allora_forge_builder_kit/worker_manager.py` | Wallet creation, key management, process lifecycle (local + managed custody) |
-| `allora_forge_builder_kit/wallet_link.py` | Device-flow wallet linking CLI — ADR-036 signing, invoked via `workerctl link` |
-| `allora_forge_builder_kit/workerctl.py` | `workerctl` CLI entry point (dashboard, link, export-payload subcommands) |
-| `allora_forge_builder_kit/worker_monitor.py` | On-chain event tracking |
-| `allora_forge_builder_kit/web_dashboard.py` | Web monitoring UI |
-| `allora_research_model_skills/` | Methodology skills for building generalizable financial models (hypothesis-driven, signal-discovery, robustness-first) |
-
----
-
-## Testing
-
-```bash
-pytest tests/test_data_managers.py -v -m "not integration"
-
-# Full suite (requires network)
-export RUN_INTEGRATION_TESTS=1
-pytest -v
-```
-
----
-
-## Links
+### Links
 
 - [Allora Network](https://allora.network)
 - [Allora Explorer](https://explorer.allora.network)

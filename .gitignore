@@ -86,3 +86,6 @@ artifacts/
 notebooks/artifacts/
 notebooks/runs/
 **/runs/
+
+# Triple-barrier walkthrough outputs (including local data cache)
+notebooks/triple_barrier_example_output/

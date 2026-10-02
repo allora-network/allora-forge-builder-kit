@@ -38,6 +38,11 @@ class AtlasDataManager(BaseDataManager):
       - Compatible with AlloraMLWorkflow
     """
 
+    @property
+    def minute_candles_available(self) -> bool:
+        """Atlas history is minute data, independent of feature resampling."""
+        return True
+
     _acquired_keys: set = set()
 
     def __init__(
@@ -129,7 +134,7 @@ class AtlasDataManager(BaseDataManager):
         if norm in self._dataset_cache:
             return self._dataset_cache[norm]
 
-        expected_name = f"tiingo_{norm}_1min"
+        expected_name = norm if norm.endswith("_1min") else f"tiingo_{norm}_1min"
         try:
             resp = requests.get(
                 f"{self.base_url}/datasets/",

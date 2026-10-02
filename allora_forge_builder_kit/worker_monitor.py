@@ -163,7 +163,7 @@ class WorkerMonitor:
                 f"""
                 SELECT
                     COUNT(1),
-                    SUM(CASE WHEN event_type='inference' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN event_type='inference' AND (status IS NULL OR status != 'snapshot') THEN 1 ELSE 0 END),
                     SUM(CASE WHEN event_type='reward' THEN 1 ELSE 0 END),
                     SUM(CASE WHEN event_type='score' THEN 1 ELSE 0 END),
                     SUM(CASE WHEN event_type='submission' AND status='success' THEN 1 ELSE 0 END),
@@ -443,7 +443,7 @@ class WorkerMonitor:
                         w["submission_success"] += 1
                     elif status == "error":
                         w["submission_error"] += 1
-                elif event_type == "inference":
+                elif event_type == "inference" and status != "snapshot":
                     w["inference_count"] += 1
                 elif event_type == "score" and value_num is not None:
                     w["score_samples"] += 1
@@ -656,7 +656,7 @@ class AlloraSDKEventFetcher:
                         continue
 
                     nonce = str(attrs.get("nonce", "")).strip('"')
-                    value_text = str(attrs.get("value", "")).strip('"')
+                    value_text = _labeled_value_text(attrs.get("values"), attrs.get("value", ""))
                     out.append(
                         {
                             "event_id": f"submit:{tx.txhash}:{nonce}",
@@ -688,21 +688,22 @@ class AlloraSDKEventFetcher:
             latest = await client.emissions.query.get_worker_latest_input_inference_by_topic_id(
                 GetWorkerLatestInputInferenceByTopicIdRequest(topic_id=topic_id, worker_address=address)
             )
-            li = getattr(latest, "latest_inference", None)
+            li = getattr(latest, "latest_input_inference", None)
             if li:
                 out.append(
                     {
                         "event_id": f"latest_inference:{getattr(li, 'block_height', '')}:{address}",
                         "event_type": "inference",
                         "status": "snapshot",
-                        "value_text": str(getattr(li, "value", "")),
-                        "value_num": _to_float(getattr(li, "value", None)),
+                        "value_text": _labeled_value_text(getattr(li, "values", None), getattr(li, "value", "")),
+                        "value_num": _to_float(_labeled_value_text(getattr(li, "values", None), getattr(li, "value", ""))),
                         "observed_at": datetime.now(timezone.utc).isoformat(),
                         "details_json": f'{{"block_height":{getattr(li, "block_height", 0)}}}',
                     }
                 )
         except Exception:
-            pass
+            logger.warning("Latest inference snapshot unavailable for topic %s worker %s",
+                           topic_id, address, exc_info=True)
 
         try:
             s = await client.emissions.query.get_inferer_score_ema(
@@ -801,6 +802,41 @@ def _extract_nonce(details_json: Optional[str]) -> Optional[int]:
         return int(n) if n is not None and str(n) != "" else None
     except Exception:
         return None
+
+
+def _labeled_value_text(values, scalar="") -> str:
+    """Store labeled JSON in value_text; value_num is scalar-only by design."""
+    fallback = str(scalar).strip('"')
+    if values is None:
+        return fallback
+    if isinstance(values, str):
+        if not values.strip():
+            return fallback
+        original = values
+        try:
+            values = json.loads(values)
+            if isinstance(values, str):
+                values = json.loads(values)
+        except (ValueError, TypeError):
+            return original  # preserve malformed evidence for diagnostics
+    if values is None:
+        return fallback
+    if isinstance(values, dict):
+        labeled = values
+    else:
+        try:
+            labeled = {
+                (v.get("label") if isinstance(v, dict) else v.label):
+                (v.get("value") if isinstance(v, dict) else v.value)
+                for v in values
+            }
+        except (TypeError, AttributeError):
+            return str(values)
+    if not labeled:
+        return fallback
+    if set(labeled) == {"y"}:
+        return str(labeled["y"])
+    return json.dumps(labeled, sort_keys=True)
 
 
 def _to_float(value) -> Optional[float]:

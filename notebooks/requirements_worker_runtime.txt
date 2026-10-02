@@ -1,5 +1,5 @@
 ./allora-forge-builder-kit-local.tar.gz
-allora-sdk>=1.0.6
+allora-sdk==1.4.0rc4
 cloudpickle
 numpy
 pandas

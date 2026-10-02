@@ -202,16 +202,31 @@ async def _run(
 ) -> None:
     """Load the pickled inference artifact and drive the worker submission loop.
 
-    Artifact contract: the pickled callable is invoked as ``fn(nonce: int)`` and must return a
-    finite numeric value. Artifacts written to the newer SDK contract (``fn(ctx)`` taking a
-    ``RunContext``) are also supported; the call shape is probed and cached on the first invocation.
+    Artifact contract: a synchronous callable accepting a nonce or RunContext,
+    returning a finite scalar or labels mapped to finite numeric values. Annotated
+    call shapes are selected without execution; unannotated shapes are probed.
+    Runtime validation is generic, while classification artifacts validate their
+    own probability constraints. The SDK logs callback errors with tracebacks
+    and retries on later opportunities; this loop does not preflight live inference.
     """
     with open(artifact_path, "rb") as f:
         raw_fn = cloudpickle.load(f)
     call_artifact = _ArtifactCaller(raw_fn)
 
-    def run_fn(ctx: RunContext) -> float:
+    def run_fn(ctx: RunContext) -> float | dict[str, float]:
         value = call_artifact(ctx)
+        if isinstance(value, dict):
+            if not value or any(not isinstance(k, str) or not k.strip() for k in value):
+                raise RuntimeError("Labeled inference requires non-empty string labels")
+            try:
+                labeled = {k: float(v) for k, v in value.items()}
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise RuntimeError("Labeled inference values must be numeric") from exc
+            if not all(math.isfinite(v) for v in labeled.values()):
+                raise RuntimeError("Labeled inference values must be finite")
+            # Multi-output topics need not be probabilities. Classification-specific
+            # constraints are validated by the example; zero entries are valid.
+            return labeled
         try:
             v = float(value)
         except Exception as e:
