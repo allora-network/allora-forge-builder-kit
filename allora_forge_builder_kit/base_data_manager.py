@@ -61,6 +61,11 @@ class BaseDataManager(ABC):
     }
     """
 
+    @property
+    def minute_candles_available(self) -> bool:
+        """Whether historical load_polars returns one-minute source candles."""
+        return self.interval == '1m'
+
     def __init__(
         self,
         base_dir: str = "parquet_data",

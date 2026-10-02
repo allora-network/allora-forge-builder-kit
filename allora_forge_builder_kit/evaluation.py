@@ -3,7 +3,7 @@ from __future__ import annotations
 Allora Forge Builder Kit - Performance Metrics Evaluation
 ==========================================================
 
-Official metrics for log return predictions with comprehensive evaluation framework.
+Offline evaluation for scalar returns and triple-barrier class probabilities.
 
 Usage:
     from allora_forge_builder_kit import PerformanceEvaluator
@@ -27,8 +27,10 @@ class PerformanceEvaluator:
     """
     Comprehensive performance metrics calculator for financial time-series predictions.
     
-    Implements 7 primary metrics with pass/fail thresholds plus additional metrics
-    for evaluating predictive model performance.
+    Scalar evaluation implements seven criteria with a letter grade.
+    Triple-barrier evaluation implements six strict criteria and no grade.
+    The volatility mode retains the legacy scalar path; dedicated volatility
+    diagnostics live in the volatility example workflows.
     
     v3.0 evaluation framework:
       - DA CI lower bound >= 0.50
@@ -592,8 +594,8 @@ class PerformanceEvaluator:
             truth = PerformanceEvaluator.validate_probabilities(truth)
         if not np.isin(truth, [0, 1]).all():
             raise ValueError("Baseline history must be one-hot")
-        times = pd.DatetimeIndex(pd.to_datetime(history_times, utc=True))
-        queries = pd.DatetimeIndex(pd.to_datetime(prediction_times, utc=True))
+        times = pd.DatetimeIndex(pd.to_datetime(history_times, utc=True)).as_unit("ns")
+        queries = pd.DatetimeIndex(pd.to_datetime(prediction_times, utc=True)).as_unit("ns")
         if len(times) != len(truth) or times.hasnans or queries.hasnans:
             raise ValueError("Aligned, non-null availability and prediction times required")
         order = np.argsort(times.asi8, kind='stable')
@@ -652,6 +654,9 @@ class PerformanceEvaluator:
         report = metrics(np.arange(n))
         names = ('accuracy_improvement', 'quadratic_weighted_kappa', 'brier_skill', 'focal_skill')
         boot = {k: [] for k in names}
+        # For n <= block length, circular samples are permutations of the same
+        # rows and bounds can collapse. Keep the ratified gates unchanged;
+        # provisional reports must not be read as independent-sample evidence.
         rng = np.random.default_rng(seed)
         for _ in range(1000):
             starts = rng.integers(0, n, size=(n + 9) // 10)
@@ -709,7 +714,11 @@ class PerformanceEvaluator:
         **classification_options,
     ) -> Dict:
         """
-        Calculate all performance metrics for log return predictions.
+        Evaluate scalar returns by default, or probabilities for triple_barrier.
+
+        Classification requires baseline_probabilities in classification_options;
+        see evaluate_classification for its full keyword contract and report.
+        The scalar arguments and graded report below apply to scalar mode only.
         
         Args:
             y_true: Ground truth log returns (actual)

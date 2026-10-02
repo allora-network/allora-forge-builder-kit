@@ -5,6 +5,7 @@ Existing test fixtures and worker state are never modified.
 """
 import json
 import copy
+import asyncio
 import runpy
 import os
 from pathlib import Path
@@ -100,12 +101,111 @@ def _reference_target(raw, row):
     return np.array([0, 1, 0]), lower, upper, end, float(future.close.iloc[-1])
 
 
+def _verify_target_edges(workflow):
+    """Small deterministic checks within the dataset integration test."""
+    import polars as pl
+    for interval in ('7m', '50m', '1h'):
+        probe = copy.copy(workflow)
+        probe.interval = interval
+        width = pd.Timedelta(interval)
+        times = pd.date_range('2026-01-02', periods=int(width / pd.Timedelta(minutes=1)) * 210,
+                              freq='min', tz='UTC')
+        raw = pl.from_pandas(pd.DataFrame(dict(open_time=times, open=100., high=101.,
+                                               low=99., close=100., volume=1.)))
+        native = probe.resample_ohlcv_polars(raw, freq=interval)
+        result = probe.compute_triple_barrier_target_polars(native, 2, raw).to_pandas()
+        assert [c for c in result if c.startswith('target_')] == TARGETS
+        resolved = result.dropna(subset=TARGETS)
+        assert len(resolved) > 0, interval
+        # Every minute touches both fixed barriers: tie must resolve down.
+        assert (resolved.target_down == 1).all()
+        np.testing.assert_allclose(resolved.tb_upper, 100 * np.exp(.25 * np.log(101/99)))
+        np.testing.assert_allclose(resolved.tb_lower, 100 * np.exp(-.25 * np.log(101/99)))
+        for bad in (0, -1, True):
+            with pytest.raises(ValueError):
+                probe.compute_triple_barrier_target_polars(native, bad, raw)
+        if interval == '1h':
+            # Removing a minute keeps required history unresolved; no silent neutral.
+            missing = raw.filter(pl.col('open_time') != times[60 * 100].to_pydatetime())
+            gaps = probe.compute_triple_barrier_target_polars(native, 2, missing).to_pandas()
+            assert gaps[TARGETS].isna().all(axis=1).sum() > result[TARGETS].isna().all(axis=1).sum()
+
+    # Trace the established live path without network or wall-clock heuristics.
+    # A partial final hour is handled identically for old/new target types.
+    from types import SimpleNamespace
+    times = pd.date_range('2026-01-01', periods=185, freq='min', tz='UTC')
+    prices = 100 + np.arange(len(times)) / 100
+    raw = pd.DataFrame(dict(open=prices, high=prices+1, low=prices-1,
+                            close=prices, volume=np.ones(len(times))), index=times)
+    raw.index.name = 'open_time'
+    probe = copy.copy(workflow)
+    probe.number_of_input_bars = 2
+    probe._dm = SimpleNamespace(get_live_1min_data=lambda *a, **kw: raw)
+    triple = probe.get_live_features('test')
+    probe.target_type = 'log_return'
+    pd.testing.assert_frame_equal(triple, probe.get_live_features('test'))
+    assert triple.index[-1] == times[-1].floor('h')
+    # The final row is included (right-inclusive search), contrary to R04's claim.
+    assert triple.feature_close_0.iloc[0] == pytest.approx(prices[179] / prices[184])
+
+
+def _verify_review_evaluation_and_monitoring():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from allora_forge_builder_kit import PerformanceEvaluator
+    from allora_forge_builder_kit.worker_monitor import _labeled_value_text
+    from allora_sdk.rpc_client.protos.emissions.v10 import (
+        GetWorkerLatestInputInferenceByTopicIdResponse, InputInference, InputLabeledValue)
+
+    history = pd.date_range('2026-01-01', periods=105, freq='h', tz='UTC')
+    labels = np.eye(3)[np.arange(105) % 3]
+    queries = history[[0, 50, 104]]
+    expected = np.array([labels[:1].mean(0), labels[:51].mean(0), labels[5:105].mean(0)])
+    for hu, qu in [('us', 'ns'), ('ns', 'us')]:
+        actual = PerformanceEvaluator.causal_class_baseline(
+            queries.as_unit(qu), history[::-1].as_unit(hu), labels[::-1])
+        np.testing.assert_allclose(actual, expected)
+    ev = PerformanceEvaluator(target_type='triple_barrier')
+    truth = np.eye(3)[np.arange(30) % 3]
+    wrong = np.roll(truth, 1, axis=1)
+    baseline = np.full(truth.shape, 1/3)
+    fail = ev.evaluate(truth, wrong, baseline_probabilities=baseline, n_expected_epochs=30)
+    assert not fail['eligible']
+    assert not fail['criteria'][0]['passed']
+    good = ev.evaluate(truth, truth, baseline_probabilities=baseline, n_expected_epochs=30)
+    assert good['eligible'] and good['provisional']
+    for bad in (np.zeros((2, 3)), np.full((2, 3), np.nan), np.ones((2, 2))):
+        with pytest.raises(ValueError):
+            ev.validate_probabilities(bad)
+
+    pairs = [{'label': 'down', 'value': '.2'}, {'label': 'neutral', 'value': '.3'},
+             {'label': 'up', 'value': '.5'}]
+    expected_text = {'down': '.2', 'neutral': '.3', 'up': '.5'}
+    for values in (json.dumps(pairs), json.dumps(json.dumps(pairs)), np.array(pairs, dtype=object)):
+        assert json.loads(_labeled_value_text(values)) == expected_text
+    for empty in ('', '  ', None, [], {}, iter([]), np.array([], dtype=object)):
+        assert _labeled_value_text(empty, '42') == '42'
+    assert _labeled_value_text('not-json') == 'not-json'
+    entries = [InputLabeledValue(**p) for p in pairs]
+    response = GetWorkerLatestInputInferenceByTopicIdResponse(
+        latest_input_inference=InputInference(block_height=123, values=entries))
+    query = SimpleNamespace(get_worker_latest_input_inference_by_topic_id=AsyncMock(return_value=response))
+    client = SimpleNamespace(emissions=SimpleNamespace(query=query))
+    # No tx pages: the snapshot must independently populate inference events.
+    events = asyncio.run(AlloraSDKEventFetcher(max_pages=0)._fetch(client, 87, 'test', None))
+    snapshots = [e for e in events if e['event_type'] == 'inference']
+    assert len(snapshots) == 1
+    assert json.loads(snapshots[0]['value_text']) == expected_text
+    assert snapshots[0]['value_num'] is None  # labeled JSON has no scalar projection
+
+
 def test_workflow_dataset(integration_run):
+    _verify_target_edges(integration_run['workflow'])
     # Reject coarse source candles before loading them; preserve the general
     # native-bar builder rather than forcing all research horizons to 1h/24.
     from types import SimpleNamespace
     probe = copy.copy(integration_run['workflow'])
-    probe._dm = SimpleNamespace(interval='5m')
+    probe._dm = SimpleNamespace(minute_candles_available=False)
     with pytest.raises(ValueError, match='one-minute source candles'):
         probe.get_full_feature_target_dataframe()
     data = integration_run['data']
@@ -153,6 +253,7 @@ def _run_example(state):
 
 
 def test_example_outputs(integration_run):
+    _verify_review_evaluation_and_monitoring()
     from allora_forge_builder_kit import PerformanceEvaluator
     from allora_forge_builder_kit.worker_monitor import _labeled_value_text
     from allora_sdk.rpc_client.protos.emissions.v10 import InputLabeledValue

@@ -688,7 +688,7 @@ class AlloraSDKEventFetcher:
             latest = await client.emissions.query.get_worker_latest_input_inference_by_topic_id(
                 GetWorkerLatestInputInferenceByTopicIdRequest(topic_id=topic_id, worker_address=address)
             )
-            li = getattr(latest, "latest_inference", None)
+            li = getattr(latest, "latest_input_inference", None)
             if li:
                 out.append(
                     {
@@ -702,7 +702,8 @@ class AlloraSDKEventFetcher:
                     }
                 )
         except Exception:
-            pass
+            logger.warning("Latest inference snapshot unavailable for topic %s worker %s",
+                           topic_id, address, exc_info=True)
 
         try:
             s = await client.emissions.query.get_inferer_score_ema(
@@ -804,31 +805,38 @@ def _extract_nonce(details_json: Optional[str]) -> Optional[int]:
 
 
 def _labeled_value_text(values, scalar="") -> str:
-    """Preserve v10 labeled entries, while keeping single-y inference scalar."""
+    """Store labeled JSON in value_text; value_num is scalar-only by design."""
+    fallback = str(scalar).strip('"')
+    if values is None:
+        return fallback
     if isinstance(values, str):
+        if not values.strip():
+            return fallback
         original = values
         try:
             values = json.loads(values)
             if isinstance(values, str):
                 values = json.loads(values)
         except (ValueError, TypeError):
-            return original  # retain evidence rather than replacing it with value=0
-    if values:
-        if isinstance(values, dict):
-            labeled = values
-        else:
-            try:
-                labeled = {
-                    (v.get("label") if isinstance(v, dict) else v.label):
-                    (v.get("value") if isinstance(v, dict) else v.value)
-                    for v in values
-                }
-            except (TypeError, AttributeError):
-                return str(values)
-        if set(labeled) == {"y"}:
-            return str(labeled["y"])
-        return json.dumps(labeled, sort_keys=True)
-    return str(scalar).strip('"')
+            return original  # preserve malformed evidence for diagnostics
+    if values is None:
+        return fallback
+    if isinstance(values, dict):
+        labeled = values
+    else:
+        try:
+            labeled = {
+                (v.get("label") if isinstance(v, dict) else v.label):
+                (v.get("value") if isinstance(v, dict) else v.value)
+                for v in values
+            }
+        except (TypeError, AttributeError):
+            return str(values)
+    if not labeled:
+        return fallback
+    if set(labeled) == {"y"}:
+        return str(labeled["y"])
+    return json.dumps(labeled, sort_keys=True)
 
 
 def _to_float(value) -> Optional[float]:

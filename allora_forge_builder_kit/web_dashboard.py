@@ -57,7 +57,7 @@ HTML = """<!doctype html>
 
     function esc(s) {
       const v = (s === null || s === undefined) ? '' : String(s);
-      return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/'/g, '&#39;').replace(/"/g, '&quot;');
     }
 
     function shortPath(p) {
@@ -70,7 +70,7 @@ HTML = """<!doctype html>
     function fmtSig(v, sig = 5) {
       if (v === null || v === undefined || v === '') return '—';
       const n = Number(v);
-      if (!Number.isFinite(n)) return String(v);
+      if (!Number.isFinite(n)) return 'invalid value';
       return Number.parseFloat(n.toPrecision(sig)).toString();
     }
 

@@ -61,7 +61,8 @@ def model_probabilities(model, features):
 
 def make_predict(model, features, ticker, input_bars):
     """Self-contained callable compatible with the existing nonce artifact flow."""
-    # Capture only trained parameters/schema, never a data manager/API credential.
+    # Capture training configuration, never a data manager/API credential.
+    interval, target_bars = INTERVAL, TARGET_BARS
     def predict(nonce: int = None):
         import os
         import numpy as np
@@ -70,7 +71,7 @@ def make_predict(model, features, ticker, input_bars):
         if not key:
             raise RuntimeError('ALLORA_API_KEY is required for live Atlas features')
         workflow = AlloraMLWorkflow(
-            tickers=[ticker], number_of_input_bars=input_bars, target_bars=24, interval='1h',
+            tickers=[ticker], number_of_input_bars=input_bars, target_bars=target_bars, interval=interval,
             target_type='triple_barrier', data_source='allora', api_key=key,
         )
         live = workflow.get_live_features(ticker)[features]
@@ -343,6 +344,8 @@ def run(args):
     truth = samples[TARGETS].to_numpy().argmax(1)
     splits = []
     for train, valid in TimeSeriesSplit(n_splits=args.folds).split(samples):
+        # Conservatively require full-horizon coverage, even for earlier hits;
+        # tb_exit_time is the trading exit, not confirmed network availability.
         # Exclude training labels unavailable at the validation cutoff, and use
         # these exact indices for both the timeline and model fitting.
         train = train[(samples.iloc[train].tb_resolution_time < samples.iloc[valid[0]].tb_prediction_time).to_numpy()]

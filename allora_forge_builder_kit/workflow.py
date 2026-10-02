@@ -251,7 +251,10 @@ class AlloraMLWorkflow:
             ticker: Symbol to fetch features for
             
         Returns:
-            DataFrame with features for the most recent complete bar
+            DataFrame for the latest resampled row returned by the shared live
+            pipeline. The feature window includes that row. Depending on feed
+            timing, its native candle may be partial; this method does not align
+            rows to a topic nonce or guarantee a completed native candle.
             
         Raises:
             ValueError: If not enough historical data or no features extracted
@@ -350,10 +353,7 @@ class AlloraMLWorkflow:
     # ---------- Historical features/targets ----------
     def get_full_feature_target_dataframe(self, start_date=None, end_date=None) -> pl.DataFrame:
         if self.target_type == "triple_barrier":
-            from .atlas_data_manager import AtlasDataManager
-            # Atlas stores minute candles regardless of the feature interval;
-            # other managers must explicitly supply minute historical data.
-            if not isinstance(self._dm, AtlasDataManager) and getattr(self._dm, 'interval', None) != '1m':
+            if not self._dm.minute_candles_available:
                 raise ValueError(
                     "Triple-barrier targets require one-minute source candles; "
                     "use Atlas (data_source='allora') or a data manager with interval='1m'."
@@ -405,7 +405,9 @@ class AlloraMLWorkflow:
             freq: Polars duration string, e.g. '5m', '1h', '1d'
             ohlcv_cols: Dict mapping OHLCV column names to aggregation functions
             groupby: List of columns to group by (e.g. ['symbol'])
-            live_mode: If True, drop incomplete bars and align to end at last timestamp
+            live_mode: Apply the existing incomplete-minute trimming rule;
+                minute-based intervals also align to the last available minute.
+                This does not guarantee that the final native candle is complete.
         
         Returns:
             Polars DataFrame with resampled OHLCV data
@@ -583,6 +585,8 @@ class AlloraMLWorkflow:
         horizon = h * width
         raw = minute_data.select("open_time", "open", "high", "low", "close").to_pandas()
         raw = raw.sort_values("open_time").set_index("open_time")
+        if raw.index.tz is None:
+            raise ValueError("Triple-barrier minute timestamps must be timezone-aware UTC")
         if raw.index.has_duplicates:
             raise ValueError("Duplicate minute timestamps in triple-barrier input")
         if raw.empty:
@@ -597,8 +601,10 @@ class AlloraMLWorkflow:
         # Resampled prices are the workflow's native bars; minute counts validate
         # them instead of silently treating a partial bar as complete.
         native = df.select("open_time", "high", "low").to_pandas().set_index("open_time")
+        if native.index.tz is None:
+            raise ValueError("Triple-barrier native timestamps must be timezone-aware UTC")
         native = native.reindex(pd.date_range(native.index.min(), native.index.max(), freq=width))
-        counts = valid.astype(int).resample(width).sum().reindex(native.index, fill_value=0)
+        counts = valid.astype(int).resample(width, origin=native.index.min(), label='left', closed='left').sum().reindex(native.index, fill_value=0)
         native.loc[counts != minutes_per_bar, ['high', 'low']] = np.nan
         lookback = 100 * h
         # SQL RANGE BETWEEN horizon PRECEDING AND CURRENT ROW includes h+1
@@ -620,18 +626,24 @@ class AlloraMLWorkflow:
         lows, highs, closes = (raw[c].to_numpy() for c in ('low', 'high', 'close'))
         first = grid[0]
         records = []
+        unresolved_history = unresolved_future = 0
         for opening in df['open_time'].to_list():
             t = pd.Timestamp(opening) + width
             end = t + horizon - pd.Timedelta(minutes=1)
-            rec = dict(target_up=None, target_neutral=None, target_down=None,
+            rec: dict[str, object] = dict(target_down=None, target_neutral=None, target_up=None,
                        tb_prediction_time=t, tb_resolution_time=end,
                        tb_atr=None, tb_base=None, tb_upper=None, tb_lower=None,
                        tb_exit_time=None, tb_exit_price=None, tb_exit_reason=None)
             a = atr.get(pd.Timestamp(opening), np.nan)
             start_i = int((t - pd.Timedelta(minutes=1) - first) / pd.Timedelta(minutes=1))
             end_i = start_i + h * minutes_per_bar
-            if (not np.isfinite(a) or start_i < 0 or end_i > len(raw)
+            if not np.isfinite(a):
+                unresolved_history += 1
+                records.append(rec)
+                continue
+            if (start_i < 0 or end_i > len(raw)
                     or bad_prefix[end_i] != bad_prefix[start_i]):
+                unresolved_future += 1
                 records.append(rec)
                 continue
             base = closes[start_i]
@@ -646,11 +658,15 @@ class AlloraMLWorkflow:
                 exit_time = grid[start_i + j] + pd.Timedelta(minutes=1)
             else:
                 label, exit_price, exit_time = 'neutral', closes[end_i - 1], end
-            rec.update({f'target_{c}': int(c == label) for c in ('up', 'neutral', 'down')})
+            rec.update({f'target_{c}': int(c == label) for c in ('down', 'neutral', 'up')})
             rec.update(tb_atr=float(a), tb_base=float(base), tb_upper=float(upper), tb_lower=float(lower),
                        tb_exit_time=exit_time, tb_exit_price=float(exit_price),
                        tb_exit_reason='expiry' if label == 'neutral' else label)
             records.append(rec)
+        print(f"[workflow] triple-barrier: {len(records)-unresolved_history-unresolved_future}/{len(records)} resolved; "
+              f"{unresolved_history} unresolved history (warmup/gaps); "
+              f"{unresolved_future} unresolved testing interval (tail/gaps); "
+              f"{int((counts != minutes_per_bar).sum())} incomplete native bars")
         metadata = pl.from_pandas(pd.DataFrame(records)).with_columns(
             pl.col('target_up', 'target_neutral', 'target_down').cast(pl.Int8),
             pl.col('tb_atr', 'tb_base', 'tb_upper', 'tb_lower', 'tb_exit_price').cast(pl.Float64),
