@@ -199,6 +199,40 @@ def _verify_review_evaluation_and_monitoring():
     assert snapshots[0]['value_num'] is None  # labeled JSON has no scalar projection
 
 
+    # Snapshots supply the latest value but are not additional submissions.
+    from tempfile import TemporaryDirectory
+    with TemporaryDirectory(prefix='triple-barrier-monitor-') as directory:
+        fetched = [snapshots[0]]
+        monitor = WorkerMonitor(
+            db_path=Path(directory) / 'monitor.db',
+            event_fetcher=lambda *_: fetched,
+        )
+        monitor.register_target(87, 'test')
+        assert monitor.sync_once()['inserted'] == 1
+        summary = monitor.get_summary(87, 'test')
+        assert summary['inference_count'] == 0
+        assert summary['last_inference']['value_text'] == snapshots[0]['value_text']
+        confirmed = dict(snapshots[0], event_id='inference:tx:123',
+                         status='success', tx_hash='tx')
+        submission = dict(confirmed, event_id='submit:tx:123', event_type='submission')
+        fetched.extend([confirmed, submission])
+        assert monitor.sync_once()['inserted'] == 2
+        assert monitor.sync_once()['inserted'] == 0
+        summary = monitor.get_summary(87, 'test')
+        assert summary['inference_count'] == 1
+        assert summary['submission_success'] == 1
+        assert summary['events_total'] == 3  # all stored records, including snapshots
+        assert summary['last_inference']['tx_hash'] == 'tx'
+        for period in summary['period_metrics'].values():
+            assert period['inference_count'] == 1
+        # Preserve the previous counting behavior for legacy rows without status.
+        fetched.append(dict(confirmed, event_id='legacy-inference', status=None))
+        assert monitor.sync_once()['inserted'] == 1
+        summary = monitor.get_summary(87, 'test')
+        assert summary['inference_count'] == 2
+        assert all(p['inference_count'] == 2 for p in summary['period_metrics'].values())
+
+
 def test_workflow_dataset(integration_run):
     _verify_target_edges(integration_run['workflow'])
     # Reject coarse source candles before loading them; preserve the general

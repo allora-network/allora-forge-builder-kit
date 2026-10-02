@@ -163,7 +163,7 @@ class WorkerMonitor:
                 f"""
                 SELECT
                     COUNT(1),
-                    SUM(CASE WHEN event_type='inference' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN event_type='inference' AND (status IS NULL OR status != 'snapshot') THEN 1 ELSE 0 END),
                     SUM(CASE WHEN event_type='reward' THEN 1 ELSE 0 END),
                     SUM(CASE WHEN event_type='score' THEN 1 ELSE 0 END),
                     SUM(CASE WHEN event_type='submission' AND status='success' THEN 1 ELSE 0 END),
@@ -443,7 +443,7 @@ class WorkerMonitor:
                         w["submission_success"] += 1
                     elif status == "error":
                         w["submission_error"] += 1
-                elif event_type == "inference":
+                elif event_type == "inference" and status != "snapshot":
                     w["inference_count"] += 1
                 elif event_type == "score" and value_num is not None:
                     w["score_samples"] += 1
