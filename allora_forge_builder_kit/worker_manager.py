@@ -975,7 +975,11 @@ class WorkerManager:
         except OSError as _chmod_err:
             logger.warning("could not tighten permissions on %s: %s", log_path, _chmod_err)
         try:
-            proc = subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT, cwd=str(Path.cwd()), env=env)
+            # Workers outlive the deploying shell/tmux session; lifecycle remains
+            # controlled through the recorded PID and stop_worker().
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log_f,
+                                    stderr=subprocess.STDOUT, cwd=str(Path.cwd()),
+                                    env=env, start_new_session=True)
         except Exception:
             log_f.close()
             raise
