@@ -18,6 +18,9 @@ Usage:
     print(report)
 """
 
+import math
+from typing import Any, Dict, Optional, Tuple
+
 import numpy as np
 from scipy import stats
 import warnings
@@ -32,17 +35,11 @@ class PerformanceEvaluator:
     The volatility mode retains the legacy scalar path; dedicated volatility
     diagnostics live in the volatility example workflows.
     
-    v3.0 evaluation framework:
-      - DA CI lower bound >= 0.50
-      - DA threshold >= 0.52
-      - DA p-value via z-test with continuity correction and
-        autocorrelation-aware effective sample size
-      - WRMSE improvement threshold >= 5%
-      - CZAR (Cumulative Z-scored Absolute Return) improvement >= 10%
-        replaces ZPTAE as primary metric
-      - Log Aspect Ratio moved to additional (non-scored) metrics
+    Log-return evaluate() uses the worker-metrics RES-1578 promotion gate and
+    confidence estimators. Existing scalar helper methods and THRESHOLDS below
+    retain legacy behavior for volatility and direct helper callers.
     """
-    
+
     THRESHOLDS = {
         'directional_accuracy': 0.52,
         'da_ci_lower': 0.50,             # CI lower bound must be ABOVE this
@@ -714,7 +711,14 @@ class PerformanceEvaluator:
         **classification_options,
     ) -> Dict:
         """
-        Evaluate scalar returns by default, or probabilities for triple_barrier.
+        Evaluate log returns with worker-metrics promotion criteria, or probabilities
+        for triple_barrier. Volatility retains the legacy scalar evaluator.
+
+        Log returns accept optional lags (epoch gaps), gt_ratio (horizon in epochs),
+        horizon_seconds, and n_submitted. Without n_expected_epochs, participation
+        is explicitly assumed to be full offline coverage. With counts supplied,
+        participation is graded at >90%. A row defaults to one prediction horizon.
+        Existing score remains a fraction; eligible requires all seven criteria.
 
         Classification requires baseline_probabilities in classification_options;
         see evaluate_classification for its full keyword contract and report.
@@ -737,6 +741,10 @@ class PerformanceEvaluator:
         """
         if self.target_type == "triple_barrier":
             return self.evaluate_classification(y_true, y_pred, n_expected_epochs=n_expected_epochs, **classification_options)
+        if self.target_type == "log_return":
+            return _lr_evaluate_log_returns(y_true, y_pred, epoch_length_minutes,
+                                        n_expected_epochs, **classification_options)
+
         if classification_options:
             raise TypeError("Classification options require target_type=triple_barrier")
         y_true = np.asarray(y_true).flatten()
@@ -792,6 +800,18 @@ class PerformanceEvaluator:
             report: Output from evaluate()
             detailed: If True, show all metrics. If False, show only primary metrics.
         """
+        if report.get('target_type') == 'log_return':
+            print("LOG-RETURN PERFORMANCE — worker-metrics promotion criteria")
+            print(f"Passed {report['num_passed']}/7; eligible: {report['eligible']}")
+            for criterion in report['criteria']:
+                status = 'PASS' if criterion['passed'] else 'FAIL'
+                print(f"  {status}: {criterion['label']} (value={criterion['value']})")
+            print(f"Participation: {report['participation_basis']}")
+            if detailed:
+                for key in ['directional_accuracy', 'pearson_r', 'wrmse_improvement',
+                            'czar_improvement', 'log_aspect_ratio', 'mse', 'rmse']:
+                    print(f"  {key}: {report['metrics'].get(key)}")
+            return
         if 'criteria' in report:
             import json
             print(json.dumps(report, indent=2, allow_nan=False))
@@ -888,3 +908,793 @@ class PerformanceEvaluator:
             print(f"   Spearman r: {m['spearman_r']:.4f} (p={m['spearman_pvalue']:.4f})")
         
         print("\n" + "=" * 80)
+
+# Log-return confidence intervals and promotion criteria.
+# Numerical reference: worker-metrics bd01f9d2bdb6351e351ecddeb68d0fb101ebc0ee.
+# These private helpers preserve the public evaluator/report API above. Legacy
+# volatility and classification paths continue to use their existing methods.
+# DA and improvement bounds use horizon-adjusted effective sample counts;
+# Pearson and log-aspect-ratio bounds do not. The aspect interval is one SE.
+
+
+_LR_LIM_PVALUE = 0.05
+_LR_CONFIDENCE_LEVEL = 1.0 - _LR_LIM_PVALUE  # 0.95
+_LR_PI_2 = np.pi / 2
+_LR_MIN_EFFECTIVE_SAMPLES = 20.0
+_LR_LIM_DA_CI = 0.50
+_LR_LIM_CORRELATION_CI = 0.0
+_LR_LIM_WRMSE_CI_PCT = 0.0
+_LR_LIM_WCZAR_CI_PCT = 0.0
+_LR_LIM_LOG_ASPECT_RATIO = 0.5
+_LR_LIM_PARTICIPATION = 0.90
+_LR_PROMOTION_CL = 0.95
+_LR_NEFF_ANCHOR_MINUTES = 20.0
+_LR_NEFF_POWER = 0.5
+_LR_ONE_SE_CL: float = float(stats.norm.cdf(1.0))
+_LR_SECONDS_PER_YEAR: float = 365.25 * 24 * 60 * 60
+
+
+def _lr_safe_float(value: Any) -> Optional[float]:
+    """Convert a value to a JSON-safe float."""
+    if value is None:
+        return None
+    try:
+        f = float(value)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return f
+    except (TypeError, ValueError):
+        return None
+
+
+def _lr_czar_derivative(x: np.ndarray) -> np.ndarray:
+    """Derivative of arctan: 1 / (1 + x^2)."""
+    return 1.0 / (1.0 + x**2)
+
+
+def _lr_czar_antiderivative(x: np.ndarray) -> np.ndarray:
+    """Antiderivative (arctan)."""
+    return np.arctan(x)
+
+
+def _lr_softplus(x: np.ndarray) -> np.ndarray:
+    """Numerically stable softplus function."""
+    return np.maximum(x, 0.0) + np.log1p(np.exp(-np.abs(x)))
+
+
+def _lr_norm_smooth(z_true: np.ndarray, eps: float, tau: float = 0.1) -> np.ndarray:
+    """Smooth normalization for CZAR loss softening term."""
+    norm_min = 1.0 - np.abs(_lr_czar_antiderivative(z_true)) / eps
+
+    if eps >= _LR_PI_2 or tau == 0:
+        return np.maximum(norm_min, 0.0)
+
+    tau_eff = tau * (_LR_PI_2 / eps - 1)
+    return _lr_softplus(norm_min / tau_eff) / _lr_softplus(1 / tau_eff)
+
+
+def _lr_loss_czar(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    std: float,
+    mean: float = 0,
+    epsilon: float = 1,
+    tau: float = 0.1,
+) -> np.ndarray:
+    """CZAR (Clamped Z-score Aspect Ratio) loss function."""
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+
+    z_true = (y_true - mean) / std
+    z_pred = (y_pred - mean) / std
+
+    s = np.where(z_true == 0, 1, np.sign(z_true))
+    a = np.abs(z_true)
+    u = s * z_pred
+
+    C = s * _lr_czar_antiderivative(z_true)
+
+    L1 = -s * z_pred + C
+    L2 = -s * _lr_czar_antiderivative(z_pred) + C
+    k = s * _lr_czar_derivative(z_true)
+    L3 = k * (z_pred - z_true)
+
+    if epsilon > 0:
+        eps_eff = np.arctan(1) * epsilon
+        softening_0 = _lr_loss_czar(np.array([0.0]), np.array([eps_eff]), 1.0, epsilon=0)[0]
+        norm = _lr_norm_smooth(z_true, eps_eff, tau)
+        Lsoft = norm * softening_0
+    else:
+        Lsoft = 0
+
+    return np.where(u <= 0, L1, np.where(u <= a, L2, L3)) + Lsoft
+
+
+def _lr_lag_autocorr(x: np.ndarray, lags: np.ndarray, lag: int = 1) -> Tuple[float, int]:
+    """Compute autocorrelation for pairs exactly ``lag`` epochs apart."""
+    x = np.asarray(x, dtype=float)
+    lags = np.asarray(lags)
+
+    if len(x) < 3 or lag < 1 or len(lags) != len(x) - 1:
+        return np.nan, 0
+    if np.any(~np.isfinite(lags)) or np.any(lags <= 0):
+        return np.nan, 0
+    rounded_lags = np.rint(lags)
+    if np.any(lags != rounded_lags):
+        return np.nan, 0
+    lags = rounded_lags.astype(np.int64)
+
+    positions = np.concatenate(([0], np.cumsum(lags, dtype=np.int64)))
+    targets = positions + lag
+    partners = np.searchsorted(positions, targets, side="left")
+    starts = np.flatnonzero(partners < len(positions))
+    if starts.size == 0:
+        return np.nan, 0
+
+    ends = partners[starts]
+    exact = positions[ends] == targets[starts]
+    starts = starts[exact]
+    ends = ends[exact]
+    finite = np.isfinite(x[starts]) & np.isfinite(x[ends])
+    x0 = x[starts[finite]]
+    x1 = x[ends[finite]]
+    n_pairs = len(x0)
+    if n_pairs == 0:
+        return np.nan, 0
+
+    x0 = x0 - np.mean(x0)
+    x1 = x1 - np.mean(x1)
+    denom = np.sqrt(np.sum(x0**2) * np.sum(x1**2))
+
+    if denom == 0:
+        return np.nan, 0
+
+    return np.sum(x0 * x1) / denom, n_pairs
+
+
+def _lr_sum_autocorr(x: np.ndarray, lags: np.ndarray, gt_ratio: int) -> float:
+    """Sum significant autocorrelations up to gt_ratio lags."""
+    rho_sum = 0.0
+
+    # The design calls for every epoch lag through gt_ratio - 1.  The number
+    # of submitted observations is not an upper bound on epoch distance: 50
+    # sparse observations two epochs apart still have pairs at lag 98.
+    for lag in range(1, max(1, gt_ratio)):
+        rho, n_lag = _lr_lag_autocorr(x, lags, lag)
+        if n_lag > 0 and not np.isnan(rho):
+            signif = 1.96 / np.sqrt(n_lag)
+            if rho > signif:
+                rho_sum += rho
+
+    return rho_sum
+
+
+def _lr_compute_effective_sample_size(
+    x: np.ndarray, lags: Optional[np.ndarray], gt_ratio: int
+) -> float:
+    """Compute effective sample size accounting for autocorrelation and GT lag."""
+    x = np.asarray(x)
+    n = len(x)
+
+    if n < 3:
+        return max(1.0, n)
+
+    if lags is None:
+        return max(1.0, n / gt_ratio)
+
+    lags = np.asarray(lags)
+    rho_sum = _lr_sum_autocorr(x, lags, gt_ratio)
+
+    if np.isnan(rho_sum) or rho_sum < 0:
+        n_eff = n / gt_ratio
+    else:
+        n_eff = n / (1.0 + 2.0 * rho_sum)
+
+    return max(1.0, n_eff)
+
+
+def _lr_ztest_pvalue(p_hat: float, n: float, p: float) -> float:
+    """One-sided z-test p-value for proportion."""
+    if n <= 0:
+        return 1.0
+    num = n * p_hat - n * p - 0.5
+    denom = np.sqrt(n * p * (1 - p))
+    if denom == 0:
+        return 1.0
+    z = num / denom
+    return stats.norm.sf(z)
+
+
+def _lr_ztest_ci(
+    p_hat: float, n: float, cl: float = _LR_CONFIDENCE_LEVEL
+) -> Tuple[float, float]:
+    """Analytic confidence interval for binomial proportion."""
+    if n <= 0:
+        return (0.0, 1.0)
+    if not (0.0 <= p_hat <= 1.0):
+        return (0.0, 1.0)
+    if p_hat == 0 or n == 1:
+        return (0.0, 1.0)
+
+    z = stats.norm.ppf(cl)
+    a2 = (z * z) / n
+    c = 0.5 / n
+    tp = p_hat - c
+
+    A = 1.0 + a2
+    B = -(2.0 * tp + a2)
+    C_coeff = tp * tp
+
+    disc = B * B - 4.0 * A * C_coeff
+    if disc < 0:
+        return (0.0, 1.0)
+
+    sqrt_disc = np.sqrt(disc)
+    p2 = (-B - sqrt_disc) / (2.0 * A)
+
+    return (max(p2, 0.0), 1.0)
+
+
+def _lr_directional_accuracy_test(
+    predicted_returns: np.ndarray,
+    true_returns: np.ndarray,
+    n_eff: float,
+    cl: float = _LR_CONFIDENCE_LEVEL,
+) -> Tuple[int, float, float, Tuple[float, float]]:
+    """Directional accuracy with a one-sided lower bound at *n_eff*."""
+    true_returns = np.asarray(true_returns, dtype=float)
+    predicted_returns = np.asarray(predicted_returns, dtype=float)
+
+    invalid_mask = (true_returns == 0) | ~np.isfinite(true_returns)
+    valid_mask = ~invalid_mask
+    n = np.sum(valid_mask)
+
+    if n == 0:
+        return (0, np.nan, np.nan, (np.nan, np.nan))
+
+    success_mask = true_returns[valid_mask] * predicted_returns[valid_mask] > 0
+    n_successes = np.sum(success_mask)
+    directional_accuracy = n_successes / n
+
+    pvalue = _lr_ztest_pvalue(directional_accuracy, n_eff, 0.5)
+    confidence_interval = _lr_ztest_ci(directional_accuracy, n_eff, cl)
+
+    return (int(n), directional_accuracy, pvalue, confidence_interval)
+
+
+def _lr_pearsonr_ci(
+    r: float, n: float, alpha: float = _LR_LIM_PVALUE
+) -> Tuple[float, float]:
+    """Fisher z-transform confidence interval for Pearson correlation."""
+    if n <= 3 or np.isnan(r):
+        return (np.nan, np.nan)
+
+    r = np.clip(r, -0.9999, 0.9999)
+
+    z = np.arctanh(r)
+    se = 1 / np.sqrt(n - 3)
+
+    z_crit = stats.norm.ppf(1 - alpha / 2)
+
+    z_low = z - z_crit * se
+    z_high = z + z_crit * se
+
+    return (np.tanh(z_low), np.tanh(z_high))
+
+
+def _lr_correlation_test(
+    predicted_returns: np.ndarray,
+    true_returns: np.ndarray,
+    n_eff: float,
+    cl: float = _LR_CONFIDENCE_LEVEL,
+) -> Tuple[float, Tuple[float, float], float]:
+    """Pearson correlation test with effective sample size adjustment."""
+    true_returns = np.asarray(true_returns)
+    predicted_returns = np.asarray(predicted_returns)
+
+    mask = np.isfinite(true_returns) & np.isfinite(predicted_returns)
+    x = predicted_returns[mask]
+    y = true_returns[mask]
+    N = len(x)
+
+    if N < 3:
+        return (np.nan, (np.nan, np.nan), np.nan)
+
+    # scipy.stats.pearsonr emits ConstantInputWarning to stderr when either
+    # input has zero variance (correlation is 0/0, undefined). Return nan
+    # early — downstream code already handles nan r values correctly.
+    if np.ptp(x) == 0 or np.ptp(y) == 0:
+        return (np.nan, (np.nan, np.nan), np.nan)
+
+    pearson = stats.pearsonr(x, y)
+    r = getattr(pearson, "statistic", getattr(pearson, "correlation", pearson[0]))
+
+    n_eff = max(3.0, min(float(N), n_eff))
+
+    ci = _lr_pearsonr_ci(r, n_eff, alpha=1.0 - cl)
+
+    df = n_eff - 2.0
+    if abs(r) == 1.0:
+        p_val_eff = 0.0
+    else:
+        t_stat = r * np.sqrt(df / (1.0 - r**2))
+        p_val_eff = 2.0 * stats.t.sf(np.abs(t_stat), df=df)
+
+    return (r, ci, p_val_eff)
+
+
+def _lr_finite_pairs(
+    pred: np.ndarray, actual: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """The samples where both series are finite, as (pred, actual)."""
+    pred = np.asarray(pred, float)
+    actual = np.asarray(actual, float)
+    mask = np.isfinite(pred) & np.isfinite(actual)
+    return pred[mask], actual[mask]
+
+
+def _lr_se_from_influence(if_t: np.ndarray, n_eff: float) -> float:
+    """Compute standard error from influence function series."""
+    if_t = np.asarray(if_t, float)
+    return np.std(if_t, ddof=1) / np.sqrt(max(1.0, n_eff))
+
+
+def _lr_wrmse_improvement_and_ci(
+    pred: np.ndarray, actual: np.ndarray, n_eff: float, cl: float = _LR_CONFIDENCE_LEVEL
+) -> Tuple[float, Tuple[float, float]]:
+    """WRMSE improvement with influence-function-based confidence interval."""
+    p, r = _lr_finite_pairs(pred, actual)
+    if p.size < 3:
+        return (np.nan, (np.nan, np.nan))
+
+    w = np.abs(r)
+    m1 = w * r**2
+    m2 = w * (r - p)**2
+
+    b = m1.mean()
+    c = m2.mean()
+
+    if b == 0:
+        # The weighted baseline itself is zero (every actual exactly zero):
+        # there is no error to improve on, so improvement is undefined-as-zero.
+        return (0.0, (0.0, 0.0))
+    if c == 0:
+        # The MODEL's weighted error is exactly zero — a flawless scored
+        # subsample. theta = 1 - sqrt(0/b) = 1.0, the best possible
+        # improvement, with a zero-width band (the influence series is
+        # identically zero). The research reference has no guard here and
+        # returns exactly this; failing it as 0% would be a wrong answer at
+        # the ratified gate (SYNTH-008).
+        return (1.0, (1.0, 1.0))
+
+    s = np.sqrt(c / b)
+    theta = 1.0 - s
+
+    dtheta_db = 0.5 * s / b
+    dtheta_dc = -0.5 / np.sqrt(b * c)
+
+    if_t = dtheta_db * (m1 - b) + dtheta_dc * (m2 - c)
+
+    se = _lr_se_from_influence(if_t, n_eff)
+    z = stats.norm.ppf(cl)
+
+    return (theta, (theta - z * se, theta + z * se))
+
+
+def _lr_wczar_improvement_and_ci(
+    pred: np.ndarray, actual: np.ndarray, n_eff: float, cl: float = _LR_CONFIDENCE_LEVEL
+) -> Tuple[float, Tuple[float, float]]:
+    """CZAR improvement with influence-function-based confidence interval."""
+    p, r = _lr_finite_pairs(pred, actual)
+    if p.size < 3:
+        return (np.nan, (np.nan, np.nan))
+
+    r_bar = r.mean()
+    v = (r * r).mean() - r_bar * r_bar
+    sigma = np.sqrt(max(v, 1e-12))
+
+    w = np.abs(r)
+
+    def g0(sig: float) -> np.ndarray:
+        return w * _lr_loss_czar(r, 0.0, sig)
+
+    def g1(sig: float) -> np.ndarray:
+        return w * _lr_loss_czar(r, p, sig)
+
+    g0_t = g0(sigma)
+    g1_t = g1(sigma)
+
+    B = g0_t.mean()
+    C_val = g1_t.mean()
+
+    if B == 0:
+        return (0.0, (0.0, 0.0))
+
+    theta = 1.0 - C_val / B
+
+    dtheta_dB = C_val / (B * B)
+    dtheta_dC = -1.0 / B
+
+    fd_rel = 1e-4
+    h = fd_rel * sigma + 1e-12
+    Bp = (g0(sigma + h).mean() - g0(sigma - h).mean()) / (2.0 * h)
+    Cp = (g1(sigma + h).mean() - g1(sigma - h).mean()) / (2.0 * h)
+    dtheta_dsig = dtheta_dB * Bp + dtheta_dC * Cp
+
+    r2_bar = (r * r).mean()
+    IF_v_t = (r * r - r2_bar) - 2.0 * r_bar * (r - r_bar)
+    IF_sig_t = (0.5 / sigma) * IF_v_t
+
+    if_t = (
+        dtheta_dB * (g0_t - B)
+        + dtheta_dC * (g1_t - C_val)
+        + dtheta_dsig * IF_sig_t
+    )
+
+    se = _lr_se_from_influence(if_t, n_eff)
+    z = stats.norm.ppf(cl)
+
+    return (theta, (theta - z * se, theta + z * se))
+
+
+def _lr_log_aspect_ratio_and_ci(
+    pred: np.ndarray, actual: np.ndarray, n_eff: float, cl: float = _LR_CONFIDENCE_LEVEL
+) -> Tuple[float, Tuple[float, float]]:
+    """Log aspect ratio with influence-function-based confidence interval."""
+    x, y = _lr_finite_pairs(pred, actual)
+    if x.size < 3:
+        return (np.nan, (np.nan, np.nan))
+
+    eps = 1e-12
+
+    Ex = x.mean()
+    Ex2 = (x * x).mean()
+    Ey = y.mean()
+    Ey2 = (y * y).mean()
+
+    vx = max(Ex2 - Ex * Ex, eps)
+    vy = max(Ey2 - Ey * Ey, eps)
+
+    sx = np.sqrt(vx)
+    sy = np.sqrt(vy)
+
+    if sx == 0 or sy == 0:
+        return (np.nan, (np.nan, np.nan))
+
+    theta = np.log10(sx / sy)
+
+    c = 1.0 / np.log(10.0)
+    dtheta_dEx = c * 0.5 * (1.0 / vx) * (-2.0 * Ex)
+    dtheta_dEx2 = c * 0.5 * (1.0 / vx) * 1.0
+    dtheta_dEy = c * (-0.5) * (1.0 / vy) * (-2.0 * Ey)
+    dtheta_dEy2 = c * (-0.5) * (1.0 / vy) * 1.0
+
+    m = np.column_stack([x, x * x, y, y * y])
+    mu = m.mean(axis=0)
+
+    if_t = (
+        dtheta_dEx * (m[:, 0] - mu[0])
+        + dtheta_dEx2 * (m[:, 1] - mu[1])
+        + dtheta_dEy * (m[:, 2] - mu[2])
+        + dtheta_dEy2 * (m[:, 3] - mu[3])
+    )
+
+    se = _lr_se_from_influence(if_t, n_eff)
+    z = stats.norm.ppf(cl)
+
+    return (theta, (theta - z * se, theta + z * se))
+
+
+def _lr_normalized_mean_offset(pred: np.ndarray, actual: np.ndarray) -> float:
+    """Mean signed offset normalised by ground-truth standard deviation."""
+    pred = np.asarray(pred)
+    actual = np.asarray(actual)
+    if pred.size == 0 or actual.size == 0:
+        return float("nan")
+    std_actual = np.std(actual)
+    if std_actual == 0:
+        return float("nan")
+    return float(np.mean(pred - actual) / std_actual)
+
+
+def _lr_neff_scale(gt_lag_minutes: Optional[float]) -> float:
+    """Horizon adjustment factor for the effective sample size."""
+    if gt_lag_minutes is None:
+        return 1.0
+    if not math.isfinite(gt_lag_minutes) or gt_lag_minutes <= 0:
+        return 1.0
+    return float(max(1.0, gt_lag_minutes / _LR_NEFF_ANCHOR_MINUTES) ** _LR_NEFF_POWER)
+
+
+def _lr_adjusted_improvement_lower_bound(
+    improvement: float, one_se_lower: float, scale: float
+) -> float:
+    """Improvement lower bound rescaled for the horizon and widened to 95%."""
+    if not (math.isfinite(improvement) and math.isfinite(one_se_lower)):
+        return float("nan")
+    standard_error = improvement - one_se_lower
+    if standard_error < 0:
+        return float("nan")
+    z = float(stats.norm.ppf(_LR_PROMOTION_CL))
+    return float(improvement - z * standard_error / math.sqrt(scale))
+
+
+def _lr_score_worker(
+    true: np.ndarray,
+    pred: np.ndarray,
+    lags: Optional[np.ndarray],
+    gt_ratio: int,
+    n_active: int,
+    total_nonces: int,
+    *,
+    horizon_seconds: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Score a worker against the seven ratified promotion criteria (RES-1578)."""
+    true = np.asarray(true, dtype=float)
+    pred = np.asarray(pred, dtype=float)
+
+
+    keep = np.isfinite(true) & (true != 0)
+    n_eff = _lr_compute_effective_sample_size(true[keep], _lr_mask_lags(lags, keep), gt_ratio)
+
+    gt_lag_minutes = horizon_seconds / 60.0
+    scale = _lr_neff_scale(gt_lag_minutes)
+
+    nvalid, dir_acc, dir_acc_pval, dir_acc_ci = _lr_directional_accuracy_test(
+        pred, true, n_eff * scale, cl=_LR_PROMOTION_CL,
+    )
+    pearson_r, pearson_ci, pearson_pval = _lr_correlation_test(
+        pred, true, n_eff, cl=_LR_PROMOTION_CL,
+    )
+    wrmse_imp, wrmse_one_se = _lr_wrmse_improvement_and_ci(
+        pred, true, n_eff, cl=_LR_ONE_SE_CL,
+    )
+    wczar_imp, wczar_one_se = _lr_wczar_improvement_and_ci(
+        pred, true, n_eff, cl=_LR_ONE_SE_CL,
+    )
+
+    log_ar, log_ar_ci = _lr_log_aspect_ratio_and_ci(pred, true, n_eff, cl=_LR_ONE_SE_CL)
+
+    finite = np.isfinite(pred) & np.isfinite(true)
+    constant_prediction = bool(
+        np.count_nonzero(finite) >= 3 and np.unique(pred[finite]).size <= 1
+    )
+
+    participation = min(1.0, n_active / total_nonces) if total_nonces > 0 else np.nan
+
+    # Improvement bounds are tested in percent, with native one-SE bands
+    # widened to one-sided 95% after adjusting for the prediction horizon.
+    wrmse_lower = _lr_adjusted_improvement_lower_bound(
+        _lr_pct(wrmse_imp), _lr_pct(wrmse_one_se[0]), scale,
+    )
+    wczar_lower = _lr_adjusted_improvement_lower_bound(
+        _lr_pct(wczar_imp), _lr_pct(wczar_one_se[0]), scale,
+    )
+    checks = [
+        ("n_eff", "Effective samples >= 20", n_eff,
+         _LR_MIN_EFFECTIVE_SAMPLES, n_eff >= _LR_MIN_EFFECTIVE_SAMPLES),
+        ("directional_accuracy_ci", "Directional accuracy lower CI > 50%",
+         dir_acc_ci[0], _LR_LIM_DA_CI, dir_acc_ci[0] > _LR_LIM_DA_CI),
+        ("correlation_ci", "Pearson correlation lower CI > 0%",
+         pearson_ci[0], _LR_LIM_CORRELATION_CI, pearson_ci[0] > _LR_LIM_CORRELATION_CI),
+        ("wrmse_ci", "WRMSE improvement lower CI > 0%",
+         wrmse_lower, _LR_LIM_WRMSE_CI_PCT, wrmse_lower > _LR_LIM_WRMSE_CI_PCT),
+        ("wczar_ci", "CZAR improvement lower CI > 0%",
+         wczar_lower, _LR_LIM_WCZAR_CI_PCT, wczar_lower > _LR_LIM_WCZAR_CI_PCT),
+        ("log_aspect_ratio", "Log aspect ratio CI overlaps +/- 0.5",
+         log_ar, _LR_LIM_LOG_ASPECT_RATIO,
+         np.isfinite(log_ar_ci).all()
+         and log_ar_ci[1] >= -_LR_LIM_LOG_ASPECT_RATIO
+         and log_ar_ci[0] <= _LR_LIM_LOG_ASPECT_RATIO),
+        ("participation", "Participation > 90%",
+         participation, _LR_LIM_PARTICIPATION, participation > _LR_LIM_PARTICIPATION),
+    ]
+    criteria = [
+        dict(key=key, label=label, value=_lr_safe_float(value),
+             threshold=threshold, passed=bool(np.isfinite(value) and passed))
+        for key, label, value, threshold, passed in checks
+    ]
+    tested = {c["key"]: c["value"] for c in criteria}
+
+    wrmse_ci = _lr_mirror_band(wrmse_imp, _lr_fraction(tested["wrmse_ci"]))
+    wczar_ci = _lr_mirror_band(wczar_imp, _lr_fraction(tested["wczar_ci"]))
+
+    descriptive = _lr_descriptive_stats(pred, true)
+
+    return {
+        "score": sum(c["passed"] for c in criteria),
+        "max_score": len(criteria),
+        "eligible": all(c["passed"] for c in criteria),
+        "criteria": criteria,
+        "n_eff": n_eff,
+        "neff_scale": scale,
+        "nvalid": nvalid,
+        "dir_acc": dir_acc,
+        "dir_acc_pval": dir_acc_pval,
+        "dir_acc_ci": (tested["directional_accuracy_ci"], dir_acc_ci[1]),
+        "pearson_r": pearson_r,
+        "pearson_ci": pearson_ci,
+        "pearson_pval": pearson_pval,
+        "wrmse_imp": wrmse_imp,
+        "wrmse_ci": wrmse_ci,
+        "wczar_imp": wczar_imp,
+        "wczar_ci": wczar_ci,
+        "log_aspect_ratio": log_ar,
+        "log_aspect_ratio_ci": log_ar_ci,
+        "constant_prediction": constant_prediction,
+        "participation": participation,
+        "naive_annualized_return": _lr_naive_annualized_return(
+            pred, true, horizon_seconds,
+        ),
+        **descriptive,
+    }
+
+
+def _lr_mask_lags(
+    lags: Optional[np.ndarray], keep: np.ndarray
+) -> Optional[np.ndarray]:
+    """Re-derive inter-sample lags for the subset selected by *keep*."""
+    if lags is None:
+        return None
+    lags = np.asarray(lags)
+    if lags.size != keep.size - 1:
+
+        return lags
+    kept = np.flatnonzero(keep)
+    if kept.size < 2:
+        return np.array([1], dtype=int)
+
+    cumulative = np.concatenate([[0], np.cumsum(lags)])
+    return np.diff(cumulative[kept]).astype(int)
+
+
+def _lr_pct(value: float) -> float:
+    """Fraction to percent, preserving NaN."""
+    return float(value) * 100.0 if value is not None and np.isfinite(value) else float("nan")
+
+
+def _lr_fraction(percent: Optional[float]) -> Optional[float]:
+    """Percent back to fraction, preserving a missing value."""
+    return None if percent is None else float(percent) / 100.0
+
+
+def _lr_mirror_band(point: float, lower: Optional[float]) -> Tuple[float, float]:
+    """Symmetric band around *point* given its lower bound."""
+    if lower is None or not np.isfinite(point) or not np.isfinite(lower):
+        return (float("nan"), float("nan"))
+    return (float(lower), float(2.0 * point - lower))
+
+
+def _lr_descriptive_stats(pred: np.ndarray, true: np.ndarray) -> Dict[str, Any]:
+    """Error and distribution summaries over the samples finite in both series."""
+    mask = np.isfinite(pred) & np.isfinite(true)
+    if not np.any(mask):
+        return {
+            "mae": None, "rmse": None,
+            "mean_prediction": None, "mean_actual": None,
+            "std_prediction": None, "std_actual": None,
+            "normalized_mean_offset": None,
+        }
+    p = pred[mask]
+    t = true[mask]
+    std_t = float(np.std(t))
+    return {
+        "mae": float(np.mean(np.abs(t - p))),
+        "rmse": float(np.sqrt(np.mean((t - p) ** 2))),
+        "mean_prediction": float(np.mean(p)),
+        "mean_actual": float(np.mean(t)),
+        "std_prediction": float(np.std(p)),
+        "std_actual": std_t,
+        "normalized_mean_offset": _lr_normalized_mean_offset(p, t),
+    }
+
+
+def _lr_naive_annualized_return(
+    pred: np.ndarray,
+    true: np.ndarray,
+    horizon_seconds: Optional[float],
+) -> Optional[float]:
+    """Annualized return of a naive long/short strategy on the worker's signal."""
+    if horizon_seconds is None or horizon_seconds <= 0:
+        return None
+    mask = np.isfinite(pred) & np.isfinite(true)
+    if not np.any(mask):
+        return None
+    p = pred[mask]
+    t = true[mask]
+    log_return_for_trade = np.where(p > 0, t, np.where(p < 0, -t, 0))
+    annualized = float(np.mean(log_return_for_trade)) / horizon_seconds * _LR_SECONDS_PER_YEAR
+    try:
+        result = math.exp(annualized) - 1
+    except OverflowError:
+        return None
+    return _lr_safe_float(result)
+
+
+def _lr_evaluate_log_returns(
+    y_true, y_pred, epoch_length_minutes=60, n_expected_epochs=None,
+    *, n_submitted=None, lags=None, gt_ratio=1, horizon_seconds=None,
+):
+    """Evaluate log returns; offline arrays default to full participation.
+
+    Supply submission counts for live participation, and lags/gt_ratio for
+    irregular or overlapping observations. The public score stays on 0..1.
+    """
+    true = np.asarray(y_true, dtype=float).flatten()
+    pred = np.asarray(y_pred, dtype=float).flatten()
+    if len(true) != len(pred):
+        raise ValueError('y_true and y_pred must have same length')
+    if not len(true):
+        raise ValueError('y_true and y_pred cannot be empty')
+    if not np.isfinite(epoch_length_minutes) or epoch_length_minutes <= 0:
+        raise ValueError('epoch_length_minutes must be positive')
+    if not np.isfinite(gt_ratio) or int(gt_ratio) != gt_ratio or gt_ratio < 1:
+        raise ValueError('gt_ratio must be a positive integer')
+    if lags is not None:
+        lags = np.asarray(lags)
+        if (lags.shape != (len(true) - 1,) or not np.isfinite(lags).all()
+                or (lags < 1).any() or (lags != np.floor(lags)).any()):
+            raise ValueError('lags must contain one positive integer gap per adjacent pair')
+    if horizon_seconds is None:
+        horizon_seconds = epoch_length_minutes * 60 * gt_ratio
+    if not np.isfinite(horizon_seconds) or horizon_seconds <= 0:
+        raise ValueError('horizon_seconds must be positive')
+
+    assumed = n_expected_epochs is None
+    if assumed and n_submitted is not None:
+        raise ValueError('n_submitted requires n_expected_epochs')
+    total = len(true) if assumed else n_expected_epochs
+    submitted = len(true) if n_submitted is None else n_submitted
+    if not np.isfinite(total) or int(total) != total or total <= 0:
+        raise ValueError('n_expected_epochs must be positive integer')
+    if (not np.isfinite(submitted) or int(submitted) != submitted
+            or not 0 <= submitted <= total):
+        raise ValueError('n_submitted must be between zero and n_expected_epochs')
+
+    raw = _lr_score_worker(
+        true, pred, lags, int(gt_ratio), int(submitted), int(total),
+        horizon_seconds=horizon_seconds,
+    )
+    criteria = raw['criteria']
+    metrics = {
+        key: value for key, value in raw.items()
+        if key not in ('criteria', 'score', 'max_score', 'eligible')
+    }
+    # Keep the builder kit's existing metric names alongside reference names.
+    metrics.update(
+        directional_accuracy=raw['dir_acc'],
+        da_ci_lower=raw['dir_acc_ci'][0], da_ci_upper=raw['dir_acc_ci'][1],
+        da_pvalue=raw['dir_acc_pval'], da_n_effective=raw['n_eff'],
+        da_n_samples=raw['nvalid'], pearson_pvalue=raw['pearson_pval'],
+        wrmse_improvement=raw['wrmse_imp'], czar_improvement=raw['wczar_imp'],
+        mse=raw['rmse'] ** 2 if raw['rmse'] is not None else None,
+    )
+    count = raw['score']
+    report = dict(
+        target_type='log_return', metrics=metrics, criteria=criteria,
+        passed={c['key']: c['passed'] for c in criteria},
+        score=count / len(criteria), num_passed=count,
+        num_primary_metrics=len(criteria), eligible=raw['eligible'],
+        grade={7: 'A+', 6: 'A', 5: 'B+', 4: 'B', 3: 'C', 2: 'D', 1: 'F', 0: 'F'}[count],
+        thresholds={c['key']: c['threshold'] for c in criteria},
+        temporal_coverage_pass=(
+            None if assumed else submitted / total > _LR_LIM_PARTICIPATION
+        ),
+        participation_basis=(
+            'assumed full offline coverage' if assumed else 'provided submission counts'
+        ),
+    )
+
+    def clean(value):
+        """Reports must serialize as strict JSON, including undefined metrics."""
+        if isinstance(value, dict):
+            return {key: clean(item) for key, item in value.items()}
+        if isinstance(value, (tuple, list)):
+            return [clean(item) for item in value]
+        if isinstance(value, np.generic):
+            value = value.item()
+        if isinstance(value, float) and not np.isfinite(value):
+            return None
+        return value
+
+    return clean(report)

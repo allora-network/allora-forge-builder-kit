@@ -89,6 +89,7 @@ Playground topics:
 |-----------|------|-------------|-------|
 | **69** | BTC/USD - 1 Day Price Prediction | Price | Example walkthroughs use this |
 | **77** | BTC/USD - 5 Min Price Prediction | Price | Playground Fast |
+| **90** | Hyperliquid perps — 3-minute log returns | Labeled log returns | Pooled LightGBM; up to 100 asset labels per worker |
 
 Mainnet topics and testnet equivalents:
 
@@ -172,6 +173,72 @@ crypto datasets when adapting a workflow; the examples below use Atlas.
 Choose one block. Each uses its own working directory for artifacts and worker
 state. Training can take substantial time, especially the volatility grid search.
 The scripts print their evaluation results and output locations.
+
+**Hyperliquid perps — topic 90 (three workers):**
+
+Run from the repository root with the activated environment and Atlas API key
+configured above. The full parameter grid, lookback, six-month history, tree
+checkpoints, and number of exported models are at the top of
+[example.py](notebooks/testnet/topic_90_hyperliquid_3min_logreturn/example.py).
+
+```bash
+cd "$REPO_ROOT"
+# Fetch available history; existing minute parquet stays under the example's data/.
+python notebooks/testnet/topic_90_hyperliquid_3min_logreturn/example.py --backfill-only
+# Train from that cache, evaluate, and export the three best distinct trials.
+python notebooks/testnet/topic_90_hyperliquid_3min_logreturn/example.py
+# Replace the path below with the results/model_search/<timestamp> printed above.
+python notebooks/testnet/topic_90_hyperliquid_3min_logreturn/deploy_managed_example.py \
+  --model-run notebooks/testnet/topic_90_hyperliquid_3min_logreturn/results/model_search/RUN_TIMESTAMP \
+  --deploy
+```
+
+Each exported `model_1` / `model_2` / `model_3` directory contains a full-data-refitted
+`model.joblib`, training-fitted return calibration, and raw/scaled validation
+reports in both pooled and equal-weight per-asset views. A chronological holdout
+reserves the latest 20% of observed timestamps for validation; training labels
+that resolve after the validation boundary are excluded. Selection uses the lowest
+validation MSE per trial. Those reports are validation-selected, not independent
+test results. `top_models.json` tells the launcher which models to package.
+Omit `--deploy` to create the callable artifacts without allocating workers.
+
+WorkerManager allocates a separate local wallet for each model and records it in
+that model's `managed_worker.json`. Keep those files to reuse the same addresses.
+Workers run in independent process sessions: **no tmux or open terminal is required**.
+They survive launcher exit, but are not automatically restarted after a host reboot.
+Existing workers outside this deployment are not stopped.
+
+Each artifact tops up its own in-memory minute buffer before listening. At inference
+it anchors to the nonce's minute, waits ten seconds, refreshes Atlas data in bulk,
+resamples history to that exact boundary, and applies each asset's partial-candle
+offset. It submits up to 100 available predictions by cached volume rank; unavailable
+assets are omitted. Runtime state and API keys are not embedded in the artifacts.
+
+For example, a window opening at **12:01:27 UTC** targets **12:01–12:04**, even
+though submission closes around 12:01:57. The final completed input bar is labeled
+11:58 and ends at 12:01. The worker separately checks each asset's 12:01-labeled
+partial candle and adds its observed log price drift to the model prediction;
+if that candle is missing, the asset gets a zero-drift adjustment. The ten-second
+wait does not move the target boundary.
+
+For direct Atlas access, using a configured `AtlasDataManager` instance:
+
+```python
+symbols = atlas.discover_hl_universe()
+minutes = atlas.get_bulk_1min_candles(symbols, limit=10)
+```
+
+Discovery returns exact Atlas dataset names for fresh, consumable native perps.
+The bulk call uses one HTTP request; `limit` is **per asset**, with at most 10,000
+requested rows across the batch. It returns raw one-minute OHLCV indexed by
+`(symbol, open_time)`, preserving partial candles and gaps. It does not resample
+or write to the local cache.
+
+Logs go to `worker_logs/worker_90_<address>.log` in the launch directory. Inspect workers with:
+
+```bash
+python -m allora_forge_builder_kit.workerctl dashboard
+```
 
 **Price — topic 69:**
 
@@ -314,15 +381,27 @@ The price examples evaluate predicted log returns before converting to prices
 for submission. [PerformanceEvaluator](allora_forge_builder_kit/evaluation.py#L697)
 reports seven primary criteria and a letter grade:
 
-| # | Metric | Threshold | What it measures |
-|---|--------|-----------|-----------------|
-| 1 | **Directional Accuracy (DA)** | ≥ 52% | Fraction of predictions where the sign (up/down) matches the actual return |
-| 2 | **DA CI Lower Bound** | ≥ 0.50 | Lower bound of the 95% Wilson confidence interval for DA, adjusted for autocorrelation — ensures the edge isn't a statistical fluke |
-| 3 | **DA p-value** | < 0.05 | One-tailed z-test (H₀: DA = 50%) with continuity correction and autocorrelation-aware effective sample size |
-| 4 | **Pearson r** | ≥ 0.05 | Linear correlation between predicted and actual returns |
-| 5 | **Pearson p-value** | < 0.05 | Statistical significance of the Pearson correlation |
-| 6 | **WRMSE Improvement** | ≥ 5% | Weighted RMSE vs. a zero-prediction baseline, where errors are weighted by the magnitude of actual returns — bigger moves count more |
-| 7 | **CZAR Improvement** | ≥ 10% | Cumulative Z-scored Absolute Return: the fraction of z-scored directional return captured vs. a perfect oracle. 0 = random guessing, 1 = perfect |
+| # | Criterion | Requirement |
+|---|-----------|-------------|
+| 1 | Effective samples | ≥ 20, before horizon adjustment |
+| 2 | Directional accuracy | One-sided 95% lower confidence bound > 50% |
+| 3 | Pearson correlation | Two-sided 95% lower confidence bound > 0 |
+| 4 | WRMSE improvement | Horizon-adjusted 95% lower bound > 0 |
+| 5 | WCZAR improvement | Horizon-adjusted 95% lower bound > 0 |
+| 6 | Log aspect ratio | Confidence interval overlaps [-0.5, +0.5] |
+| 7 | Participation | > 90% |
+
+All seven must pass for `report["eligible"]`. Estimators and criteria are ported
+from worker-metrics revision `bd01f9d2bdb6351e351ecddeb68d0fb101ebc0ee`.
+DA and improvement bounds use `sqrt(max(1, horizon_minutes / 20))` as the
+effective-sample multiplier; Pearson and aspect ratio are unscaled.
+
+Existing `evaluate(y_true, y_pred, epoch_length_minutes=3)` and `print_report(report)`
+calls still work. Without submission counts, the report explicitly assumes full
+offline participation. Supply `n_expected_epochs` and optionally `n_submitted` for
+observed participation; optional `lags`, `gt_ratio`, and `horizon_seconds` describe
+irregular/overlapping samples. Defaults assume one horizon per row. Offline
+pooled-asset results do not establish live participation or cross-asset independence.
 
 **Grading:**
 

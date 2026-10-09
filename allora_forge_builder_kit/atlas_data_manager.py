@@ -700,8 +700,126 @@ class AtlasDataManager(BaseDataManager):
         return df[["open", "high", "low", "close", "volume"]]
 
     # ------------------------------------------------------------------
+    # Get Bulk 1 min Candles
+    # ------------------------------------------------------------------
+    def get_bulk_1min_candles(
+        self,
+        symbols: List[str],
+        limit: int = 10,
+        *,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+        timeout: float = 15.0,
+    ) -> pd.DataFrame:
+        """Fetch raw minute candles for exact Atlas dataset names in one request.
+
+        ``limit`` applies per symbol; at most 1,000 symbols and 10,000 requested
+        rows are allowed. Optional start/end are inclusive timezone-aware
+        timestamps. A 20-minute range can contain 21 minute openings, so use
+        limit=21 to retrieve that entire range. There is no automatic pagination.
+
+        Returns OHLCV indexed by (symbol, open_time), sorted ascending. Partials,
+        gaps and zero-volume rows are preserved; no resampling or local writes
+        occur. Empty dataset groups contribute no rows. HTTP errors propagate.
+        """
+        import csv
+        import io
+        import math
+
+        if isinstance(symbols, str):
+            raise ValueError("symbols must be a list of exact Atlas dataset names")
+        symbols = list(symbols)
+        if not symbols or any(not isinstance(s, str) or not s.strip() for s in symbols):
+            raise ValueError("symbols must contain non-empty exact Atlas dataset names")
+        if len(set(symbols)) != len(symbols):
+            raise ValueError("symbols must not contain duplicates")
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        if len(symbols) > 1000 or len(symbols) * limit > 10_000:
+            raise ValueError("Atlas allows 1,000 datasets and 10,000 requested rows per call")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be positive and finite")
+
+        # CSV quoting also supports a single dataset name containing a comma.
+        selector = io.StringIO()
+        csv.writer(selector, lineterminator="\n").writerow(symbols)
+        params = {
+            "dataset_names": selector.getvalue().rstrip("\n"),
+            "limit": limit,
+            "ordering": "-timestamp",
+        }
+        for name, value in (("start", start), ("end", end)):
+            if value is not None:
+                if not isinstance(value, datetime) or value.utcoffset() is None:
+                    raise ValueError(f"{name} must be a timezone-aware datetime")
+                params[name] = value.astimezone(timezone.utc).isoformat()
+        if start is not None and end is not None and start > end:
+            raise ValueError("start must not be later than end")
+
+        response = requests.get(
+            f"{self.base_url}/rows/", headers=self.headers, params=params, timeout=timeout
+        )
+        response.raise_for_status()
+        groups = response.json()["datasets"]
+        # Atlas preserves requested order, including empty groups. Never zip a
+        # truncated response silently, which could mislabel assets.
+        if len(groups) != len(symbols):
+            raise ValueError("Atlas bulk response does not contain every requested dataset group")
+
+        columns = ["open", "high", "low", "close", "volume"]
+        records = []
+        for symbol, group in zip(symbols, groups):
+            for row in group["rows"]:
+                values = row["values"]
+                records.append({
+                    "symbol": symbol,
+                    "open_time": row["timestamp"],
+                    **{col: values.get(col) for col in columns},
+                })
+        df = pd.DataFrame(records, columns=["symbol", "open_time"] + columns)
+        df["open_time"] = pd.to_datetime(df["open_time"], utc=True)
+        # Missing/non-numeric fields remain NaN for per-asset readiness checks.
+        for col in columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype(float)
+        return df.set_index(["symbol", "open_time"]).sort_index()
+
+    # ------------------------------------------------------------------
     # Dataset discovery helpers
     # ------------------------------------------------------------------
+    def discover_hl_universe(self) -> list[str]:
+        """Return exact Atlas dataset names for fresh, consumable native perps.
+
+        Make one registry request. Raise if it is paginated rather than silently
+        returning an incomplete universe. No dataset-ID lookups or tag acquisition.
+        """
+        response = requests.get(
+            f"{self.base_url}/rows/",
+            headers=self.headers,
+            params={"dataset_name": "current_hl_universe", "limit": 10_000},
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("next"):
+            raise RuntimeError("Atlas universe exceeds one response; refusing a partial registry")
+
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+        symbols = set()
+        for row in payload["results"]:
+            values = row["values"]
+            if values.get("market_group") != "perp" or values.get("status") != "consumable":
+                continue
+            try:
+                updated_at = datetime.fromisoformat(values["updated_at"].replace("Z", "+00:00"))
+            except (KeyError, TypeError, ValueError, AttributeError):
+                continue
+            if updated_at.tzinfo is None or updated_at < cutoff:
+                continue
+            name = values.get("candle_dataset_name")
+            if isinstance(name, str) and name.strip():
+                symbols.add(name)
+        return sorted(symbols)
+
     def list_available_datasets(
         self,
         source: str = "tiingo",
