@@ -728,10 +728,13 @@ class PerformanceEvaluator:
             y_true: Ground truth log returns (actual)
             y_pred: Predicted log returns
             epoch_length_minutes: Length of each prediction epoch in minutes
-            n_expected_epochs: Total number of epochs in the evaluation
-                window. When provided, temporal coverage is checked and
-                included in the report as ``temporal_coverage_pass`` (informational
-                only — does not affect the score or grade).
+            n_expected_epochs: Total number of epochs in the evaluation window.
+                For log returns, this grades participation and affects score,
+                grade, and eligibility. Submitted count defaults to len(y_true)
+                unless n_submitted is supplied, and must not exceed this total.
+                Without a total, log-return participation is assumed full.
+                In the legacy volatility path, temporal coverage remains
+                informational and does not affect the score or grade.
 
         Returns:
             Comprehensive dictionary with all metrics, pass/fail, and grade.

@@ -46,7 +46,12 @@ PARAMETER_GRID = {
 }
 
 # 1. Configure and discover the training universe
-api_key = Path(".allora_api_key").read_text().strip()
+api_key = os.environ.get("ALLORA_API_KEY", "").strip()
+if not api_key:
+    key_file = Path(".allora_api_key")
+    api_key = key_file.read_text().strip() if key_file.is_file() else ""
+if not api_key:
+    raise ValueError("Set ALLORA_API_KEY or put a non-empty API key in .allora_api_key")
 base_dir = Path(__file__).parent
 data_dir = base_dir / "data"
 data_dir.mkdir(exist_ok=True)
@@ -616,7 +621,6 @@ async def run_inference(context):
 
 async def run_worker(timeout=None, max_attempts=None):
     from allora_sdk import AlloraWorker, AlloraWalletConfig
-    from allora_sdk.rpc_client.tx_manager import TxError
     from contextlib import aclosing
     from cosmpy.mnemonic import generate_mnemonic
 
@@ -647,12 +651,10 @@ async def run_worker(timeout=None, max_attempts=None):
         print(f"Topic {TOPIC_ID} testnet worker: {worker.address}")
         async with aclosing(worker.run(timeout=timeout)) as results:
             async for result in results:
+                attempts += 1
                 if isinstance(result, Exception):
                     print(f"Submission failed: {result}")
-                    if isinstance(result, TxError):
-                        attempts += 1
                 else:
-                    attempts += 1
                     print(f"Submitted {len(result.submission)} assets: {result.tx_result.txhash}")
                 if max_attempts is not None and attempts >= max_attempts:
                     break

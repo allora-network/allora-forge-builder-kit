@@ -8,7 +8,6 @@ import gc
 import importlib.util
 import json
 import time
-from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -167,30 +166,159 @@ def test_participation_is_strict_and_aspect_is_scored():
     assert not report['eligible']
 
 
-@pytest.mark.parametrize('horizon,ratio',[ (3,1),(60,4),(240,8)])
-@pytest.mark.parametrize('kind',['signal','zero','constant','nonfinite'])
-def test_matches_reference_worker_metrics(monkeypatch,horizon,ratio,kind):
-    source=Path(__file__).parents[2]/'worker-metrics/src'
-    if not source.exists():pytest.skip('Sibling worker-metrics is not available for live parity check')
-    monkeypatch.syspath_prepend(str(source))
-    from worker_metrics.metrics.scoring import score_worker
-    rng=np.random.default_rng(43)
-    y=rng.normal(0,.01,300);p=y*.1+rng.normal(0,.008,300)
-    if kind=='zero':y[::4]=0
-    if kind=='constant':p[:]=.001
-    if kind=='nonfinite':y[3]=np.nan;p[10]=np.nan
-    lags=rng.integers(1,4,len(y)-1)
-    expected=score_worker(y,p,lags,ratio,95,100,epoch_minutes=horizon/ratio,horizon_seconds=horizon*60)
-    actual=PerformanceEvaluator().evaluate(y,p,epoch_length_minutes=horizon/ratio,
-        lags=lags,gt_ratio=ratio,horizon_seconds=horizon*60,n_expected_epochs=100,n_submitted=95)
-    assert actual['criteria']==[asdict(c) for c in expected['criteria']]
-    assert actual['eligible']==expected['eligible']
-    assert actual['num_passed']==expected['score']
-    for key in ['n_eff','neff_scale','dir_acc','pearson_r','wrmse_imp','wczar_imp','log_aspect_ratio']:
-        value=expected[key]
-        if not np.isfinite(value):assert actual['metrics'][key] is None
-        else:assert actual['metrics'][key]==pytest.approx(value,rel=1e-12)
-    json.dumps(actual,allow_nan=False)
+# Golden outputs generated from worker-metrics commit
+# bd01f9d2bdb6351e351ecddeb68d0fb101ebc0ee, using the deterministic inputs below.
+# Kept inline so CI needs neither the sibling checkout nor another fixture file.
+_REFERENCE_METRICS = ['n_eff', 'neff_scale', 'nvalid', 'dir_acc', 'dir_acc_pval', 'dir_acc_ci', 'pearson_r', 'pearson_pval', 'pearson_ci', 'wrmse_imp', 'wrmse_ci', 'wczar_imp', 'wczar_ci', 'log_aspect_ratio', 'log_aspect_ratio_ci', 'participation']
+_REFERENCE_CASES = [
+    ('signal', 3, 1,
+     (300.0, 1.0, 300, 0.56, 0.021654071405395815, (0.5108617041688603, 1.0), 0.14570195467808306,
+      0.011517469677559188, (0.03300569001164882, 0.25473973801831823), -0.05264303055066488,
+      (-0.13463242194998573, 0.029346360848655967), -0.027897994052618946,
+      (-0.11200475510830206, 0.05620876700306417), -0.11372590105297616,
+      (-0.13735397969598517, -0.09009782240996712), 0.95),
+     (True, True, True, False, False, True, True),
+     (300.0, 0.5108617041688603, 0.03300569001164882, -13.463242194998573, -11.200475510830206,
+      -0.11372590105297616, 0.95)),
+    ('signal', 60, 4,
+     (300.0, 1.7320508075688772, 300, 0.56, 0.003556155534467786, (0.522996778913665, 1.0),
+      0.14570195467808306, 0.011517469677559188, (0.03300569001164882, 0.25473973801831823),
+      -0.05264303055066488, (-0.11494149598072463, 0.009655434879394867), -0.027897994052618946,
+      (-0.09180531250729858, 0.036009324402060686), -0.11372590105297616,
+      (-0.13735397969598517, -0.09009782240996712), 0.95),
+     (True, True, True, False, False, True, True),
+     (300.0, 0.522996778913665, 0.03300569001164882, -11.494149598072463, -9.180531250729858,
+      -0.11372590105297616, 0.95)),
+    ('signal', 240, 8,
+     (300.0, 3.4641016151377544, 300, 0.56, 6.216392621392983e-05, (0.5340663444167336, 1.0),
+      0.14570195467808306, 0.011517469677559188, (0.03300569001164882, 0.25473973801831823),
+      -0.05264303055066488, (-0.09669469791377583, -0.008591363187553935), -0.027897994052618946,
+      (-0.07308729229937111, 0.017291304194133217), -0.11372590105297616,
+      (-0.13735397969598517, -0.09009782240996712), 0.95),
+     (True, True, True, False, False, True, True),
+     (300.0, 0.5340663444167336, 0.03300569001164882, -9.669469791377583, -7.308729229937111,
+      -0.11372590105297616, 0.95)),
+    ('zero', 3, 1,
+     (225.0, 1.0, 225, 0.5688888888888889, 0.022750131948179195, (0.5118536223130554, 1.0),
+      0.15563941553966593, 0.0194995713482365, (0.025365108486176215, 0.2807157589547017),
+      -0.002801186983738546, (-0.11366521232102846, 0.10806283835355136), 0.0028585369755459444,
+      (-0.11477148948731938, 0.12048856343841127), -0.05248042127066643,
+      (-0.08302969747239394, -0.02193114506893892), 0.95),
+     (True, True, True, False, False, True, True),
+     (225.0, 0.5118536223130554, 0.025365108486176215, -11.366521232102846, -11.477148948731939,
+      -0.05248042127066643, 0.95)),
+    ('zero', 60, 4,
+     (225.0, 1.7320508075688772, 225, 0.5688888888888889, 0.0038012619240167436,
+      (0.5260016425833672, 1.0), 0.15563941553966593, 0.0194995713482365,
+      (0.025365108486176215, 0.2807157589547017), -0.002801186983738546,
+      (-0.08703962968999375, 0.08143725572251666), 0.0028585369755459444,
+      (-0.08652095483508031, 0.0922380287861722), -0.05248042127066643,
+      (-0.08302969747239394, -0.02193114506893892), 0.95),
+     (True, True, True, False, False, True, True),
+     (225.0, 0.5260016425833672, 0.025365108486176215, -8.703962968999376, -8.652095483508031,
+      -0.05248042127066643, 0.95)),
+    ('zero', 240, 8,
+     (225.0, 3.4641016151377544, 225, 0.5688888888888889, 6.929222668244914e-05,
+      (0.538878072765551, 1.0), 0.15563941553966593, 0.0194995713482365,
+      (0.025365108486176215, 0.2807157589547017), -0.002801186983738546,
+      (-0.062366761057926066, 0.056764387090448974), 0.0028585369755459444,
+      (-0.06034230778275537, 0.06605938173384726), -0.05248042127066643,
+      (-0.08302969747239394, -0.02193114506893892), 0.95),
+     (True, True, True, False, False, True, True),
+     (225.0, 0.538878072765551, 0.025365108486176215, -6.236676105792607, -6.034230778275537,
+      -0.05248042127066643, 0.95)),
+    ('constant', 3, 1,
+     (300.0, 1.0, 300, 0.5233333333333333, 0.2264601505518622, (0.4742468578215006, 1.0), None, None,
+      (None, None), -0.004409238232431445, (-0.01449445789005111, 0.00567598142518822),
+      -0.0017435823478277879, (-0.014441872128907143, 0.010954707433251568), -4.0050008209900785,
+      (-4.022515160644818, -3.987486481335339), 0.95),
+     (True, False, False, False, False, False, True),
+     (300.0, 0.4742468578215006, None, -1.449445789005111, -1.4441872128907143, -4.0050008209900785,
+      0.95)),
+    ('constant', 60, 4,
+     (300.0, 1.7320508075688772, 300, 0.5233333333333333, 0.15388774885152556,
+      (0.4863054661181078, 1.0), None, None, (None, None), -0.004409238232431445,
+      (-0.012072348025925802, 0.0032538715610629116), -0.0017435823478277879,
+      (-0.01139219607023683, 0.007905031374581255), -4.0050008209900785,
+      (-4.022515160644818, -3.987486481335339), 0.95),
+     (True, False, False, False, False, False, True),
+     (300.0, 0.4863054661181078, None, -1.20723480259258, -1.139219607023683, -4.0050008209900785,
+      0.95)),
+    ('constant', 240, 8,
+     (300.0, 3.4641016151377544, 300, 0.5233333333333333, 0.07032460420614982,
+      (0.4973407559666067, 1.0), None, None, (None, None), -0.004409238232431445,
+      (-0.009827875132388348, 0.0010093986675254584), -0.0017435823478277879,
+      (-0.008566182539992799, 0.005079017844337223), -4.0050008209900785,
+      (-4.022515160644818, -3.987486481335339), 0.95),
+     (True, False, False, False, False, False, True),
+     (300.0, 0.4973407559666067, None, -0.9827875132388348, -0.8566182539992799, -4.0050008209900785,
+      0.95)),
+    ('nonfinite', 3, 1,
+     (299.0, 1.0, 299, 0.5585284280936454, 0.024633670771412763, (0.5093022486183906, 1.0),
+      0.1462074437578298, 0.011506850233745237, (0.03313716824124963, 0.25558241426738765),
+      -0.05257886047357441, (-0.13468648082588472, 0.029528759878735905), -0.028009672936473384,
+      (-0.11246955772218094, 0.05645021184923417), -0.11277192394799396,
+      (-0.13643707701923166, -0.08910677087675625), 0.95),
+     (True, True, True, False, False, True, True),
+     (299.0, 0.5093022486183906, 0.03313716824124963, -13.468648082588473, -11.246955772218094,
+      -0.11277192394799396, 0.95)),
+    ('nonfinite', 60, 4,
+     (299.0, 1.7320508075688772, 299, 0.5585284280936454, 0.004397443049343399,
+      (0.5214568170196014, 1.0), 0.1462074437578298, 0.011506850233745237,
+      (0.03313716824124963, 0.25558241426738765), -0.05257886047357441,
+      (-0.11496716048119278, 0.009809439534043965), -0.028009672936473384,
+      (-0.092185307402676, 0.03616596152972923), -0.11277192394799396,
+      (-0.13643707701923166, -0.08910677087675625), 0.95),
+     (True, True, True, False, False, True, True),
+     (299.0, 0.5214568170196014, 0.03313716824124963, -11.496716048119278, -9.2185307402676,
+      -0.11277192394799396, 0.95)),
+    ('nonfinite', 240, 8,
+     (299.0, 3.4641016151377544, 299, 0.5585284280936454, 9.340852046675804e-05,
+      (0.5325454468066875, 1.0), 0.1462074437578298, 0.011506850233745237,
+      (0.03313716824124963, 0.25558241426738765), -0.05257886047357441,
+      (-0.0966940504756621, -0.008463670471486717), -0.028009672936473384,
+      (-0.07338869925447437, 0.017369353381527605), -0.11277192394799396,
+      (-0.13643707701923166, -0.08910677087675625), 0.95),
+     (True, True, True, False, False, True, True),
+     (299.0, 0.5325454468066875, 0.03313716824124963, -9.66940504756621, -7.338869925447437,
+      -0.11277192394799396, 0.95)),
+]
+
+
+@pytest.mark.parametrize("kind,horizon,ratio,expected,passed,criterion_values", _REFERENCE_CASES)
+def test_matches_reference_worker_metrics(kind, horizon, ratio, expected, passed, criterion_values):
+    rng = np.random.default_rng(43)
+    y = rng.normal(0, .01, 300)
+    p = y * .1 + rng.normal(0, .008, 300)
+    if kind == 'zero':
+        y[::4] = 0
+    if kind == 'constant':
+        p[:] = .001
+    if kind == 'nonfinite':
+        y[3] = np.nan
+        p[10] = np.nan
+    lags = rng.integers(1, 4, len(y) - 1)
+    actual = PerformanceEvaluator().evaluate(
+        y, p, epoch_length_minutes=horizon / ratio, lags=lags, gt_ratio=ratio,
+        horizon_seconds=horizon * 60, n_expected_epochs=100, n_submitted=95,
+    )
+    for key, value in zip(_REFERENCE_METRICS, expected):
+        observed = actual['metrics'][key]
+        if value is None:
+            assert observed is None
+        elif isinstance(value, tuple) and any(v is None for v in value):
+            assert observed == list(value)
+        else:
+            assert observed == pytest.approx(value, rel=1e-10, abs=1e-12), key
+    assert tuple(c['passed'] for c in actual['criteria']) == passed
+    for criterion, value in zip(actual['criteria'], criterion_values):
+        if value is None:
+            assert criterion['value'] is None
+        else:
+            assert criterion['value'] == pytest.approx(value, rel=1e-10, abs=1e-12)
+    assert actual['eligible'] == all(passed)
+    assert actual['num_passed'] == sum(passed)
+    json.dumps(actual, allow_nan=False)
 
 
 # Equal-weight asset reporting
@@ -653,3 +781,127 @@ time.sleep(60)
             except ProcessLookupError:pass
         if parent.poll() is None:parent.kill()
         parent.wait(timeout=5)
+
+
+# Review regressions: credentials, callback failures, and real managed-buffer errors.
+
+@pytest.mark.parametrize('env,file_value,expected', [
+    (' env-key ', 'file-key', 'env-key'),
+    ('env-key', None, 'env-key'),
+    (None, ' file-key\n', 'file-key'),
+    (' \t', 'file-key', 'file-key'),
+    (None, None, None),
+    ('', '', None),
+    (' ', ' \n', None),
+])
+def test_example_api_key_resolution(tmp_path, monkeypatch, env, file_value, expected):
+    import os
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv('ALLORA_API_KEY', raising=False)
+    if env is not None:
+        monkeypatch.setenv('ALLORA_API_KEY', env)
+    if file_value is not None:
+        (tmp_path / '.allora_api_key').write_text(file_value)
+    path = Path(__file__).parents[1] / 'notebooks/testnet/topic_90_hyperliquid_3min_logreturn/example.py'
+    source = path.read_text()
+    # Execute only credential resolution, stopping before any data/API work.
+    snippet = source[source.index('api_key = '):source.index('base_dir = ')]
+    namespace = dict(os=os, Path=Path)
+    if expected is None:
+        with pytest.raises(ValueError, match='Set ALLORA_API_KEY'):
+            exec(compile(snippet, str(path), 'exec'), namespace)
+    else:
+        exec(compile(snippet, str(path), 'exec'), namespace)
+        assert namespace['api_key'] == expected
+
+
+@pytest.mark.parametrize('submitted,passed', [(None, False), (90, False), (91, True)])
+def test_log_return_participation_counts(submitted, passed):
+    y = np.random.default_rng(20).normal(size=70)
+    options = {} if submitted is None else {'n_submitted': submitted}
+    report = PerformanceEvaluator().evaluate(y, .8*y, n_expected_epochs=100, **options)
+    assert report['metrics']['participation'] == (70 if submitted is None else submitted) / 100
+    assert report['passed']['participation'] is passed
+    assert report['temporal_coverage_pass'] is passed
+    assert report['eligible'] is passed
+    assert report['num_passed'] == (7 if passed else 6)
+
+
+@pytest.mark.parametrize('options', [
+    {'n_expected_epochs': 0}, {'n_expected_epochs': 69},
+    {'n_expected_epochs': 100, 'n_submitted': 101}, {'n_submitted': 70},
+])
+def test_log_return_invalid_participation_counts(options):
+    y = np.linspace(-1, 1, 70)
+    with pytest.raises(ValueError):
+        PerformanceEvaluator().evaluate(y, y, **options)
+
+
+def test_standalone_max_attempts_counts_callback_errors(tmp_path, monkeypatch):
+    import os
+    import allora_sdk
+    monkeypatch.chdir(tmp_path)
+    key = tmp_path / 'worker_keys/topic_90.key'
+    key.parent.mkdir()
+    key.write_text('test-only-existing-key')
+    monkeypatch.setattr(allora_sdk, 'AlloraWalletConfig', lambda **kw: None)
+    yielded = []
+    class Worker:
+        address = 'test-worker'
+        async def run(self, timeout=None):
+            for i in range(4):
+                yielded.append(i)
+                yield RuntimeError('synthetic callback failure')
+    monkeypatch.setattr(allora_sdk, 'AlloraWorker', SimpleNamespace(inferer=lambda **kw: Worker()))
+    path = Path(__file__).parents[1] / 'notebooks/testnet/topic_90_hyperliquid_3min_logreturn/example.py'
+    node = next(n for n in ast.parse(path.read_text()).body
+                if isinstance(n, ast.AsyncFunctionDef) and n.name == 'run_worker')
+    buffer = Mock()
+    namespace = dict(Path=Path, os=os, TOPIC_ID=90, api_key='test', live_buffer=buffer)
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), 'exec'), namespace)
+    asyncio.run(namespace['run_worker'](max_attempts=2))
+    assert yielded == [0, 1]
+    buffer.stop.assert_called_once()
+
+
+@pytest.mark.parametrize('failure', ['timeout', 403, 404])
+def test_managed_artifact_real_buffer_handles_atlas_errors(monkeypatch, failure):
+    import allora_forge_builder_kit as kit
+    base = Path(__file__).parents[1] / 'notebooks/testnet/topic_90_hyperliquid_3min_logreturn'
+    spec = importlib.util.spec_from_file_location('managed_failure_example', base / 'deploy_managed_example.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setenv('ALLORA_API_KEY', 'test-only-key')
+    calls = []
+    class Atlas:
+        def __init__(self, **kw):
+            pass
+        def discover_hl_universe(self):
+            return ['hl_btc_1min', 'hl_eth_1min']
+        def get_bulk_1min_candles(self, symbols, **kw):
+            calls.append(list(symbols))
+            if failure == 'timeout':
+                raise requests.Timeout('synthetic timeout')
+            if 'hl_btc_1min' in symbols:
+                response = requests.Response()
+                response.status_code = failure
+                raise requests.HTTPError('unavailable asset', response=response)
+            return pd.DataFrame()
+    monkeypatch.setattr(kit, 'AtlasDataManager', Atlas)
+    node = next(n for n in ast.parse((base / 'example.py').read_text()).body
+                if isinstance(n, ast.ClassDef) and n.name == 'LiveMinuteBuffer')
+    source = ast.unparse(node) + '\n\ndef predict_live(T):\n    return {}\n'
+    bundle = dict(model=None, metadata=dict(training_universe=['hl_btc_1min', 'hl_eth_1min'],
+                                          lookback=2, feature_columns=[]))
+    payload = cloudpickle.dumps(module.make_artifact(bundle, [], source, 'https://example.test'))
+    if failure == 'timeout':
+        with pytest.raises(RuntimeError, match='Initial Atlas refresh failed'):
+            cloudpickle.loads(payload)
+    else:
+        loaded = cloudpickle.loads(payload)
+        try:
+            assert 'hl_btc_1min' in loaded._buffer.last_errors
+            assert 'hl_eth_1min' in loaded._buffer.last_successful_refresh
+            assert ['hl_eth_1min'] in calls
+        finally:
+            loaded._buffer.stop()

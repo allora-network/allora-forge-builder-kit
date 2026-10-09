@@ -46,12 +46,13 @@ def make_artifact(bundle, ranking, inference_source, rpc_url):
             import numpy as np
             import pandas as pd
             import polars as pl
+            import requests
             from allora_forge_builder_kit import AtlasDataManager, AlloraMLWorkflow
             metadata = self.bundle['metadata']
             atlas = AtlasDataManager(api_key=os.environ['ALLORA_API_KEY'], interval='3m')
             symbols = sorted(set(metadata['training_universe']) & set(atlas.discover_hl_universe()))
             workflow = object.__new__(AlloraMLWorkflow)
-            namespace = dict(np=np, pd=pd, pl=pl, time=time, datetime=datetime,
+            namespace = dict(np=np, pd=pd, pl=pl, requests=requests, time=time, datetime=datetime,
                              timedelta=timedelta, timezone=timezone, model=self.bundle['model'],
                              workflow=workflow, LOOKBACK=metadata['lookback'],
                              feature_columns=metadata['feature_columns'],
