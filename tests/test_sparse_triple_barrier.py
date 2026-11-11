@@ -5,6 +5,7 @@ import polars as pl
 import pytest
 
 from allora_forge_builder_kit import AlloraMLWorkflow
+from test_triple_barrier import _reference_target
 
 TARGETS = ['target_down', 'target_neutral', 'target_up']
 
@@ -25,7 +26,8 @@ def labelled(raw, cls=AlloraMLWorkflow):
 
 def test_complete_data_targets(candles):
     result = labelled(candles).dropna(subset=TARGETS)
-    assert len(result) > 0
+    # 432 native bars minus 400 calibration bars and four unresolved tail bars.
+    assert len(result) == 28
     np.testing.assert_allclose(result.tb_atr, np.log(101 / 99))
     np.testing.assert_allclose(result.tb_upper, 100 * np.exp(.25 * np.log(101 / 99)))
     np.testing.assert_allclose(result.tb_lower, 100 * np.exp(-.25 * np.log(101 / 99)))
@@ -66,3 +68,31 @@ def test_corrupt_observed_prices_are_not_sparse_minutes(candles):
     result = labelled(broken)
     row = result.loc[result.open_time == pd.Timestamp('2026-02-21T00:00Z')].iloc[0]
     assert row[TARGETS].isna().all()
+
+
+@pytest.fixture(scope='module')
+def replay_candles():
+    times = pd.date_range('2026-01-01', periods=102 * 1440, freq='min', tz='UTC')
+    return pd.DataFrame(dict(open=100., high=101., low=99., close=100.), index=times)
+
+
+def test_reference_replay_accepts_sparse_observations(replay_candles):
+    row = pd.Series(dict(open_time=pd.Timestamp('2026-04-11T00:00Z')))
+    raw = replay_candles.drop([pd.Timestamp('2026-02-01T03:11Z'),
+                              row.open_time + pd.Timedelta(minutes=59),
+                              row.open_time + pd.Timedelta(hours=2)])
+    result = _reference_target(raw, row)
+    assert result is not None
+    np.testing.assert_array_equal(result[0], [1, 0, 0])
+    assert result[1] == pytest.approx(100 * np.exp(-.25 * np.log(101 / 99)))
+
+
+@pytest.mark.parametrize('timestamp', ['2026-02-01T03:11Z', '2026-04-11T00:30Z',
+                                       '2026-04-11T02:00Z'])
+@pytest.mark.parametrize(('column', 'value'), [('open', np.nan), ('close', np.inf),
+                                               ('low', -1.), ('high', 99.), ('low', 101.)])
+def test_reference_replay_rejects_corrupt_observations(replay_candles, timestamp, column, value):
+    raw = replay_candles.copy()
+    raw.loc[pd.Timestamp(timestamp), column] = value
+    row = pd.Series(dict(open_time=pd.Timestamp('2026-04-11T00:00Z')))
+    assert _reference_target(raw, row) is None

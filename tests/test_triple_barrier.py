@@ -76,6 +76,15 @@ def _reference_target(raw, row):
     historical_end = row.open_time
     historical_start = historical_end - pd.Timedelta(hours=2400)
     history = raw.loc[(raw.index >= historical_start) & (raw.index < historical_end)]
+    # Check observed rows before aggregation can hide corrupt opens/closes or
+    # inconsistent extrema. Absent no-trade minutes are not observed rows.
+    required = raw.loc[(raw.index >= historical_start)
+                       & (raw.index < t + pd.Timedelta(hours=24)), ['open', 'high', 'low', 'close']]
+    valid = np.isfinite(required).all(axis=1) & (required > 0).all(axis=1)
+    valid &= required.high >= required[['open', 'close', 'low']].max(axis=1)
+    valid &= required.low <= required[['open', 'close', 'high']].min(axis=1)
+    if not valid.all():
+        return None
     hourly = history.resample('1h').agg({'high': 'max', 'low': 'min'})
     expected = pd.date_range(historical_start, historical_end, freq='h', inclusive='left')
     if not hourly.index.equals(expected) or hourly.isna().any().any():
