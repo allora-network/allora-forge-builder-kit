@@ -76,10 +76,19 @@ def _reference_target(raw, row):
     historical_end = row.open_time
     historical_start = historical_end - pd.Timedelta(hours=2400)
     history = raw.loc[(raw.index >= historical_start) & (raw.index < historical_end)]
-    expected = pd.date_range(historical_start, historical_end, freq='min', inclusive='left')
-    if not history.index.equals(expected):
+    # Check observed rows before aggregation can hide corrupt opens/closes or
+    # inconsistent extrema. Absent no-trade minutes are not observed rows.
+    required = raw.loc[(raw.index >= historical_start)
+                       & (raw.index < t + pd.Timedelta(hours=24)), ['open', 'high', 'low', 'close']]
+    valid = np.isfinite(required).all(axis=1) & (required > 0).all(axis=1)
+    valid &= required.high >= required[['open', 'close', 'low']].max(axis=1)
+    valid &= required.low <= required[['open', 'close', 'high']].min(axis=1)
+    if not valid.all():
         return None
     hourly = history.resample('1h').agg({'high': 'max', 'low': 'min'})
+    expected = pd.date_range(historical_start, historical_end, freq='h', inclusive='left')
+    if not hourly.index.equals(expected) or hourly.isna().any().any():
+        return None
     ranges = []
     # Reproduce SQL WHERE first, then inclusive RANGE through CURRENT ROW.
     for sample in pd.date_range(historical_end-pd.Timedelta(hours=2400), historical_end, freq='h', inclusive='left'):
@@ -89,9 +98,12 @@ def _reference_target(raw, row):
     atr = sum(ranges)/len(ranges)
     start, end = t-pd.Timedelta(minutes=1), t+pd.Timedelta(hours=24)-pd.Timedelta(minutes=1)
     future = raw[(raw.index >= start) & (raw.index < end)]
-    if not future.index.equals(pd.date_range(start, end, freq='min', inclusive='left')):
+    expected_future = pd.date_range(t, t + pd.Timedelta(hours=24), freq='h', inclusive='left')
+    future_hours = raw[(raw.index >= t) & (raw.index < t+pd.Timedelta(hours=24))].resample('1h').size()
+    if (not future_hours.reindex(expected_future, fill_value=0).gt(0).all()
+            or raw.index.max() < end - pd.Timedelta(minutes=1)):
         return None
-    base = float(raw.loc[start, 'close'])
+    base = float(raw[(raw.index >= row.open_time) & (raw.index <= start)].close.iloc[-1])
     lower, upper = base*np.exp(-.25*atr), base*np.exp(.25*atr)
     for minute in future.itertuples():
         if minute.low <= lower:
@@ -125,10 +137,10 @@ def _verify_target_edges(workflow):
             with pytest.raises(ValueError):
                 probe.compute_triple_barrier_target_polars(native, bad, raw)
         if interval == '1h':
-            # Removing a minute keeps required history unresolved; no silent neutral.
+            # Sparse observations still define a valid native bar and target.
             missing = raw.filter(pl.col('open_time') != times[60 * 100].to_pydatetime())
             gaps = probe.compute_triple_barrier_target_polars(native, 2, missing).to_pandas()
-            assert gaps[TARGETS].isna().all(axis=1).sum() > result[TARGETS].isna().all(axis=1).sum()
+            pd.testing.assert_frame_equal(gaps[TARGETS], result[TARGETS])
 
     # Trace the established live path without network or wall-clock heuristics.
     # A partial final hour is handled identically for old/new target types.

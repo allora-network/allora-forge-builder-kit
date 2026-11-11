@@ -562,8 +562,10 @@ class AlloraMLWorkflow:
         100 horizons, calculated on the already-resampled candles. Each range
         includes both endpoints (h + 1 bars), matching the reputer SQL. The
         averaging interval excludes its right endpoint; ranges at its start
-        use only candles inside that interval. Missing minute coverage leaves all
-        target columns null. Minute ties resolve down first.
+        use only candles inside that interval. Sparse minute candles are valid:
+        aggregate the observations present in each native bar and scan observed
+        minutes for first touches. Empty native bars or invalid observed prices
+        leave targets unresolved. Minute ties resolve down first.
 
         This is a general native-bar target builder. Forge topics 87-89 use
         interval='1h', target_bars=24, and barrier_multiplier=0.25; other
@@ -593,19 +595,24 @@ class AlloraMLWorkflow:
             raise ValueError("No minute candles for triple-barrier targets")
         if not (raw.index == raw.index.floor("min")).all():
             raise ValueError("Minute candle timestamps must be minute-aligned")
+        observed_index = raw.index
         grid = pd.date_range(raw.index.min(), raw.index.max(), freq="min")
         raw = raw.reindex(grid)
+        observed = raw.index.isin(observed_index)
         valid = np.isfinite(raw).all(axis=1) & (raw > 0).all(axis=1)
         valid &= (raw.high >= raw[['open', 'close', 'low']].max(axis=1))
         valid &= (raw.low <= raw[['open', 'close', 'high']].min(axis=1))
-        # Resampled prices are the workflow's native bars; minute counts validate
-        # them instead of silently treating a partial bar as complete.
+        # A no-trade minute is absent, not a corrupt price. Require a real native
+        # bar and reject corrupt observations, without requiring every minute.
         native = df.select("open_time", "high", "low").to_pandas().set_index("open_time")
         if native.index.tz is None:
             raise ValueError("Triple-barrier native timestamps must be timezone-aware UTC")
         native = native.reindex(pd.date_range(native.index.min(), native.index.max(), freq=width))
         counts = valid.astype(int).resample(width, origin=native.index.min(), label='left', closed='left').sum().reindex(native.index, fill_value=0)
-        native.loc[counts != minutes_per_bar, ['high', 'low']] = np.nan
+        corrupt = pd.Series(observed & ~valid.to_numpy(), index=grid)
+        corrupt_counts = corrupt.astype(int).resample(width, origin=native.index.min(), label='left', closed='left').sum().reindex(native.index, fill_value=0)
+        native_valid = (counts > 0) & (corrupt_counts == 0) & np.isfinite(native).all(axis=1) & (native > 0).all(axis=1)
+        native.loc[~native_valid, ['high', 'low']] = np.nan
         lookback = 100 * h
         # SQL RANGE BETWEEN horizon PRECEDING AND CURRENT ROW includes h+1
         # candle openings. WHERE clips history BEFORE the window calculation,
@@ -620,10 +627,13 @@ class AlloraMLWorkflow:
         # A row opens at T-width. Samples must open before T-width.
         atr = (range_sum / lookback).shift(1)
         # Also require every sample candle in the historical averaging interval.
-        complete = (counts == minutes_per_bar).rolling(100 * h, min_periods=100 * h).sum().shift(1)
+        complete = native_valid.rolling(100 * h, min_periods=100 * h).sum().shift(1)
         atr = atr.where(complete == 100 * h)
-        bad_prefix = np.r_[0, np.cumsum(~valid.to_numpy())]
-        lows, highs, closes = (raw[c].to_numpy() for c in ('low', 'high', 'close'))
+        bad_prefix = np.r_[0, np.cumsum(corrupt.to_numpy())]
+        lows, highs = (raw[c].to_numpy() for c in ('low', 'high'))
+        # Last observed closes are used only for base/expiry prices, never to
+        # fabricate high/low touches during absent minutes.
+        observed_closes = raw.close.where(valid).ffill().to_numpy()
         first = grid[0]
         records = []
         unresolved_history = unresolved_future = 0
@@ -641,12 +651,15 @@ class AlloraMLWorkflow:
                 unresolved_history += 1
                 records.append(rec)
                 continue
+            future_bars = native_valid.reindex(pd.date_range(t, periods=h, freq=width), fill_value=False)
             if (start_i < 0 or end_i > len(raw)
+                    or not native_valid.get(pd.Timestamp(opening), False)
+                    or not future_bars.all()
                     or bad_prefix[end_i] != bad_prefix[start_i]):
                 unresolved_future += 1
                 records.append(rec)
                 continue
-            base = closes[start_i]
+            base = observed_closes[start_i]
             upper, lower = base * np.exp(barrier_multiplier * a), base * np.exp(-barrier_multiplier * a)
             down = lows[start_i:end_i] <= lower
             up = highs[start_i:end_i] >= upper
@@ -657,7 +670,7 @@ class AlloraMLWorkflow:
                 exit_price = lower if label == 'down' else upper
                 exit_time = grid[start_i + j] + pd.Timedelta(minutes=1)
             else:
-                label, exit_price, exit_time = 'neutral', closes[end_i - 1], end
+                label, exit_price, exit_time = 'neutral', observed_closes[end_i - 1], end
             rec.update({f'target_{c}': int(c == label) for c in ('down', 'neutral', 'up')})
             rec.update(tb_atr=float(a), tb_base=float(base), tb_upper=float(upper), tb_lower=float(lower),
                        tb_exit_time=exit_time, tb_exit_price=float(exit_price),
@@ -666,7 +679,8 @@ class AlloraMLWorkflow:
         print(f"[workflow] triple-barrier: {len(records)-unresolved_history-unresolved_future}/{len(records)} resolved; "
               f"{unresolved_history} unresolved history (warmup/gaps); "
               f"{unresolved_future} unresolved testing interval (tail/gaps); "
-              f"{int((counts != minutes_per_bar).sum())} incomplete native bars")
+              f"{int((~native_valid).sum())} empty/invalid native bars; "
+              f"{int(((counts > 0) & (counts < minutes_per_bar)).sum())} sparse native bars")
         metadata = pl.from_pandas(pd.DataFrame(records)).with_columns(
             pl.col('target_up', 'target_neutral', 'target_down').cast(pl.Int8),
             pl.col('tb_atr', 'tb_base', 'tb_upper', 'tb_lower', 'tb_exit_price').cast(pl.Float64),
