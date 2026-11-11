@@ -131,6 +131,13 @@ Predict which price barrier is touched first, or neutral if neither is touched
 before expiry. Follow the [triple-barrier walkthrough](notebooks/example_triple_barrier_walkthrough.py).
 These commodity datasets require Atlas; Binance is not an alternative source.
 
+Triple-barrier targets accept sparse minute candles when each required native
+bar contains valid observations. Missing no-trade minutes do not invalidate a
+resampled bar or its calibration history. First touches use observed minute
+highs/lows; no synthetic prices are inserted. Entirely empty native intervals,
+invalid observed prices, and unresolved future horizons still leave targets
+unresolved. This coverage rule does not establish parity with a deployed reputer.
+
 | Testnet ID | Asset | Atlas dataset | Horizon |
 |---|---|---|---|
 | 87 | Gold | `hl_xyzgold_1min` | 24h |
